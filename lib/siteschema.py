@@ -132,13 +132,22 @@ def assumed_paths(site):
     return out
 
 
+# Sources that count as an observation of the world rather than a guess about
+# it. `parcel` belongs here: a recorded plat from a county appraisal district is
+# a legal survey document, and is usually the hardest number in a site record.
+# `osm` stays out because it is volunteer-traced from imagery, `derived` because
+# it is only ever as good as whatever it was computed from, and `reported`
+# because someone remembering their fence height is not a measurement.
+HARD_SOURCES = ("measured", "lidar", "photo", "survey", "parcel")
+
+
 def measured_fraction(site):
     """How much of what we know was actually measured rather than guessed."""
     prov = site.get("provenance", {})
     if not prov:
         return 0.0
     hard = sum(1 for e in prov.values()
-               if e.get("source") in ("measured", "lidar", "photo", "survey"))
+               if e.get("source") in HARD_SOURCES)
     return hard / len(prov)
 
 
