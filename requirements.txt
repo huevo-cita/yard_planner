@@ -1,0 +1,33 @@
+# Python 3.9 or newer. 3.9 is the floor because the solar clock uses zoneinfo,
+# which handles daylight saving properly rather than pretending a time zone is
+# a fixed offset from UTC.
+#
+#   pip install -r requirements.txt
+#
+# Everything here has clean arm64 macOS and x86-64 Linux wheels, so nothing
+# needs a compiler or a system GDAL.
+
+# Required. The sun model is array arithmetic; the drawings are matplotlib.
+numpy>=1.21
+matplotlib>=3.4
+
+# Optional, and what each one buys.
+#
+# Pillow          annotating measured photographs in lib.photomeasure
+# laspy[lazrs]    reading USGS 3DEP lidar. This is what measures tree heights,
+#                 crown spreads and roof eaves automatically instead of by
+#                 ladder. lazrs is the LAZ decompressor; laspy alone will not
+#                 open the compressed tiles USGS actually publishes.
+# rasterio        coordinate transforms between lidar projections and the
+#                 yard's plan frame
+Pillow>=9.0
+laspy[lazrs]>=2.5
+rasterio>=1.3
+
+# Deliberately not here: `requests`. The standard library's urllib does
+# everything these fetches need, and one fewer dependency is one fewer reason
+# a clone fails to run on a machine that is not this one.
+#
+# Also not here: any cryptography package. The vault shells out to the openssl
+# binary, which is already on macOS and every Linux distribution, so encrypted
+# yard data works on a fresh machine with nothing installed but Python.

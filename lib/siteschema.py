@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""The shape of site.json, plus provenance, validation and migration.
+
+    python3 -m lib.siteschema <slug>            validate and report
+    python3 -m lib.siteschema <slug> --migrate  rewrite in the current shape
+
+site.json is the source of truth for a yard's geometry and for the 3D model the
+shade calculation casts rays against. Everything is in **inches**, in a plan frame
+aligned to whatever edge the yard was measured from.
+
+Top-level keys
+--------------
+    yard          slug
+    address       mailing, lat, lon, timezone, parcel identifiers, sources
+    frame         the plan coordinate frame and its true bearings
+    boundary      the yard outline, and the measurements it was fitted from
+    zones         named regions of the yard floor
+    features      trees, and anything sitting in or on the yard
+    obstructions  house, fences, neighbouring buildings: what casts shade
+    provenance    dotted path -> how that number came to be known
+    assumptions   plain-language list of what was assumed
+    verify_on_site  plain-language list of what to go and check
+
+Provenance
+----------
+Numbers stay plain numbers so the file stays readable. How each one was learned is
+recorded separately, keyed by dotted path:
+
+    "provenance": {
+      "boundary.width_east_west": {"source": "measured", "date": "2026-08-14"},
+      "features.trees.0.crown_radius": {"source": "assumed",
+                                        "note": "back-solved from reported canopy"}
+    }
+
+`source` is one of measured, lidar, photo, parcel, osm, survey, reported, derived,
+assumed. `derived` means computed from another dataset rather than observed here,
+such as frost dates worked out from thirty years of gridded reanalysis: better
+than an assumption and worse than a measurement, and it carries the source
+dataset's own error with it.
+
+Anything `assumed`, and anything with no entry at all, is a candidate for the gap
+list. That is the whole point of tracking it.
+"""
+import json
+import os
+import sys
+
+from . import yards
+
+SOURCES = ["measured", "lidar", "photo", "parcel", "osm", "survey", "reported",
+           "derived", "assumed"]
+
+SCHEMA_VERSION = 2
+
+TREE_DEFAULTS = {
+    "species": None,
+    "deciduous": True,
+    "leaf_on": "04-15",
+    "leaf_off": "11-01",
+    "transmissivity_leaf_on": 0.10,
+    "transmissivity_leaf_off": 0.55,
+    "crown_base_height": None,
+    "crown_center_x": None,
+    "crown_center_y": None,
+}
+
+
+# ------------------------------------------------------------- dotted paths
+
+def get_path(obj, path, default=None):
+    """Read a dotted path. List indices are plain integers: features.trees.0.height"""
+    cur = obj
+    for part in str(path).split("."):
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return default
+        elif isinstance(cur, dict):
+            if part not in cur:
+                return default
+            cur = cur[part]
+        else:
+            return default
+    return cur
+
+
+def set_path(obj, path, value):
+    parts = str(path).split(".")
+    cur = obj
+    for i, part in enumerate(parts[:-1]):
+        nxt = parts[i + 1]
+        if isinstance(cur, list):
+            cur = cur[int(part)]
+            continue
+        if part not in cur or not isinstance(cur[part], (dict, list)):
+            cur[part] = [] if nxt.isdigit() else {}
+        cur = cur[part]
+    if isinstance(cur, list):
+        cur[int(parts[-1])] = value
+    else:
+        cur[parts[-1]] = value
+
+
+# ---------------------------------------------------------------- provenance
+
+def provenance_of(site, path):
+    return site.get("provenance", {}).get(path)
+
+
+def set_provenance(site, path, source, date=None, note=None, uncertainty=None):
+    if source not in SOURCES:
+        raise ValueError(f"unknown provenance source {source!r}; expected one of "
+                         + ", ".join(SOURCES))
+    entry = {"source": source}
+    if date:
+        entry["date"] = date
+    if note:
+        entry["note"] = note
+    if uncertainty is not None:
+        entry["uncertainty"] = uncertainty
+    site.setdefault("provenance", {})[path] = entry
+    return entry
+
+
+def assumed_paths(site):
+    """Every path explicitly recorded as assumed, with its note."""
+    out = []
+    for p, e in sorted(site.get("provenance", {}).items()):
+        if e.get("source") == "assumed":
+            out.append((p, e.get("note") or "", e.get("uncertainty")))
+    return out
+
+
+def measured_fraction(site):
+    """How much of what we know was actually measured rather than guessed."""
+    prov = site.get("provenance", {})
+    if not prov:
+        return 0.0
+    hard = sum(1 for e in prov.values()
+               if e.get("source") in ("measured", "lidar", "photo", "survey"))
+    return hard / len(prov)
+
+
+# ------------------------------------------------------------------- trees
+
+def trees(site):
+    """Normalized tree list, defaults filled in, crown centre resolved.
+
+    Reading always goes through here so callers never have to care whether a
+    file predates the trees[] shape.
+    """
+    raw = get_path(site, "features.trees") or []
+    out = []
+    for i, t in enumerate(raw):
+        tree = dict(TREE_DEFAULTS)
+        tree.update(t)
+        tree.setdefault("id", f"tree-{i + 1}")
+        if tree.get("crown_center_x") is None:
+            tree["crown_center_x"] = tree.get("trunk_x")
+        if tree.get("crown_center_y") is None:
+            tree["crown_center_y"] = tree.get("trunk_y")
+        if tree.get("crown_base_height") is None and tree.get("height"):
+            # a crown with no measured base is modelled from half height, which
+            # is the usual proportion for an open-grown broadleaf
+            tree["crown_base_height"] = tree["height"] * 0.5
+        out.append(tree)
+    return out
+
+
+def tree_transmissivity(tree, doy):
+    """Fraction of the beam that gets through this crown on this day."""
+    if not tree.get("deciduous", True):
+        return tree.get("transmissivity_leaf_on", 0.10), True
+    on = _md_to_doy(tree.get("leaf_on", "04-15"))
+    off = _md_to_doy(tree.get("leaf_off", "11-01"))
+    leaf_on = on <= doy <= off
+    return (tree["transmissivity_leaf_on"] if leaf_on
+            else tree["transmissivity_leaf_off"]), leaf_on
+
+
+_CUM = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+
+
+def _md_to_doy(md):
+    try:
+        m, d = str(md).split("-")
+        return _CUM[int(m) - 1] + int(d)
+    except Exception:
+        return 105
+
+
+# ------------------------------------------------------------------ migration
+
+def migrate(site):
+    """Bring an older site.json up to the current shape, in place.
+
+    The one real change: a single named species block holding a list of trunk
+    positions becomes one entry per tree under features.trees, so a yard can hold
+    several species and each tree can carry its own measured crown.
+    """
+    changed = []
+    feats = site.setdefault("features", {})
+
+    if "trees" not in feats:
+        merged = []
+        for key in list(feats):
+            blob = feats[key]
+            if not isinstance(blob, dict):
+                continue
+            ys = blob.get("trunks_y")
+            if ys is None and blob.get("trunk_y") is None:
+                continue
+            ys = ys if ys is not None else [blob.get("trunk_y")]
+            height = blob.get("height_modelled") or blob.get("height")
+            base = (blob.get("crown_base_height")
+                    or blob.get("crown_base_height_assumed"))
+            for i, ty in enumerate(ys):
+                merged.append({
+                    "id": f"{key.rstrip('s')}-{i + 1}",
+                    "label": blob.get("label"),
+                    "species": blob.get("species") or blob.get("label"),
+                    "trunk_x": blob.get("trunk_x"),
+                    "trunk_y": ty,
+                    "height": height,
+                    "height_range_ft": blob.get("height_range_ft"),
+                    "crown_radius": blob.get("crown_radius"),
+                    "crown_base_height": base,
+                    "deciduous": blob.get("deciduous", True),
+                    "leaf_on": blob.get("leaf_on", TREE_DEFAULTS["leaf_on"]),
+                    "leaf_off": blob.get("leaf_off", TREE_DEFAULTS["leaf_off"]),
+                    "transmissivity_leaf_on": blob.get(
+                        "transmissivity_leaf_on",
+                        TREE_DEFAULTS["transmissivity_leaf_on"]),
+                    "transmissivity_leaf_off": blob.get(
+                        "transmissivity_leaf_off",
+                        TREE_DEFAULTS["transmissivity_leaf_off"]),
+                    "notes": blob.get("canopy_extent_note"),
+                    "verify": blob.get("verify"),
+                })
+            feats.pop(key)
+            changed.append(f"features.{key} -> features.trees ({len(ys)} trees)")
+        if merged:
+            feats["trees"] = merged
+        else:
+            feats.setdefault("trees", [])
+
+    if "provenance" not in site:
+        site["provenance"] = {}
+        changed.append("added provenance map")
+
+    # anything the old file called out as an assumption becomes a real record
+    for text in site.get("assumptions", []):
+        key = f"assumptions.{len(site['provenance'])}"
+        if not any(e.get("note") == text for e in site["provenance"].values()):
+            site["provenance"][key] = {"source": "assumed", "note": text}
+
+    if site.get("schema_version") != SCHEMA_VERSION:
+        site["schema_version"] = SCHEMA_VERSION
+        changed.append(f"schema_version -> {SCHEMA_VERSION}")
+
+    return changed
+
+
+# ----------------------------------------------------------------- validation
+
+def validate(site):
+    """Problems that would stop the shade model, plus softer warnings."""
+    errs, warns = [], []
+
+    a = site.get("address", {})
+    if a.get("lat") is None or a.get("lon") is None:
+        errs.append("address.lat/lon missing — nothing solar can be computed")
+    if not a.get("timezone"):
+        warns.append("address.timezone missing — clock times will be guessed from "
+                     "longitude, which is an hour wrong in places like Austin")
+
+    b = site.get("boundary", {})
+    for k in ("width_east_west", "south_boundary_offset"):
+        if b.get(k) is None:
+            errs.append(f"boundary.{k} missing")
+    if b.get("north_fence_slope") is None:
+        warns.append("boundary.north_fence_slope missing, assuming a square yard")
+
+    f = site.get("frame", {})
+    if f.get("true_bearing_of_plus_x") is None:
+        errs.append("frame.true_bearing_of_plus_x missing — the yard has no "
+                    "orientation, so sun angles cannot be resolved")
+
+    o = site.get("obstructions", {})
+    if not o:
+        warns.append("no obstructions recorded; the sun model will report open sky")
+
+    for i, t in enumerate(trees(site)):
+        for k in ("trunk_x", "trunk_y", "height"):
+            if t.get(k) is None:
+                errs.append(f"features.trees.{i}.{k} missing")
+        if t.get("crown_radius") is None:
+            warns.append(f"features.trees.{i}.crown_radius missing — the single "
+                         "most consequential unknown in most yards")
+
+    for p in site.get("provenance", {}):
+        if site["provenance"][p].get("source") not in SOURCES:
+            warns.append(f"provenance {p} has an unrecognised source")
+
+    return errs, warns
+
+
+def zone_names(site):
+    return list((site.get("zones") or {}).keys())
+
+
+def load(slug):
+    return yards.load_site(slug)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return
+    slug = sys.argv[1]
+    site = yards.load_site(slug)
+
+    if "--migrate" in sys.argv:
+        changed = migrate(site)
+        yards.save(slug, "site.json", site)
+        print(f"migrated {slug}:")
+        for c in changed or ["nothing to change"]:
+            print("  " + c)
+
+    errs, warns = validate(site)
+    print(f"\n{slug}: {len(trees(site))} trees, "
+          f"{len(site.get('zones') or {})} zones, "
+          f"{len(site.get('provenance') or {})} provenance entries, "
+          f"{measured_fraction(site) * 100:.0f}% measured")
+    for e in errs:
+        print("  ERROR   " + e)
+    for w in warns:
+        print("  warning " + w)
+    if not errs and not warns:
+        print("  clean")
+
+    ass = assumed_paths(site)
+    if ass:
+        print(f"\n  {len(ass)} assumed values:")
+        for p, note, _ in ass:
+            print(f"    {p:44s} {note[:70]}")
+
+
+if __name__ == "__main__":
+    main()

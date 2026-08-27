@@ -1,0 +1,51 @@
+# Yard data is personal data and does not go to a public remote.
+#
+# A yard record contains a street address, a rooftop-accurate latitude and
+# longitude, a parcel identifier, and a written profile covering who lives
+# there, when they travel and what their budget is. Any one of those identifies
+# a household. Together they are a burglary brief.
+#
+# The rule is a whitelist, not a blacklist: everything is ignored, and the code
+# is added back by name. A new yard directory is therefore ignored the moment it
+# is created, without anyone having to remember to add it.
+#
+# To move yard data between machines, encrypt it first:
+#     ./bin/yard vault lock <slug>       -> vault/<slug>.tar.gz.enc, safe to commit
+#     ./bin/yard vault unlock <slug>     -> restores it on the other end
+# Run `./bin/yard scrub` before any commit to check nothing leaked.
+
+*
+
+!.gitignore
+!.gitattributes
+!README.md
+!LICENSE
+!requirements.txt
+
+!lib/
+!lib/**
+!skills/
+!skills/**
+!agents/
+!agents/**
+!bin/
+!bin/**
+!tools/
+!tools/**
+!docs/
+!docs/**
+
+# Encrypted bundles only. The plaintext tarball never gets added.
+# manifest.json is safe: dates and sizes, no street and no coordinate.
+!vault/
+!vault/*.enc
+!vault/manifest.json
+!vault/README.md
+
+# Never, under any circumstances.
+lib/**/__pycache__/
+**/*.pyc
+vault/*.tar.gz
+vault/*.tar
+.cache/
+.DS_Store

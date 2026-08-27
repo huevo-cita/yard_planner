@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# One entry point, runnable from any directory.
+#
+# The modules are a Python package, so they need the repo on the path and the
+# repo as the working directory. Doing that by hand from somewhere else is the
+# kind of friction that makes a tool go unused, so this resolves the repo from
+# its own location and gets out of the way.
+#
+#   yard                          list the yards
+#   yard <module> [args]          run any lib module: sunmodel, gaps, design ...
+#   yard vault lock <slug>        encrypt a yard so it can travel in the repo
+#   yard scrub                    check nothing personal is about to be published
+#   yard install                  link the skills and agents into ~/.cursor
+#   yard doctor                   check the environment is complete
+#
+# Set GARDEN_ROOT to keep yard data outside the checkout.
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+REPO="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+PYTHON="${YARD_PYTHON:-python3}"
+
+cd "$REPO"
+
+MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
+photomeasure soil climate conditions gaps vision design bom schedule builddoc
+vault"
+
+case "${1:-}" in
+  ""|list)
+    exec "$PYTHON" -m lib.yards
+    ;;
+  scrub)
+    shift
+    exec "$PYTHON" tools/scrub.py "$@"
+    ;;
+  install)
+    shift
+    exec "$PYTHON" tools/install.py "$@"
+    ;;
+  doctor)
+    shift
+    exec "$PYTHON" tools/doctor.py "$@"
+    ;;
+  -h|--help|help)
+    sed -n '2,/^[^#]/p' "$SOURCE" | grep '^#' | sed 's/^# \{0,1\}//'
+    echo
+    echo "modules:"
+    echo "$MODULES" | tr -s ' \n' ' ' | fold -s -w 72 | sed 's/^/  /'
+    exit 0
+    ;;
+esac
+
+MOD="$1"
+shift
+
+if ! echo "$MODULES" | tr -s ' \n' '\n' | grep -qx "$MOD"; then
+  echo "yard: no module '$MOD'." >&2
+  echo "Run 'yard --help' for the list." >&2
+  exit 2
+fi
+
+exec "$PYTHON" -m "lib.$MOD" "$@"

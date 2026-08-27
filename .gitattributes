@@ -1,0 +1,4 @@
+# Encrypted bundles are binary. Never diff them, never try to merge them, and
+# never let a line-ending filter touch the ciphertext.
+*.enc binary -diff -merge
+*.tar.gz binary -diff -merge

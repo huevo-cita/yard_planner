@@ -1,0 +1,209 @@
+# Yard Planner
+
+Turns an address into a measured yard, works out how much sun every part of it
+gets in every month of the year, and plans a planting against that — then costs
+it and schedules it weekend by weekend.
+
+It is built around one idea: **a garden plan should be checkable.** Most advice
+about what to plant where rests on somebody's impression of how sunny a bed is.
+This measures it, states where every number came from, and refuses to place a
+plant the light cannot support.
+
+```
+address ──> site.json ──> sun-hours.json ──┐
+                                            ├──> design.json ──> schedule + costed list
+current state ──> conditions.json ──────────┤
+taste ──────────> vision.json ──────────────┘
+                     │
+                     └──> coverage.json: what is still unknown, ranked by what it costs
+```
+
+## What it actually does
+
+**Measures a property from public data.** County and city GIS for lot lines,
+OpenStreetMap for neighbouring buildings, USGS 3DEP classified lidar for tree
+heights, crown spreads and roof eaves, USGS elevation for slope, USDA Soil Data
+Access for soil, and thirty years of ERA5 reanalysis for frost dates. All free,
+none needing an API key.
+
+**Measures what public data cannot.** A four-point homography turns one
+photograph of a wall into eave heights, awning projections and window
+dimensions, with error bars from a Monte Carlo over the click precision. It
+refuses to answer where a photograph genuinely cannot — tree crowns, anything
+off the reference plane.
+
+**Models the light.** A ray-traced shade model over a grid of the yard, at
+five-minute steps, accounting for the house, fences, neighbouring buildings,
+overhead planes like awnings and pergolas, and tree crowns that leaf out and
+drop on dates. It reports hours per zone per month, and — because this turns out
+to matter more than the hour count — **when** those hours arrive. Four hours of
+morning sun and four hours of afternoon sun are not the same place to plant.
+
+**Ranks what it does not know by what the ignorance costs.** Not a checklist of
+missing fields: it re-runs the sun model across the plausible range of each
+unknown and reports the answer's spread in hours of light a day. Soil and
+inventory gaps are priced in dollars at risk. A gap that changes nothing sinks
+to the bottom on its own.
+
+**Objects.** The design stage checks every plant against the measured light,
+water and soil and against what was actually asked for, and raises blocking
+objections rather than quietly substituting something easier.
+
+**Costs and schedules it.** The bill of materials is netted against what the
+inventory says is already in the garage. The schedule back-plans in weekends
+from the target date, counts seed-start and days-to-maturity deadlines
+backwards, works around travel, reserves a catch-up weekend, gates tasks on the
+person's actual experience, and produces a cut list when it comes in over
+budget.
+
+## Install
+
+```bash
+git clone git@github.com:huevo-cita/yard_planner.git
+cd yard_planner
+pip install -r requirements.txt
+
+./bin/yard install         # link the skills and subagents into ~/.cursor
+./bin/yard doctor          # check the environment, and say what any gap costs
+```
+
+`doctor` names what breaks for anything missing, rather than only reporting its
+absence. The optional packages only limit what can be measured automatically;
+everything else still runs.
+
+Put `bin/` on your `PATH` and the rest of this reads as `yard <command>`.
+
+## Use
+
+The skills are the front door — in Cursor, say "start a new yard" and the
+`new-yard` skill sequences the rest. Everything underneath is also a plain
+command:
+
+```bash
+yard                              # what yards exist and what each one has
+yard lidar    <slug> --write      # tree and roof heights from USGS 3DEP
+yard sunmodel <slug>              # sun hours per zone per month, and the maps
+yard gaps     <slug>              # what is missing, worst first, with the cost
+yard design   <slug>              # check a design against the measured site
+yard bom      <slug>              # bill of materials, netted against what is here
+yard schedule <slug>              # the weekend plan, back-planned from the date
+yard --help                       # every module
+```
+
+### Skills
+
+| Skill | What it does |
+|---|---|
+| `new-yard` | The conductor. Registers a yard and sequences the rest, reporting ranked gaps after each stage |
+| `yard-survey` | Address to measured geometry: lot lines, obstruction heights, slope, frost dates |
+| `yard-conditions` | Soil, existing ground work, materials and tools on hand, and the person's hours, skill and budget |
+| `yard-vision` | What they want, with a strength on each preference, and the contradictions between them |
+| `yard-sun-model` | Runs the shade model and prices proposed changes in hours of light |
+| `yard-design` | Joins taste to measured fact and rejects what the site cannot support |
+| `yard-schedule` | Bill of materials, local sourcing, weekend plan, budget and cut list |
+| `raised-bed-rotation` | The seasonal edible turnover, with a planting log driving crop rotation |
+
+### Subagents
+
+`parcel-scout` finds authoritative lot geometry from county GIS.
+`photo-surveyor` measures real dimensions from photographs.
+`vision-scout` reads a board or folder of inspiration images.
+`sourcing-scout` finds local nurseries, bulk yards and municipal programs with
+real prices. Each runs in its own context because each has a high dead-end rate.
+
+## Data, and why none of it is in this repo
+
+A yard record is the most identifying kind of file a person can write. It holds
+a street address, a latitude and longitude accurate to a rooftop, a parcel
+number that resolves to an owner name in a public registry, and a written
+profile naming who lives there, when they travel, and what they can spend.
+
+So `.gitignore` here is a **whitelist**, not a blacklist. Everything is ignored
+and the code is added back by name, which means a new yard directory is excluded
+the moment it is created, without anyone having to remember.
+
+Two more layers behind it:
+
+- `yard scrub` scans every tracked file for addresses, rooftop coordinates,
+  parcel identifiers and home-directory paths. `yard scrub --install-hook` wires
+  it into `pre-commit` so a leak stops the commit. It caught two real
+  coordinates in docstrings that a manual read had missed.
+- The vault, below, is the only supported way for yard data to travel.
+
+### The vault
+
+Encrypting the data means the system is actually portable — code without data
+draws nothing.
+
+```bash
+yard vault lock <slug>       # -> vault/<slug>.tar.gz.enc, safe to commit
+yard vault unlock <slug>     # restore it on the other machine
+yard vault list              # what is in there, and whether a local copy exists
+```
+
+AES-256-CBC, key stretched from a passphrase by PBKDF2-HMAC-SHA256 at 600,000
+iterations over a random salt, through the `openssl` binary that ships with
+macOS and every Linux distribution. Nothing to install. The passphrase is read
+from `YARD_VAULT_PASSPHRASE` or prompted for, and is passed to openssl on a file
+descriptor rather than the command line, where `ps` would show it to every other
+process on the machine.
+
+Three things worth being plain about:
+
+- **The passphrase is the whole security of it.** A public repo means an
+  attacker gets unlimited offline guesses. 600,000 iterations only raises the
+  price per guess. Use a long passphrase, and keep it somewhere other than this
+  repo.
+- **CBC is confidential, not authenticated.** Tampering shows up as a failed
+  decryption rather than as silently altered data, but this is not AEAD. For a
+  single author's own backup that trade is fine. For anything adversarial, use
+  `age` or GPG.
+- **`vault/manifest.json` is committed in the clear** and deliberately says
+  nothing about content — dates and sizes only. A manifest listing streets would
+  undo the encryption it describes.
+
+If you would rather the personal data never sit inside a checkout at all, point
+`GARDEN_ROOT` somewhere else:
+
+```bash
+export GARDEN_ROOT=~/Documents/yards
+```
+
+The code root and the data root are separate; they only default to the same
+place because that is the simple case.
+
+## Layout
+
+```
+lib/          the engine. One module per job, each runnable as python3 -m lib.<name>
+skills/       the agent skills, symlinked into ~/.cursor/skills
+agents/       the subagents, symlinked into ~/.cursor/agents
+bin/yard      one entry point, runnable from any directory
+tools/        install, doctor, and the PII scrubber
+vault/        encrypted yard bundles, committed
+<slug>/       one directory per yard. Never committed.
+```
+
+Each yard holds `site.json` (geometry and the 3D obstruction model),
+`conditions.json` (soil, inventory, the person), `vision.json` (taste, with a
+strength on each want), `design.json`, `sun-hours.json`, `coverage.json`, a
+prose `profile.md`, and `maps/`, `photos/` and `design/`.
+
+`site.json`, `conditions.json` and `vision.json` are the sources of truth.
+Correct one and re-run, and every drawing, figure and cost regenerates.
+
+## House rules
+
+Every number carries provenance — measured, lidar, photo, parcel, osm, survey,
+reported, derived, or assumed — and, where estimated, an uncertainty. An
+assumption stays labelled as one. No invented precision. Where a data source has
+a known bias, the code says so out loud: ERA5 minimum temperatures run warm, so
+the frost dates report the ten-percent-risk date rather than the median, and a
+locally published figure overrides the model.
+
+Python 3.9 with numpy and matplotlib, `urllib` over `requests`, and no
+dependency added without a reason that survives being written down.
+
+## Licence
+
+MIT. See `LICENSE`.
