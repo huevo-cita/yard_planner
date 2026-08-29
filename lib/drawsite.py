@@ -501,6 +501,7 @@ def draw_plan(site, path):
         ax.text(ext[0] + 4, ext[3] - 26 - i * 13, line, fontsize=9, color=MUTED)
 
     tb = g.spec("plan", "titleblock") or default_titleblock(site, g)
+    tb = refresh_derived(site, tb)
     tb_x = ext[1] - 0.24 * (ext[1] - ext[0])
     titleblock(ax, tb_x, ext[3] - 0.16 * (ext[3] - ext[2]),
                0.21 * (ext[1] - ext[0]), tb)
@@ -528,6 +529,28 @@ def draw_plan(site, path):
     fig.savefig(path, dpi=170, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print("wrote", path)
+
+
+def refresh_derived(site, rows):
+    """Recompute the titleblock rows that are statistics rather than facts.
+
+    A hand-authored titleblock in site.json is mostly durable — a parcel id or a
+    lot bearing does not drift. The measured fraction does, every time a reading
+    lands or a claim is withdrawn, and a stale one is the exact failure this
+    drawing exists to expose: a number that looks surveyed and is not. So it is
+    always taken live and the literal in the file is ignored.
+    """
+    try:
+        live = "%.0f%%" % (100 * siteschema.measured_fraction(site))
+    except Exception:
+        return rows
+    out = []
+    for row in rows:
+        label, value = row[0], row[1]
+        if label.strip().lower() == "measured" and value != live:
+            row = (label, live)
+        out.append(row)
+    return out
 
 
 def default_titleblock(site, g):
