@@ -43,6 +43,7 @@ make and there is no way to know that from here.
 import argparse
 import datetime
 import json
+import re
 
 from . import solar, vision as vision_mod, yards
 
@@ -417,6 +418,32 @@ def _content_words(phrase):
             and t.strip(".,;:'\"()") not in _STOPWORDS]
 
 
+_ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _target_month(target):
+    """The month abbreviation of a target date, in any shape the record holds it.
+
+    `vision.json` stores a target date as a recorded preference — a dict with a
+    strength and the sentence it came from — so the date arrives wrapped and with
+    prose around it. Slicing ten characters off `str()` of that dict yields
+    "{'want': '", which raises and makes this check silently do nothing. Every
+    yard whose vision.json used the documented shape has been skipping the whole
+    season check.
+    """
+    if isinstance(target, datetime.date):
+        return target.strftime("%b")
+    if isinstance(target, list) and target:
+        target = target[0]
+    if isinstance(target, dict):
+        target = (target.get("date") or target.get("want")
+                  or target.get("value") or "")
+    hit = _ISO.search(str(target))
+    if not hit:
+        raise ValueError(f"no date in {target!r}")
+    return datetime.date.fromisoformat(hit.group(0)).strftime("%b")
+
+
 def check_season(design, vision, site):
     """Whether anything is happening on the date it has to be right by."""
     out = []
@@ -424,7 +451,7 @@ def check_season(design, vision, site):
     if not target:
         return out
     try:
-        month = datetime.date.fromisoformat(str(target)[:10]).strftime("%b")
+        month = _target_month(target)
     except ValueError:
         return out
 
