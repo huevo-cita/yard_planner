@@ -281,6 +281,43 @@ def site_gaps(site, quick=False):
             how="Record the house, fences and neighbouring buildings",
             effort="an hour"))
 
+    # Bed dimensions. Not a shade question, which is why this engine used to miss
+    # them entirely: a bed's size decides how many plants fit and how much soil,
+    # compost and mulch it takes, so an unmeasured bed prices the whole bill of
+    # materials wrong in both directions at once. Ordering by area means the
+    # 40-square-foot unknown outranks the 4-square-foot one.
+    for key, spec in sorted((site.get("zones") or {}).items()):
+        if spec.get("style") == "lawn" or not spec.get("x") or not spec.get("y"):
+            continue
+        soft = [ax for ax in ("x", "y")
+                if source_of(f"zones.{key}.{ax}") in (None, "assumed", "reported")]
+        if not soft:
+            continue
+        name = spec.get("label_short") or spec.get("label") or key
+        wx = abs(float(spec["x"][1]) - float(spec["x"][0]))
+        wy = abs(float(spec["y"][1]) - float(spec["y"][0]))
+        sqft = wx * wy / 144.0
+        placement = spec.get("placement")
+        both = len(soft) == 2
+        gaps.append(_gap(
+            key=f"site.zone_dims.{key}", section="site",
+            label=(f"where {name} actually is" if placement == "assumed"
+                   else f"{'size' if both else 'depth'} of {name}"),
+            state=source_of(f"zones.{key}.{soft[0]}") or "assumed",
+            unit="usd",
+            # A bed's cost scales with its area: soil, compost, mulch, edging and
+            # the plants themselves. Roughly $9 a square foot of new bed is a
+            # defensible planning figure, and getting the size wrong risks a
+            # fraction of it either way.
+            amount=round(sqft * 9.0 * (0.5 if both else 0.3)),
+            detail=(f"modelled at {wx:.0f} x {wy:.0f} in ({sqft:.0f} sq ft) "
+                    + ("with a position that was invented outright"
+                       if placement == "assumed"
+                       else f"on {'no measurement at all' if both else 'a reported depth'}")),
+            how=("Tape it: the long dimension, and the depth from the wall or "
+                 "edge at three points, because beds are rarely parallel"),
+            effort="five minutes"))
+
     if not site.get("frame", {}).get("anchor"):
         gaps.append(_gap(
             key="site.frame_anchor", section="site",
