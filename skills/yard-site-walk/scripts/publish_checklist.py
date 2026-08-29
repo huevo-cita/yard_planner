@@ -20,7 +20,7 @@ Then, to publish:
        python3 publish_checklist.py <slug>/SITE-WALK.md --verify <exported.md>
      which counts the checkboxes the way the export actually writes them.
 
-Six things about the Docs HTML importer and this MCP surface, all learned the
+Seven things about the Docs HTML importer and this MCP surface, all learned the
 hard way:
 
   * <hr> steals the heading style of whatever follows it, so a rule before an
@@ -43,6 +43,15 @@ hard way:
     verification regex, anchored as ^\s*-\s*\[ \], matches nothing and reports
     total failure on a document that is perfectly correct. Anchor as
     ^[>\s]*[-*]\s*\[[ xX]\] or use --verify below.
+  * A checklist may legitimately contain ordinary `-` bullets that are prose,
+    not items to tick — a summary of what changed since the last revision, for
+    instance. The parser already keeps those apart (`bul` vs `cb`), but a
+    verifier that counts every remaining bullet as a missed conversion will
+    report failure on a correct document, which is the same trap as the entry
+    above wearing a different hat. --verify takes the prose-bullet count as its
+    baseline and reports only the surplus. A NEGATIVE surplus is worth having:
+    it means a textToFind reached past its run and converted a prose bullet, so
+    some run matched the wrong paragraphs.
 """
 import argparse
 import html
@@ -226,12 +235,19 @@ def render(blocks):
 EXPORTED_ITEM = re.compile(r'^[>\s]*[-*]\s*(\[[ xX]\])?\s*', re.M)
 
 
-def verify(runs, exported):
+def verify(runs, exported, prose_items=0):
     """Compare a Doc exported as markdown against the runs that should be in it.
 
-    Returns (expected, checkboxes, plain_bullets). A non-zero plain_bullets count
-    means a createParagraphBullets call was missed: those items are in the
-    document as ordinary bullets and will not tick.
+    `prose_items` is the number of ordinary `-` bullets the source deliberately
+    contains. Those are NOT checklist items and must not be counted as misses;
+    a checklist that also carries a prose list would otherwise report failure on
+    a perfectly good document.
+
+    Returns (expected, checkboxes, surplus_plain), where surplus_plain is the
+    plain-bullet count in excess of the prose baseline. Positive means a
+    createParagraphBullets call was missed and those items will not tick.
+    Negative means a prose bullet was converted, so some textToFind matched the
+    wrong paragraphs.
     """
     expected = sum(len(r.split('\n')) for r in runs)
     checkboxes = plain = 0
@@ -245,7 +261,7 @@ def verify(runs, exported):
             checkboxes += 1
         else:
             plain += 1
-    return expected, checkboxes, plain
+    return expected, checkboxes, plain - prose_items
 
 
 def main():
@@ -263,14 +279,20 @@ def main():
     doc, runs = render(blocks)
 
     if args.verify:
-        expected, boxes, plain = verify(runs, open(args.verify).read())
+        prose = sum(1 for kind, _, _ in blocks if kind == 'bul')
+        expected, boxes, surplus = verify(
+            runs, open(args.verify).read(), prose)
         print('expected checkbox items %d | checkboxes in the Doc %d | '
-              'plain bullets left %d' % (expected, boxes, plain))
-        if boxes == expected and not plain:
+              'prose bullets %d' % (expected, boxes, prose))
+        if boxes == expected and not surplus:
             print('  match')
-        elif plain:
+        elif surplus > 0:
             print('  MISSED %d item(s): a createParagraphBullets pass did not '
-                  'run, and those items will not tick' % plain)
+                  'run, and those items will not tick' % surplus)
+        elif surplus < 0:
+            print('  OVERREACHED by %d: a textToFind converted %d prose bullet(s) '
+                  'into checkboxes, so a run matched the wrong paragraphs'
+                  % (-surplus, -surplus))
         else:
             print('  MISMATCH by %d' % (expected - boxes))
         return
