@@ -176,7 +176,7 @@ python3 skills/yard-site-walk/scripts/publish_checklist.py <slug>/SITE-WALK.md \
     --verify <the exported .md>
 ```
 
-The script's docstring explains the six Docs and MCP defects it works around.
+The script's docstring explains the seven Docs and MCP defects it works around.
 Three are worth knowing before you start:
 
 - **Never put a horizontal rule before a heading.** The importer gives the rule
@@ -193,7 +193,10 @@ Three are worth knowing before you start:
   document that is perfectly fine. `--verify` counts them correctly, and
   distinguishes a genuine miscount from a `createParagraphBullets` pass that
   never ran — the latter leaves items as plain bullets that look right and do
-  not tick
+  not tick. It also allows for ordinary `-` bullets that are prose rather than
+  items to tick, such as a revision summary, and reports only the surplus. If
+  it says **OVERREACHED**, a `textToFind` ran past the end of its own list and
+  converted a prose bullet, which means that run matched the wrong paragraphs
 
 A "not found" from step 2 means the markdown and the HTML have drifted.
 Regenerate both; do not hand-patch a string.
