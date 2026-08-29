@@ -160,15 +160,51 @@ def north_arrows(ax, x, y, site, R=42):
     ax.add_patch(Circle((x, y), R * 0.07, fc=INK, ec="none", zorder=13))
 
 
-def titleblock(ax, x, y, w, lines, title="SITE DATA"):
-    ax.add_patch(Rectangle((x, y), w, -12 - 11.5 * len(lines), fc="white",
-                           ec=INK, lw=1.2, zorder=14))
-    ax.text(x + 6, y - 9, title, fontsize=9.5, fontweight="bold", color=INK,
+def line_step(step, size, per_in, k=1.5):
+    """A line pitch in data units that is still legible at this drawing's scale.
+
+    Every vertical pitch in this module was a bare data-unit constant tuned on a
+    40 ft yard. Data units are inches of ground, so the same constant is worth a
+    different number of POINTS on every drawing: 24 pt on a 40 ft extent, 12 pt
+    on an 80 ft one, and 3.4 pt on a 73 ft lot drawn with its tree crowns, where
+    every row of the titleblock and every line of the verify list landed on top
+    of the one before it. The drawing did not fail, it just became a smear, which
+    is the kind of fault you scroll past.
+
+    Floor the pitch at `k` times the type size and leave it alone otherwise, so
+    drawings that already read correctly are untouched.
+    """
+    return max(step, k * size / 72.0 * per_in) if per_in else step
+
+
+def titleblock(ax, x, y, w, lines, title="SITE DATA", per_in=None):
+    """Label left, value right, in a boxed panel.
+
+    `per_in` is data units per inch. Given it, a row whose label and value are
+    together too wide has its value stepped down in size until the pair fits.
+    Without it the two texts simply overlap: the value is right-aligned and the
+    label left-aligned, so a long value slides silently underneath the label and
+    both become unreadable, which looks like a font bug rather than an overflow.
+    """
+    pitch = line_step(11.5, 7.2, per_in)
+    # The heading's own drop from the box edge has to scale too. At 9 data units
+    # below the top it sat neatly inside a 40 ft drawing and straddled the border
+    # on a large one, because 9 in of ground is a third of a character there.
+    lead = max(9.0, 0.95 * 9.5 / 72.0 * per_in) if per_in else 9.0
+    ax.add_patch(Rectangle((x, y), w, -(lead + pitch * (len(lines) + 0.5)),
+                           fc="white", ec=INK, lw=1.2, zorder=14))
+    ax.text(x + 6, y - lead, title, fontsize=9.5, fontweight="bold", color=INK,
             zorder=15)
     for i, (k, v) in enumerate(lines):
-        yy = y - 21.5 - 11.5 * i
+        yy = y - lead - pitch * (i + 1)
+        size = 7.2
+        if per_in:
+            budget = (w - 16) / per_in
+            while size > 5.4 and (text_width_in(str(k), 7.2)
+                                  + text_width_in(str(v), size)) > budget:
+                size -= 0.2
         ax.text(x + 6, yy, k, fontsize=7.2, color=MUTED, zorder=15)
-        ax.text(x + w - 6, yy, str(v), fontsize=7.2, color=INK, ha="right",
+        ax.text(x + w - 6, yy, str(v), fontsize=size, color=INK, ha="right",
                 fontweight="bold", zorder=15)
 
 
@@ -200,7 +236,8 @@ def fit_columns(items, col_in, size=7.6, indent=0, lo=18, hi=72):
     return lo
 
 
-def notes_block(ax, x, y, lines, step=15, heading_size=8.4, size=7.6, zorder=15):
+def notes_block(ax, x, y, lines, step=15, heading_size=8.4, size=7.6, zorder=15,
+                per_in=None):
     """A left-aligned block of annotation lines.
 
     Drawn above the zone fills. Without an explicit zorder these land at the
@@ -209,6 +246,7 @@ def notes_block(ax, x, y, lines, step=15, heading_size=8.4, size=7.6, zorder=15)
     clipped column rather than as a layering fault and sends you looking at the
     text width instead.
     """
+    step = line_step(step, size, per_in)
     for i, ln in enumerate(lines):
         ax.text(x, y - step * i, ln,
                 fontsize=heading_size if i == 0 else size,
@@ -487,36 +525,38 @@ def draw_plan(site, path):
     north_arrows(ax, na[0], na[1], site, R=52)
     scalebar(ax, ext[0] + 6, ext[2] + 0.07 * (ext[3] - ext[2]), 5)
 
-    ax.text(ext[0] + 4, ext[3] - 12,
-            g.spec("plan", "title", f"{site.get('title', site.get('yard', ''))} "
-                                    "— DIMENSIONED PLAN"),
-            fontsize=16, fontweight="bold", color=INK)
-    # Wrapped to the drawing, not left as one line. An unwrapped subtitle sets
-    # the figure's own width through bbox_inches="tight", so a long one silently
-    # stretches the whole canvas and shrinks the plan to a corner of it.
+    # Everything below is laid out before anything is drawn, because both the
+    # header and the verify column size themselves from their own content and
+    # both used to be drawn straight into the data area — the header downward
+    # from the top edge, the verify list downward from 44% of the height. Each
+    # was fine at the length it was written at and silently destroyed the
+    # drawing when the record grew: the subtitle began painting over the house,
+    # and the verify list ran off the bottom of the page. Reserve the room, then
+    # draw. A dimensioned plan that clips is worse than no plan, because the
+    # missing part is invisible rather than obviously absent.
     sub = g.spec("plan", "subtitle",
                  "All dimensions in inches, as measured on site.")
     axes_in = ax.get_position().width * fig.get_size_inches()[0]
-    for i, line in enumerate(wrap(sub, fit_columns([sub], axes_in, size=9.0))):
-        ax.text(ext[0] + 4, ext[3] - 26 - i * 13, line, fontsize=9, color=MUTED)
+    per_in = (ext[1] - ext[0]) / axes_in
+    sub_lines = wrap(sub, fit_columns([sub], axes_in, size=9.0))
+    sub_pitch = line_step(13, 9.0, per_in)
+    head_h = 2.2 * sub_pitch + sub_pitch * len(sub_lines)
 
     tb = g.spec("plan", "titleblock") or default_titleblock(site, g)
     tb = refresh_derived(site, tb)
     tb_x = ext[1] - 0.24 * (ext[1] - ext[0])
-    titleblock(ax, tb_x, ext[3] - 0.16 * (ext[3] - ext[2]),
-               0.21 * (ext[1] - ext[0]), tb)
 
     # The verify list is wrapped to the column it is actually drawn in, measured
     # rather than estimated. A thorough record grows this list, and both a fixed
     # character count and a guessed character width silently ran the longest and
     # most important items off the right edge of the page.
     items = site.get("verify_on_site", []) or []
+    lines, v_top, foot_h = [], ext[2] + 0.44 * (ext[3] - ext[2]), 0.0
     if items:
         # Measured off the axes, not the figure: `frame` may rewrite figsize to
         # match the extent's aspect, and the axes then takes only part of that
         # after margins. Using the figure width overestimated the column by a
         # third and put the wrap back over the edge.
-        axes_in = ax.get_position().width * fig.get_size_inches()[0]
         col_in = (ext[1] - tb_x) / (ext[1] - ext[0]) * axes_in
         cols = fit_columns(items, col_in, size=7.6, indent=2)
         lines = ["VERIFY ON SITE"]
@@ -524,7 +564,29 @@ def draw_plan(site, path):
             chunks = wrap(v, cols)
             lines.append("· " + chunks[0])
             lines.extend("  " + c for c in chunks[1:])
-        notes_block(ax, tb_x, ext[2] + 0.44 * (ext[3] - ext[2]), lines, step=13)
+        # Grow the canvas downward rather than let the tail fall off it. Moving
+        # the block up instead would run it into the titleblock, and shrinking
+        # the type is what makes a verify list stop being read.
+        foot_h = max(0.0, line_step(13, 7.6, per_in) * len(lines)
+                     - (v_top - ext[2]))
+
+    ax.set_ylim(ext[2] - foot_h, ext[3] + head_h)
+
+    top = ext[3] + head_h
+    ax.text(ext[0] + 4, top - 1.05 * sub_pitch,
+            g.spec("plan", "title", f"{site.get('title', site.get('yard', ''))} "
+                                    "— DIMENSIONED PLAN"),
+            fontsize=16, fontweight="bold", color=INK, zorder=16,
+            path_effects=halo("white", 4))
+    for i, line in enumerate(sub_lines):
+        ax.text(ext[0] + 4, top - 2.2 * sub_pitch - i * sub_pitch, line,
+                fontsize=9, color=MUTED, zorder=16,
+                path_effects=halo("white", 3))
+
+    titleblock(ax, tb_x, ext[3] - 0.16 * (ext[3] - ext[2]),
+               0.21 * (ext[1] - ext[0]), tb, per_in=per_in)
+    if lines:
+        notes_block(ax, tb_x, v_top, lines, step=13, per_in=per_in)
 
     fig.savefig(path, dpi=170, bbox_inches="tight", facecolor="white")
     plt.close(fig)
