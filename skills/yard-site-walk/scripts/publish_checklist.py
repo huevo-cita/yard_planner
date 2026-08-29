@@ -16,10 +16,12 @@ Then, to publish:
                                      textToFind=<the string>)
      Each call reports the character range it touched. A "not found" means the
      markdown and the HTML have drifted apart — regenerate, do not hand-patch.
-  3. Verify: gdrive downloadFile(exportMimeType='text/markdown') and count
-     '[ ]' against the item count printed below.
+  3. Verify: gdrive downloadFile(exportMimeType='text/markdown'), then
+       python3 publish_checklist.py <slug>/SITE-WALK.md --verify <exported.md>
+     which counts the checkboxes the way the export actually writes them.
 
-Four things about the Docs HTML importer this encodes, all learned the hard way:
+Six things about the Docs HTML importer and this MCP surface, all learned the
+hard way:
 
   * <hr> steals the heading style of whatever follows it, so a rule before an
     <h2> silently demotes that heading to bold body text and puts "---" in the
@@ -30,6 +32,17 @@ Four things about the Docs HTML importer this encodes, all learned the hard way:
     whitespace-normalised to match what the document will actually contain.
   * There is no HTML for a checklist. Checkbox items import as ordinary bullets
     and need the second pass above to become tickable checkboxes.
+  * The whole document has to travel as one inline `html` argument. Drive itself
+    converts text/html to a Doc, but the MCP `uploadFile` tool refuses it —
+    convertToGoogleFormat allows only .docx/.xls/.pptx — so `localPath` is not
+    an escape route and a long checklist is simply a large argument. A 107-item
+    walk is about 33 KB. Do not go looking for a file-based path; there isn't
+    one.
+  * The text/markdown export prefixes EVERY list item with "> ", rendering
+    lists inside a blockquote: "> - [ ] Tape the...". So the obvious
+    verification regex, anchored as ^\s*-\s*\[ \], matches nothing and reports
+    total failure on a document that is perfectly correct. Anchor as
+    ^[>\s]*[-*]\s*\[[ xX]\] or use --verify below.
 """
 import argparse
 import html
@@ -208,16 +221,59 @@ def render(blocks):
     return '\n'.join(out), runs
 
 
+#: A list item in a text/markdown export of a Doc, which arrives wrapped in a
+#: blockquote. Anchoring on whitespace alone silently matches nothing.
+EXPORTED_ITEM = re.compile(r'^[>\s]*[-*]\s*(\[[ xX]\])?\s*', re.M)
+
+
+def verify(runs, exported):
+    """Compare a Doc exported as markdown against the runs that should be in it.
+
+    Returns (expected, checkboxes, plain_bullets). A non-zero plain_bullets count
+    means a createParagraphBullets call was missed: those items are in the
+    document as ordinary bullets and will not tick.
+    """
+    expected = sum(len(r.split('\n')) for r in runs)
+    checkboxes = plain = 0
+    for line in exported.split('\n'):
+        m = EXPORTED_ITEM.match(line)
+        if not m or not line.strip():
+            continue
+        if not re.match(r'^[>\s]*[-*]\s', line):
+            continue
+        if m.group(1):
+            checkboxes += 1
+        else:
+            plain += 1
+    return expected, checkboxes, plain
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('markdown', help='the checklist .md')
+    ap.add_argument('--verify', metavar='EXPORTED_MD',
+                    help='a text/markdown export of the published Doc, to check '
+                         'the checkbox count against this checklist')
     args = ap.parse_args()
 
     src = os.path.abspath(args.markdown)
     stem = os.path.splitext(src)[0]
     blocks = parse(open(src).read())
     doc, runs = render(blocks)
+
+    if args.verify:
+        expected, boxes, plain = verify(runs, open(args.verify).read())
+        print('expected checkbox items %d | checkboxes in the Doc %d | '
+              'plain bullets left %d' % (expected, boxes, plain))
+        if boxes == expected and not plain:
+            print('  match')
+        elif plain:
+            print('  MISSED %d item(s): a createParagraphBullets pass did not '
+                  'run, and those items will not tick' % plain)
+        else:
+            print('  MISMATCH by %d' % (expected - boxes))
+        return
 
     open(stem + '.html', 'w').write(doc)
     json.dump(runs, open(stem + '.runs.json', 'w'), indent=1)

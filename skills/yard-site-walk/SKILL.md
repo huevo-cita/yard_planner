@@ -169,13 +169,31 @@ It writes `SITE-WALK.html` and `SITE-WALK.runs.json`, then:
 2. For each string in `runs.json`, in order, `gdrive createParagraphBullets(
    documentId=..., bulletPreset='BULLET_CHECKBOX', textToFind=<string>)`. One
    call converts one whole run of consecutive items
-3. Verify with `gdrive downloadFile(exportMimeType='text/markdown')` and count
-   `[ ]` against the item count the script printed
+3. Verify with `gdrive downloadFile(exportMimeType='text/markdown')`, then
 
-The script's docstring explains the four Docs importer defects it works around.
-The one worth knowing here: **never put a horizontal rule before a heading**,
-because the importer gives the rule the heading's style and demotes the heading
-to bold body text. Rules are dropped for that reason.
+```bash
+python3 skills/yard-site-walk/scripts/publish_checklist.py <slug>/SITE-WALK.md \
+    --verify <the exported .md>
+```
+
+The script's docstring explains the six Docs and MCP defects it works around.
+Three are worth knowing before you start:
+
+- **Never put a horizontal rule before a heading.** The importer gives the rule
+  the heading's style and demotes the heading to bold body text. Rules are
+  dropped for that reason
+- **The whole document travels as one inline `html` argument.** Drive converts
+  text/html to a Doc, but the MCP `uploadFile` tool rejects it —
+  `convertToGoogleFormat` allows only Office formats — so `localPath` is not an
+  escape route. A 107-item walk is about 33 KB of argument. Do not spend a call
+  looking for a file-based path
+- **Do not hand-roll the verification count.** The markdown export wraps every
+  list item in a blockquote, so items come back as `> - [ ] Tape the...`. A
+  regex anchored on whitespace matches nothing and reports total failure on a
+  document that is perfectly fine. `--verify` counts them correctly, and
+  distinguishes a genuine miscount from a `createParagraphBullets` pass that
+  never ran — the latter leaves items as plain bullets that look right and do
+  not tick
 
 A "not found" from step 2 means the markdown and the HTML have drifted.
 Regenerate both; do not hand-patch a string.
