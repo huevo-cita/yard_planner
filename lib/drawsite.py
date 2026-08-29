@@ -36,6 +36,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.patches import Polygon, Circle, Rectangle, Wedge
+from matplotlib.font_manager import FontProperties
+from matplotlib.textpath import TextPath
 
 from . import siteschema, solar, yards
 
@@ -170,12 +172,49 @@ def titleblock(ax, x, y, w, lines, title="SITE DATA"):
                 fontweight="bold", zorder=15)
 
 
-def notes_block(ax, x, y, lines, step=15, heading_size=8.4, size=7.6):
+def text_width_in(s, size):
+    """Rendered width of a string in inches, at a font size in points.
+
+    Measured off the actual glyph outlines rather than estimated from a
+    characters-per-inch guess, because the guess is wrong by enough to run a
+    column of text off the edge of the page and the failure is silent.
+    """
+    if not s:
+        return 0.0
+    return TextPath((0, 0), s, size=size, prop=FontProperties()).get_extents().width / 72.0
+
+
+def fit_columns(items, col_in, size=7.6, indent=0, lo=18, hi=72):
+    """The widest wrap, in characters, whose longest line still fits `col_in`.
+
+    Wrapping is not monotonic in the obvious way — a narrower wrap can produce a
+    longer worst line than a wider one, because of where the breaks land — so
+    this walks down from `hi` and takes the first width that genuinely fits.
+    """
+    budget = col_in - indent * size * 0.5 / 72.0
+    for cols in range(hi, lo - 1, -1):
+        widest = max((text_width_in(c, size)
+                      for it in items for c in wrap(it, cols)), default=0.0)
+        if widest <= budget:
+            return cols
+    return lo
+
+
+def notes_block(ax, x, y, lines, step=15, heading_size=8.4, size=7.6, zorder=15):
+    """A left-aligned block of annotation lines.
+
+    Drawn above the zone fills. Without an explicit zorder these land at the
+    text default of 3, under the zone patches at 4, so any note overlapping a
+    lawn or a bed had its first characters painted over — which reads as a
+    clipped column rather than as a layering fault and sends you looking at the
+    text width instead.
+    """
     for i, ln in enumerate(lines):
         ax.text(x, y - step * i, ln,
                 fontsize=heading_size if i == 0 else size,
                 color=DIM if i == 0 else MUTED,
-                fontweight="bold" if i == 0 else "normal")
+                fontweight="bold" if i == 0 else "normal",
+                zorder=zorder, path_effects=halo("white", 3))
 
 
 def annotate_all(ax, notes, default_color=INK):
@@ -452,21 +491,38 @@ def draw_plan(site, path):
             g.spec("plan", "title", f"{site.get('title', site.get('yard', ''))} "
                                     "— DIMENSIONED PLAN"),
             fontsize=16, fontweight="bold", color=INK)
+    # Wrapped to the drawing, not left as one line. An unwrapped subtitle sets
+    # the figure's own width through bbox_inches="tight", so a long one silently
+    # stretches the whole canvas and shrinks the plan to a corner of it.
     sub = g.spec("plan", "subtitle",
                  "All dimensions in inches, as measured on site.")
-    ax.text(ext[0] + 4, ext[3] - 26, sub, fontsize=9, color=MUTED)
+    axes_in = ax.get_position().width * fig.get_size_inches()[0]
+    for i, line in enumerate(wrap(sub, fit_columns([sub], axes_in, size=9.0))):
+        ax.text(ext[0] + 4, ext[3] - 26 - i * 13, line, fontsize=9, color=MUTED)
 
     tb = g.spec("plan", "titleblock") or default_titleblock(site, g)
     tb_x = ext[1] - 0.24 * (ext[1] - ext[0])
     titleblock(ax, tb_x, ext[3] - 0.16 * (ext[3] - ext[2]),
                0.21 * (ext[1] - ext[0]), tb)
 
-    lines = ["VERIFY ON SITE"]
-    for v in site.get("verify_on_site", [])[:8]:
-        chunks = wrap(v, 46)
-        lines.append("· " + chunks[0])
-        lines.extend("  " + c for c in chunks[1:])
-    if len(lines) > 1:
+    # The verify list is wrapped to the column it is actually drawn in, measured
+    # rather than estimated. A thorough record grows this list, and both a fixed
+    # character count and a guessed character width silently ran the longest and
+    # most important items off the right edge of the page.
+    items = site.get("verify_on_site", []) or []
+    if items:
+        # Measured off the axes, not the figure: `frame` may rewrite figsize to
+        # match the extent's aspect, and the axes then takes only part of that
+        # after margins. Using the figure width overestimated the column by a
+        # third and put the wrap back over the edge.
+        axes_in = ax.get_position().width * fig.get_size_inches()[0]
+        col_in = (ext[1] - tb_x) / (ext[1] - ext[0]) * axes_in
+        cols = fit_columns(items, col_in, size=7.6, indent=2)
+        lines = ["VERIFY ON SITE"]
+        for v in items:
+            chunks = wrap(v, cols)
+            lines.append("· " + chunks[0])
+            lines.extend("  " + c for c in chunks[1:])
         notes_block(ax, tb_x, ext[2] + 0.44 * (ext[3] - ext[2]), lines, step=13)
 
     fig.savefig(path, dpi=170, bbox_inches="tight", facecolor="white")
