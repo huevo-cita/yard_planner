@@ -39,6 +39,14 @@ anything slow.
 
 Design cannot start before all four. Schedule cannot start before design.
 
+`yard-site-walk` is the loop back to the survey, not a stage of its own. Run it
+when the record is still mostly public data, or when the yard has changed since
+the data was captured — a new deck, new beds, a tree down. It reads the ranked
+gaps, writes a field checklist aimed at the ones a tape can settle, and folds the
+readings back into `site.json` as `measured`. Then re-run the sun model, because
+real tree species and real fence heights are the two largest corrections it ever
+gets.
+
 ## Step 1 — Register it
 
 ```bash
@@ -58,6 +66,7 @@ Each is its own skill. Load it and follow it; do not summarise it from here.
 | stage | skill | produces |
 | --- | --- | --- |
 | geometry, obstructions, climate | `yard-survey` | `site.json` |
+| ground truth for a thin record | `yard-site-walk` | `SITE-WALK.md`, then `measured` values |
 | light by zone and month | `yard-sun-model` | `sun-hours.json`, maps |
 | soil, ground, inventory, person | `yard-conditions` | `conditions.json` |
 | purpose, style, constraints | `yard-vision` | `vision.json` |
