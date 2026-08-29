@@ -351,6 +351,13 @@ class Model:
         """
         z = {}
         px, py = self.px, self.py
+        # A zone can be described in site.json and still fall outside the sampled
+        # extent, because the extent is chosen for the planting question and the
+        # zone list is the whole property. Averaging over no cells is a numpy
+        # error deep in a reduction, which is a terrible way to learn that a
+        # patio is off the west edge of the grid. Catch it here, say so by name,
+        # and keep the mask so analysis bands can still reference it.
+        self.zones_offgrid = {}
         for key, spec in (self.S.get("zones") or {}).items():
             label = spec.get("label_short") or spec.get("label") or key
             mask = np.ones(self.M, dtype=bool)
@@ -358,6 +365,14 @@ class Model:
                 lo, hi = spec["x"]
                 mask &= (px >= lo) & (px < hi)
             mask &= self._y_mask(spec, px, py)
+            if not mask.any():
+                self.zones_offgrid[label] = {
+                    "key": key,
+                    "zone_x": spec.get("x"),
+                    "zone_y": spec.get("y"),
+                    "grid_x": [float(px.min()), float(px.max())],
+                    "grid_y": [float(py.min()), float(py.max())],
+                }
             z[label] = mask
 
         bands = self.S.get("analysis_bands")
@@ -407,8 +422,13 @@ class Model:
         return mask
 
     def zone_order(self):
-        """Whole yard first, then the named zones, then the bands."""
-        named = [k for k in self.zones if k != "Whole yard"]
+        """Whole yard first, then the named zones, then the bands.
+
+        Zones that hold no cells are left out. They are not reportable — there is
+        nothing to average — and `zones_offgrid` carries them with the reason.
+        """
+        named = [k for k in self.zones
+                 if k != "Whole yard" and k not in self.zones_offgrid]
         return ["Whole yard"] + named
 
     # -------------------------------------------------------------- the model
@@ -1089,6 +1109,11 @@ def run(slug, cell=6.0, outdir=None, quick=False):
     m = Model(site, cell=cell)
     print(f"{slug}: {m.M} cells at {cell:g} in, {len(m.segments)} obstruction "
           f"segments, {len(m.crowns)} crowns, {m.sun.tz_name}")
+    for label, off in m.zones_offgrid.items():
+        print(f"warning: zone {label!r} lies outside the sampled extent and is "
+              f"NOT in the sun report. zone x={off['zone_x']} y={off['zone_y']}, "
+              f"grid x={off['grid_x']} y={off['grid_y']}. Widen `boundary` if it "
+              f"should be modelled — but that moves every average.")
 
     table = zone_table(m)
     clocks = fig_shade_clocks(m, outdir)
