@@ -78,7 +78,16 @@ pip install -r requirements.txt
 
 ./bin/yard install         # link the skills and subagents into ~/.cursor
 ./bin/yard doctor          # check the environment, and say what any gap costs
+
+python3 tools/test_gate.py # prove the doubt gate actually refuses
 ```
+
+`test_gate.py` builds a scratch yard in a temporary directory, files a doubt, and
+checks that each of the five expensive jobs refuses, that it refuses *quickly*
+rather than after the work, that `--force` stamps what it came past, and that the
+cheap paths stay open. A non-zero exit that does not name the gate is reported as
+inconclusive rather than passing, because a job that dies for an unrelated reason
+also exits non-zero and would otherwise score as a win.
 
 `doctor` names what breaks for anything missing, rather than only reporting its
 absence. The optional packages only limit what can be measured automatically;
