@@ -8,6 +8,8 @@
 #
 #   yard                          list the yards
 #   yard <module> [args]          run any lib module: sunmodel, gaps, design ...
+#   yard week <slug>              what to do this week, in one place
+#   yard week <slug> --calendar   the whole run, as CALENDAR.md
 #   yard doubts <slug>            what is still in question, and what it blocks
 #   yard changelog <slug>         what changed, and why the plan reads as it does
 #   yard vault lock <slug>        encrypt a yard so it can travel in the repo
@@ -33,7 +35,7 @@ cd "$REPO"
 
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
 photomeasure soil climate conditions gaps doubts inputs changelog vision design
-bom schedule builddoc buildhtml vault"
+bom schedule week builddoc buildhtml vault"
 
 case "${1:-}" in
   ""|list)

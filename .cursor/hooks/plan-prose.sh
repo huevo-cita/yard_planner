@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
 #
 # Say so, at the moment a plan document is written, when what was written is a
-# change-log entry rather than a plan.
+# change-log entry rather than a plan -- or when it has just moved a date away
+# from the file that generates the week-by-week calendar.
+#
+# Two checks, one hook
+# --------------------
+# The second check exists because `CALENDAR.md` is generated from `tasks.json`,
+# while `PLAN.md` and `SOWING-CALENDAR.md` keep their own dated sections. A date
+# edited in one of those and not in `tasks.json` is the same failure this repo
+# already has two mechanisms for: a fact that should have gone into a file goes
+# somewhere nothing reads it. `lib.week --check` compares a digest of every
+# section `tasks.json` was extracted from, so an edit to one is caught here, at
+# the moment it is made and while the reason for it is still to hand.
+#
+# It is one hook rather than two because this one already fires on exactly the
+# right file set, already resolves the repo and the slug, and already has the
+# output channel. A second hook would duplicate all of that to watch the same
+# files.
 #
 # `lib.changelog --lint` already finds this, and `lib.buildhtml` runs it on the
 # way to publishing. Both are too late in the same way the doubt gate's Python
@@ -66,14 +82,38 @@ fi
 PYTHON="${YARD_PYTHON:-python3}"
 command -v "$PYTHON" >/dev/null 2>&1 || nothing
 
-SLUG="$(basename "$(cd -P "$(dirname "$DOC")" && pwd)")"
+YARD="$(cd -P "$(dirname "$DOC")" && pwd)"
+SLUG="$(basename "$YARD")"
+NAME="$(basename "$DOC")"
 
-FINDINGS="$(cd "$REPO" && "$PYTHON" -m lib.changelog "$SLUG" --lint "$DOC" 2>/dev/null)"
-[ $? -eq 0 ] && nothing
-[ -n "$FINDINGS" ] || nothing
+PARTS=()
 
-MESSAGE="$(printf '%s\n\n%s\n' \
-  "$(basename "$DOC") was just written with prose that belongs in the change log, not in a plan. This is not a blocker and the file is saved; it is a list of sentences to move." \
-  "$FINDINGS")"
+FINDINGS="$(cd "$REPO" && "$PYTHON" -m lib.changelog "$SLUG" --lint "$DOC" 2>/dev/null)"; RC=$?
+if [ $RC -ne 0 ] && [ -n "$FINDINGS" ]; then
+  PARTS+=("$(printf '%s\n\n%s' \
+    "$NAME was just written with prose that belongs in the change log, not in a plan. This is not a blocker and the file is saved; it is a list of sentences to move." \
+    "$FINDINGS")")
+fi
+
+# The drift check only says anything on a yard that keeps its dates in a file.
+if [ -f "$YARD/tasks.json" ] && [ -f "$REPO/lib/week.py" ]; then
+  if [ "$NAME" = "CALENDAR.md" ]; then
+    PARTS+=("$NAME is generated from $SLUG/tasks.json by \`yard week $SLUG --calendar\`, so an edit made here is lost the next time it renders. Put the change in tasks.json and re-render.")
+  fi
+  DRIFT="$(cd "$REPO" && "$PYTHON" -m lib.week "$SLUG" --check 2>/dev/null)"; RC=$?
+  if [ $RC -ne 0 ] && [ -n "$DRIFT" ]; then
+    PARTS+=("$(printf '%s\n\n%s\n\n%s' \
+      "That edit left $SLUG/tasks.json disagreeing with the documents it was built from, so \`yard week $SLUG --calendar\` will now refuse. CALENDAR.md is what someone actually reads on a Saturday, so a date that only moved in the prose has not moved." \
+      "$DRIFT" \
+      "Carry the change into tasks.json, then \`python3 -m lib.week $SLUG --restamp\` to record the section as re-read.")")
+  fi
+fi
+
+[ ${#PARTS[@]} -gt 0 ] || nothing
+
+MESSAGE=""
+for part in "${PARTS[@]}"; do
+  MESSAGE="${MESSAGE}${part}"$'\n\n'
+done
 
 jq -n --arg c "$MESSAGE" '{additional_context: $c}' 2>/dev/null || nothing

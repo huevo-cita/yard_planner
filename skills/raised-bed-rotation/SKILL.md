@@ -129,13 +129,37 @@ Work backward from the transplant window and give real dates:
 - **Pest watch** for this season's crops specifically. Physical-first, and in a garden with
   butterflies and frogs, Bt, neem, spinosad and pyrethrins are all off the table.
 
-## Step 6: Write it down
+## Step 6: File the dates before writing anything
+
+Every date Step 5 produced goes into `<slug>/tasks.json` — the sowing dates, the
+transplant session with its square-by-square placements, the thinnings, the
+feeds, the pest walks and the harvest window. That file is the single source for
+what happens on a day across the whole yard, so the bed's dates sit in it beside
+the garden-wide ones and one document can show a week entire:
+
+```bash
+python3 -m lib.week <slug> --calendar    # -> CALENDAR.md
+python3 -m lib.week <slug>               # this week, to the terminal
+python3 -m lib.week <slug> --check       # has the prose drifted from the file
+```
+
+Put the square ids in `where.squares` and the multi-square plantings in
+`where.placements`, so the calendar can print what goes where without the reader
+opening the bed map. Cite the section of `SOWING-CALENDAR.md` each task came from
+in `source`; `tasks.json` digests those sections, so a date later changed in the
+prose and not here is caught rather than silently disagreeing. The schema is in
+[AGENTS.md](../../AGENTS.md), under "A date goes in tasks.json".
+
+## Step 7: Write the calendar document
 
 A sowing calendar is a dated document with its own budget — `SOWING-CALENDAR.md`,
 not a section bolted onto `PLAN.md`, and the plan should say only that the dates
-live there. It is held to the same contract as the plan: sowing dates, transplant
+live there. It opens with a line pointing at `CALENDAR.md` for the week in hand,
+because this document is where the soil-temperature gates, the days-to-maturity
+arithmetic and the technique live, and the calendar is where the instruction
+lives. It is held to the same contract as the plan: sowing dates, transplant
 dates, technique, and no account of what the dates used to be. When a date moves,
-move it and file the reason:
+move it in `tasks.json` and here, and file the reason:
 
 ```bash
 python3 -m lib.changelog <slug> --add "Carrots direct-sown, not started indoors" \

@@ -104,6 +104,27 @@ backwards, works around travel, reserves a catch-up weekend, gates tasks on the
 person's actual experience, and produces a cut list when it comes in over
 budget.
 
+**Says what to do this week, in one document.** The dated actions end up spread
+across the plan, the sowing calendar and the sourcing report — each coherent, and
+together three documents open at once with a shopping list that never sits beside
+the shop selling the thing. So a yard keeps them in `tasks.json`, with the
+position down to the square or the foot-mark, the gate, the fallback and the
+supplier, and `CALENDAR.md` is generated from it: the current week first with its
+hours and what to buy before which day, then every week to the target date.
+`yard week <slug>` puts the same week on one screen; `--shop 3` groups the next
+three weeks of buying into supplier trips. It publishes to one Google Doc whose
+checkboxes tick, and `--sync` reads the ticks back, so the file also becomes the
+record of what was actually done.
+
+**And refuses to render over a plan it no longer agrees with.** The plan
+documents keep their own dated sections, so a date can move in one and not the
+other. `tasks.json` records a digest of every section it was extracted from —
+edit one and it goes stale, naming which — and separately checks that each task's
+date still appears in a section it cites. The first catches a task nobody ever
+transcribed, which comparing dates cannot; the second catches a date that moved.
+`--calendar` refuses while either fails, `--force` stamps the page with what it
+came past, and the hook on the plan documents says so at the moment of the edit.
+
 ## Install
 
 ```bash
@@ -161,6 +182,10 @@ yard changelog <slug> --lint      # prose in the plan that belongs in the log
 yard design   <slug>              # check a design against the measured site
 yard bom      <slug>              # bill of materials, netted against what is here
 yard schedule <slug>              # the weekend plan, back-planned from the date
+yard week     <slug>              # what to do this week, on one screen
+yard week     <slug> --calendar   # every week to the target date -> CALENDAR.md
+yard week     <slug> --shop 3     # the next three weeks of buying, by supplier
+yard week     <slug> --check      # has the plan drifted from the dated actions
 yard --help                       # every module
 ```
 
@@ -258,8 +283,9 @@ vault/        encrypted yard bundles, committed
 .cursor/      the doubt gate, which denies the expensive jobs while a doubt is
               open or while nothing has been attested about what they are
               running on, and the plan-prose check, which reads a plan document
-              as it is written. See .cursor/hooks/VALIDATOR.md
-AGENTS.md     how to work in here, and both rules in full
+              as it is written and says when a date in it has moved away from
+              the file the calendar is built from. See .cursor/hooks/VALIDATOR.md
+AGENTS.md     how to work in here, and all three rules in full
 <slug>/       one directory per yard. Never committed.
 ```
 
@@ -268,12 +294,15 @@ Each yard holds `site.json` (geometry and the 3D obstruction model),
 strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
 `doubts.json` (what is in question, and what it blocks), `all-clear.json` (what
 was assumed and run on anyway, and why), `changelog.json` (what changed and why
-it reads as it does), a prose `profile.md`, and `maps/`, `photos/` and
+it reads as it does), `tasks.json` (every action with a day on it, and a digest
+of the section it came from), a prose `profile.md`, and `maps/`, `photos/` and
 `design/`.
 
 The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 `SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true
-now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else.
+now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else,
+and `CALENDAR.md` is rendered from `tasks.json` and is the one to read on a
+Saturday morning.
 
 `site.json`, `conditions.json` and `vision.json` are the sources of truth.
 Correct one and re-run, and every drawing, figure and cost regenerates.

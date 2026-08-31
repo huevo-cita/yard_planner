@@ -72,11 +72,25 @@ Each is its own skill. Load it and follow it; do not summarise it from here.
 | soil, ground, inventory, person | `yard-conditions` | `conditions.json` |
 | purpose, style, constraints | `yard-vision` | `vision.json` |
 | planting and hardscape | `yard-design` | `design.json`, bed maps |
-| materials, dates, cost | `yard-schedule` | the plan |
+| materials, dates, cost | `yard-schedule` | `tasks.json`, then `PLAN.md` |
+| the bed's own dates | `raised-bed-rotation` | `tasks.json`, then `SOWING-CALENDAR.md` |
 
 Four subagents do the context-heavy work: **parcel-scout** for county GIS,
 **photo-surveyor** for measuring from photographs, **vision-scout** for
 inspiration boards, **sourcing-scout** for local suppliers and prices.
+
+**Everything dated lands in one file.** `tasks.json` holds every action with a
+day on it, from whichever stage produced it, and `CALENDAR.md` is generated from
+it — one document showing the week entire, with the positions and the shopping
+list for that week beside the work. The plan documents are the reference behind
+it: the beds, the rules, the budget, the technique. Answering "what do I do this
+weekend" out of three hand-written documents is how this went wrong before.
+
+```bash
+python3 -m lib.week <slug>               # this week
+python3 -m lib.week <slug> --calendar    # -> CALENDAR.md
+python3 -m lib.week <slug> --check       # has the prose drifted from the file
+```
 
 ## Step 3 — Report the gaps after every stage
 

@@ -308,13 +308,58 @@ tool type and the documented list of names does not cover every editing tool, so
 a matcher would have left `StrReplace` — the main editing path — unwatched. Two
 `jq` calls and an exit is cheap enough to pay on every call for complete cover.
 
+## The second check in that hook — a date that moved in only one place
+
+`plan-prose.sh` also runs `lib.week --check`, and the reason it is a second check
+inside the same hook rather than a second hook is that it watches exactly the
+same six filenames, already resolves the repo and the slug, and already has the
+one output channel. A separate hook would duplicate the whole preamble to reach
+the same files.
+
+What it watches is a third instance of the failure this whole directory is about.
+`CALENDAR.md` is generated from `tasks.json`, while `PLAN.md` and
+`SOWING-CALENDAR.md` keep their own dated sections. A date edited in the prose
+and not in `tasks.json` leaves the prose right and the calendar wrong, and the
+calendar is the one somebody reads on the way out of the door.
+
+**It reads disk state, not intent**, which is the constraint layer 3's failure
+imposes on everything here. `tasks.json` carries a digest of every section it was
+extracted from; the hook re-computes them against the file that was just written.
+There is no judgement in it and nothing to tune.
+
+The date half is worth one note, because the obvious direction is the wrong one.
+Scanning a plan document for dates and asking which are missing from `tasks.json`
+sounds like the same check and behaves like layer 3's phrase list: the target
+date appears dozens of times in those documents, so the check fires constantly on
+a correct file. Asking instead whether each task's own date still appears in a
+section it cites gives one finding per task. On the four cloverleaf documents
+that is **21 findings on a record whose dates were guessed, and zero once each
+guess was marked as one** — the same shape of measurement as the 28-and-no-false-
+positives above, and the same reason to trust it.
+
+Neither half can be blocked by a hook, and neither needs to be. `lib.week` itself
+refuses to render, the way `doubts.gate()` does, so the guarantee holds for
+programmatic callers too and the hook is only there to say it earlier.
+`tools/doctor.py` reports the same thing per yard, for the case where a section
+changed outside the editor and no hook ever fired. `tools/test_week.py` proves
+the refusal fires, that a clean record is silent, and that `--force` names what
+it came past.
+
+The two holes are the familiar ones and are worth stating. A date changed in
+conversation and never written anywhere is invisible, exactly as an unvoiced
+doubt is: nothing on disk moved. And the digest catches that a section changed,
+not that `tasks.json` was updated correctly — `--restamp` without fixing anything
+is possible, precisely as `--because '*=fine, I looked'` is. The gain is the same:
+the omission becomes a dated artifact somebody can disagree with.
+
 ## Turning it off
 
 Each layer detaches on its own:
 
 - **`plan-prose.sh`**: delete its entry in `.cursor/hooks.json`. Nothing depends
   on it; `lib.changelog --lint` and `lib.buildhtml` still find the same prose,
-  just later.
+  and `lib.week --calendar` still refuses over a drifted date, just later. To
+  drop only the date half, delete the `lib.week --check` block inside the script.
 - **Layer 2**: delete `.cursor/hooks.json`, or the `doubt-gate.sh` entry in it.
   Keep the two in step — a config pointing at a missing script, with
   `failClosed` set, blocks every gated job.
