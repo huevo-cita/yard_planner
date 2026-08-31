@@ -62,21 +62,58 @@ The default prices are national ballpark figures and are labelled as such
 wherever they print. **Do not quote them as costs.** They exist so the plan has a
 number before anyone drives anywhere.
 
-## Step 2 — Where to buy it
+**No line is ever dropped for want of a price.** An item nothing has quoted is
+estimated from comparable prices and marked, and the total carries the firm and
+estimated parts separately along with the range:
 
-Launch the **sourcing-scout** subagent with the netted list and the location. It
-returns real local suppliers with real prices, delivery fees and minimums, and it
-covers the categories people miss: municipal free-mulch programs, native plant
-society sales, county extension soil testing, and trade counters for stone and
-drip parts.
-
-Feed its prices back in:
-
-```bash
-python3 -m lib.bom <slug> --prices local-prices.json
+```
+  $70.48 of that is quoted and $446.50 — 86% — is estimated from comparable prices
+  the range across those estimates is $360 to $674
 ```
 
-Then the total says `local` instead of `national ballpark`, and it can be quoted.
+An 86% estimated total is not a failure of the tool, it is the true state of the
+research, and it says which lines to go and fix:
+
+```bash
+python3 -m lib.bom <slug> --price-gaps    # estimated lines, by dollars at risk
+```
+
+## Step 2 — Where to buy it, and in what order
+
+Launch the **sourcing-scout** subagent with the netted list and the slug. It
+writes `<slug>/sourcing.json` — dated evidence per supplier, not prose — covering
+the categories people miss: municipal free-mulch programs, native plant society
+sales, county extension soil testing, and trade counters for stone and drip
+parts.
+
+```bash
+python3 -m lib.sourcing <slug> --geocode   # real distances from the addresses
+python3 -m lib.sourcing <slug> --check     # what the evidence is missing
+python3 -m lib.sourcing <slug>             # the ranked board
+python3 -m lib.sourcing <slug> --rank nursery
+```
+
+Four rules decide the order, and they are in code so they can be argued with:
+
+- **Locality is classification, not exclusion.** Every supplier is geocoded and
+  carries a real distance to the yard. One outside the metro is reported under
+  "not local to this yard" with the mileage rather than silently dropped, and
+  **mail order is its own list, never gated out** — some things have no local
+  source and a rule that removed them would delete the only way to buy them
+- **Quality comes from dated evidence, or the supplier is not ranked at all.**
+  Ratings are shrunk toward the local mean by review volume and then tiered on
+  the bottom of the confidence interval, so a 5.0 from eight people does not
+  outrank a 4.7 from nine hundred, and a shop nobody has checked lands under "not
+  ranked" instead of inheriting the neighbourhood's good name
+- **Memberships and big sales move a supplier up considerably, and say so.** The
+  bump is printed by name — "ranked up +0.80 for access: member preview, 10%
+  member discount; Fall native sale" — never folded invisibly into a number
+- **Distance breaks ties inside a quality tier, never across one.** Nearest of
+  the good ones, not nearest overall
+
+The bill of materials reads `sourcing.json` directly, so quotes gathered there
+price the list with no extra step. `--prices local-prices.json` still works and
+still overrides per item.
 
 Flag date-bound opportunities loudly. A native plant sale on one Saturday in
 April is worth more than a five per cent saving elsewhere, and it belongs in the
@@ -272,6 +309,9 @@ is not, and next season's plan is only as good as what this one wrote down.
 
 - Never price from the defaults and call it a cost. Run sourcing-scout first, or
   label the number as a ballpark every time it appears
+- Never quote a total without its estimated share. "About $1,600" and "about
+  $1,600, of which $1,100 is estimated from comparable prices" are different
+  claims, and only the second one can be planned against
 - Never present a provisional total or a provisional calendar without saying so.
   A quantity in doubt is a quantity bought twice, and the doubt is cheaper to
   settle than the second delivery
