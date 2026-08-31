@@ -177,8 +177,15 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
             qty = float(qty)
         except (TypeError, ValueError):
             continue
-        add(item, qty, PRICES.get(item, {}).get("unit", "each"),
-            "listed in design.extra_materials")
+        # A material priced by the bag or the yard is sold by volume, whatever
+        # its entry happens to say. Without this, mulch and compost arrive here
+        # as `each`, miss `price_bulk` entirely, and get priced against whatever
+        # else in the yard is sold one at a time — which is how eighteen cubic
+        # feet of mulch came to be worth more than the fountain.
+        p = PRICES.get(item, {})
+        unit = p.get("unit") or ("cu ft" if p.get("bag_usd") or
+                                 p.get("bulk_usd_per_yard") else "each")
+        add(item, qty, unit, "listed in design.extra_materials")
     return need
 
 

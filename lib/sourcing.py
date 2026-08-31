@@ -126,6 +126,10 @@ POT_SIZES = frozenset(["seed", "plug", "4in", "1gal", "3gal", "5gal", "7gal",
                        "15gal", "b&b"])
 COMMONEST_POT = "1gal"
 
+# Units whose members are close enough substitutes that one's price says
+# something about another's. See `item_class` for why the list is this short.
+COMMENSURABLE_UNITS = frozenset(["cu ft", "packet"])
+
 
 # ------------------------------------------------------------------ the record
 
@@ -191,6 +195,42 @@ def _geocode(address, limit=1):
             "display_name": r.get("display_name")}
 
 
+def _variants(address):
+    """Progressively looser queries for one address, with how exact each is.
+
+    Real supplier addresses fail against OpenStreetMap for dull reasons: a suite
+    number the geocoder reads as part of the street, a venue name before the
+    street line, `Farm to Market 1626` where the map says `FM 1626`, or a rural
+    lane nobody has ever traced. Giving up on the first miss leaves the supplier
+    with no distance at all, which is worse than a postcode-level fix — provided
+    the postcode-level fix admits to being one."""
+    a = " ".join(str(address or "").split())
+    if not a:
+        return
+    seen = {a}
+    yield a, "address"
+
+    for pattern, repl in (
+            (r",?\s*(?:suite|ste\.?|unit|apt\.?|bldg\.?|building|#)\s*[\w-]+", ""),
+            (r"\bfarm[- ]to[- ]market\b", "FM")):
+        alt = " ".join(re.sub(pattern, repl, a, flags=re.I).split()).strip(", ")
+        if alt and alt not in seen:
+            seen.add(alt)
+            yield alt, "address"
+
+    parts = [p.strip() for p in a.split(",") if p.strip()]
+    # A leading venue name rather than a house number.
+    if len(parts) > 2 and not re.match(r"^\d", parts[0]):
+        alt = ", ".join(parts[1:])
+        if alt not in seen:
+            seen.add(alt)
+            yield alt, "address"
+    if len(parts) >= 2:
+        alt = ", ".join(parts[-2:])
+        if alt not in seen:
+            yield alt, "locality"
+
+
 def geocode_suppliers(slug, write=True, force=False):
     """Fill in every supplier's coordinate and its distance to the yard.
 
@@ -206,21 +246,31 @@ def geocode_suppliers(slug, write=True, force=False):
             if not addr:
                 done.append((s.get("id"), None, "no address on file"))
                 continue
-            try:
-                hit = _geocode(addr)
-            except Exception as exc:                      # network, not logic
-                done.append((s.get("id"), None, f"geocode failed: {exc}"))
-                continue
+            hit, precision, failed = None, None, None
+            for query, level in _variants(addr):
+                try:
+                    hit = _geocode(query)
+                except Exception as exc:                  # network, not logic
+                    failed = f"geocode failed: {exc}"
+                    break
+                if hit:
+                    precision = level
+                    break
             if not hit:
-                done.append((s.get("id"), None, "address not found"))
+                done.append((s.get("id"), None, failed or "address not found"))
                 continue
             s["lat"], s["lon"] = round(hit["lat"], 6), round(hit["lon"], 6)
             s["geocoded"] = {"as_of": _today().isoformat(),
-                             "matched": hit.get("display_name")}
+                             "matched": hit.get("display_name"),
+                             "precision": precision}
         s["distance_mi"] = round(haversine_mi(ylat, ylon, s["lat"], s["lon"]), 1)
-        s["distance_from"] = ("haversine to site.address, geocoded "
-                              f"{_today().isoformat()}")
-        done.append((s.get("id"), s["distance_mi"], None))
+        level = (s.get("geocoded") or {}).get("precision") or "address"
+        s["distance_from"] = (
+            f"haversine to site.address, geocoded {_today().isoformat()}"
+            + ("" if level == "address" else
+               f", to the {level} only because the street would not resolve"))
+        done.append((s.get("id"), s["distance_mi"],
+                     None if level == "address" else f"{level}-level fix only"))
     if write:
         save(slug, data)
     return done
@@ -639,15 +689,23 @@ def pot_size(item):
 
 
 def item_class(item, unit):
-    """The set of things whose prices are evidence about this one.
+    """The set of things whose prices are real evidence about this one, or None.
 
-    Pot size for plants, because a 1-gallon perennial is a real price class in
-    any given town. Otherwise the unit, which is weaker — a paver and a trellis
-    are both sold `each` — and the width of the resulting range says so."""
+    Pot size for plants, because a 1-gallon perennial is a genuine price class in
+    any given town. Bulk media by the cubic foot and seed by the packet likewise:
+    within each, one is much like another.
+
+    Deliberately nothing else. Sharing a unit is not sharing a price — a dripper
+    and a trellis are both sold `each`, and taking their median priced eighteen
+    cubic feet of mulch off a $459 fountain on the first real yard this ran
+    against. An item outside these classes goes to the national ballpark, which
+    is at least a curated list rather than an accident of what got quoted."""
     size = pot_size(item)
     if str(item or "").startswith("plant: ") or size in POT_SIZES:
         return f"plant {size or 'unsized'}"
-    return f"per {unit}"
+    if unit in COMMENSURABLE_UNITS:
+        return f"per {unit}"
+    return None
 
 
 def quotes_index(data, reaches=("local", "regional", "mail")):
@@ -703,6 +761,8 @@ def _from_class(item, unit, index):
     that it is what this class costs *here*. A basket of mail-order prices is a
     different claim and is only used when there is nothing nearby to average."""
     want = item_class(item, unit)
+    if want is None:
+        return None
     near, anywhere = [], []
     for hits in index.values():
         for _sup, q, reach in hits:
@@ -749,19 +809,22 @@ def _from_national(item, unit, defaults, plant_defaults):
         each = plant_defaults.get(size)
         if each is not None:
             basis = f"national ballpark for a {size} plant, not a local quote"
-        elif plant_defaults.get(COMMONEST_POT) is not None:
-            # Not the median across sizes: those run from a seed packet to a
-            # balled tree, so their middle is not an estimate of anything. The
-            # commonest retail size is at least a shelf somebody has seen.
-            each = plant_defaults[COMMONEST_POT]
-            basis = (f"pot size {size!r} is not one this priced; treated as a "
-                     f"{COMMONEST_POT}, which is a guess about the size as well "
-                     f"as the price")
-        else:
+            return _national(each, basis)
+        if plant_defaults.get(COMMONEST_POT) is None:
             return None
-        if each is None:
-            return None
-        return _national(each, basis)
+        # Not the median across sizes: those run from a seed packet to a balled
+        # tree, so their middle is not an estimate of anything. The commonest
+        # retail size is at least a shelf somebody has seen — and because this
+        # is now a guess about the size as well as the price, the range covers
+        # the neighbouring sizes rather than the figure.
+        vals = sorted(float(v) for v in plant_defaults.values() if v)
+        i = vals.index(float(plant_defaults[COMMONEST_POT]))
+        return _national(
+            plant_defaults[COMMONEST_POT],
+            f"pot size {size!r} is not one this prices; treated as a "
+            f"{COMMONEST_POT}, which is a guess about the size as well as the "
+            f"price",
+            low=vals[max(i - 1, 0)], high=vals[min(i + 1, len(vals) - 1)])
 
     each = _entry(defaults, item).get("unit_usd")
     if each is not None:
@@ -772,16 +835,26 @@ def _from_national(item, unit, defaults, plant_defaults):
                   if v.get("unit") == unit and v.get("unit_usd"))
     if not vals:
         return None
+    # The range spans the whole basket rather than sitting ±40% around its
+    # middle. Things sold by the same unit are not the same kind of thing, and a
+    # narrow range around a figure with no basis is the more misleading of the
+    # two errors available here: it reads as knowledge.
     return _national(statistics.median(vals),
-                     f"nothing local and no ballpark for {item}; median of "
-                     f"{len(vals)} national prices sold by the {unit}")
+                     f"nothing quoted and no ballpark for {item}; the middle of "
+                     f"{len(vals)} prices on file sold by the {unit}, which run "
+                     f"${vals[0]:,.2f} to ${vals[-1]:,.2f}. A figure of this "
+                     f"kind says the line exists, not what it costs",
+                     low=vals[0], high=vals[-1], n=len(vals))
 
 
-def _national(each, basis):
-    return {"usd": round(float(each), 2),
-            "low": round(float(each) * (1 - NATIONAL_SPREAD), 2),
-            "high": round(float(each) * (1 + NATIONAL_SPREAD), 2),
-            "rung": "national", "firm": False, "n": 0,
+def _national(each, basis, low=None, high=None, n=0):
+    each = float(each)
+    low = each if low is None else float(low)
+    high = each if high is None else float(high)
+    return {"usd": round(each, 2),
+            "low": round(low * (1 - NATIONAL_SPREAD), 2),
+            "high": round(high * (1 + NATIONAL_SPREAD), 2),
+            "rung": "national", "firm": False, "n": n,
             "supplier": None, "supplier_name": None, "as_of": None, "url": None,
             "basis": basis}
 
@@ -864,9 +937,15 @@ def check(slug, today=None):
         else:
             seen[sid] = name
 
-        if sup.get("lat") is None or sup.get("lon") is None:
+        placed = sup.get("lat") is not None and sup.get("lon") is not None
+        if not placed and not (sup.get("mail_only") or sup.get("reach") == "mail"):
             out.append(f"{name}: no coordinate, so its distance is unknown and "
                        f"it cannot be placed. Run --geocode")
+        elif (sup.get("geocoded") or {}).get("precision") == "locality":
+            out.append(f"{name}: the street would not resolve, so its "
+                       f"{sup.get('distance_mi')} mi is measured to the town "
+                       f"rather than the door. Fine for ranking, wrong for a "
+                       f"route")
 
         rated = False
         for r in sup.get("reviews") or []:
