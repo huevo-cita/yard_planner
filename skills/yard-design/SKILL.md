@@ -22,8 +22,9 @@ file.
 
 ```bash
 cd ~/personal/garden
-python3 -m lib.yards <slug>     # what exists
-python3 -m lib.gaps <slug>      # what is missing, and what it costs
+python3 -m lib.yards <slug>          # what exists
+python3 -m lib.gaps <slug>           # what is missing, and what it costs
+python3 -m lib.doubts <slug> --open  # what is claimed and not believed
 ```
 
 `sun-hours.json` is not optional. Designing without it is guessing, and the guess
@@ -33,6 +34,34 @@ they remember standing in it in July at two o'clock.
 If a top-ranked gap would change the design, close it first. When crown spread is
 worth two and a half hours a day, the difference is a vegetable bed or a shade
 garden, and no amount of careful plant selection survives getting that backwards.
+
+**The linter refuses to run while a doubt that blocks the design is open.** An
+objection list computed on doubtful geometry is the most misleading thing this
+skill can produce, because it reads as a verdict — and a `blocking` objection
+that evaporates once the fence turns out to be open rail has cost someone a
+replanning session for nothing.
+
+Two moves before designing:
+
+- **Check `sun-hours.json` is not provisional.** If it carries a `provenance`
+  field, the geometry behind it was never settled and every light figure below is
+  an order of magnitude rather than a measurement. Say so, and re-run the model
+  properly before placing anything.
+- **Turn a design fork into a card rather than a paragraph.** A choice you are
+  about to resolve on the person's behalf — bed here or there, one large tree or
+  three small, gravel or flagstone — goes on the board with its options priced,
+  and comes back to them as a decision:
+
+```bash
+python3 -m lib.doubts <slug> --add "Bed against the house, or out in the open?" \
+    --kind choice --blocks design,bom --decisions 3 \
+    --option "against the house|shelter, reads as intentional|rain shadow, needs irrigation|about \$120 of drip" \
+    --option "out in the open|gets real rain|exposed to wind|no extra cost"
+```
+
+Design objections and doubt cards do different jobs and both are needed. An
+objection says the yard will not support what was asked for. A doubt says nobody
+is sure what the yard even is yet.
 
 ## Step 1 — Research the region, every time
 
@@ -163,6 +192,11 @@ Every design gets three sentences that nobody asks for and everybody needs:
 - Never quote a sun figure without saying whether the geometry behind it was
   measured or assumed. When the geometry is assumed, design to the pessimistic
   end of the range
+- A fork in the design is theirs to settle. File it as a `choice` card with the
+  options priced and put it in front of them, rather than picking quietly and
+  mentioning the alternative in passing
+- Never design against a provisional `sun-hours.json` without saying that is what
+  is happening
 - Where the site cannot support what they asked for, say so and offer the version
   that works. "You can't have a cottage garden" is unhelpful and usually wrong;
   "a loose planting inside a steel edge gives you that look and stays legible"

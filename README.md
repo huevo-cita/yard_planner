@@ -15,7 +15,10 @@ address ──> site.json ──> sun-hours.json ──┐
 current state ──> conditions.json ──────────┤
 taste ──────────> vision.json ──────────────┘
                      │
-                     └──> coverage.json: what is still unknown, ranked by what it costs
+                     ├──> coverage.json: what is still unknown, ranked by what it costs
+                     │
+                     └──> doubts.json: what is in question — and a gate that stops
+                          the expensive stages until it is settled
 ```
 
 ## What it actually does
@@ -48,6 +51,16 @@ to the bottom on its own.
 **Objects.** The design stage checks every plant against the measured light,
 water and soil and against what was actually asked for, and raises blocking
 objections rather than quietly substituting something easier.
+
+**Refuses to run on a doubt.** The expensive stages — the shade model, the
+design, the bed maps, the bill of materials, the schedule — stop while there is
+an open doubt on the yard's board that would change what they produce. This
+exists because of one specific waste: a doubt gets voiced in prose just before an
+expensive run, the run goes ahead anyway, the doubt is then settled, and the run
+is thrown away. A doubt gets written to `doubts.json` instead, where something
+reads it. Most are settled automatically by re-running the model across the
+plausible range and discovering the answer barely moves; the rest come back as a
+decision with its options priced. See [AGENTS.md](AGENTS.md).
 
 **Costs and schedules it.** The bill of materials is netted against what the
 inventory says is already in the garage. The schedule back-plans in weekends
@@ -84,6 +97,8 @@ yard                              # what yards exist and what each one has
 yard lidar    <slug> --write      # tree and roof heights from USGS 3DEP
 yard sunmodel <slug>              # sun hours per zone per month, and the maps
 yard gaps     <slug>              # what is missing, worst first, with the cost
+yard doubts   <slug>              # what is in question, and what it blocks
+yard doubts   <slug> --price      # probe them, and settle the ones that do not matter
 yard design   <slug>              # check a design against the measured site
 yard bom      <slug>              # bill of materials, netted against what is here
 yard schedule <slug>              # the weekend plan, back-planned from the date
@@ -181,13 +196,17 @@ agents/       the subagents, symlinked into ~/.cursor/agents
 bin/yard      one entry point, runnable from any directory
 tools/        install, doctor, and the PII scrubber
 vault/        encrypted yard bundles, committed
+.cursor/      the doubt gate: a hook that denies the expensive jobs while a
+              doubt is open. See .cursor/hooks/VALIDATOR.md
+AGENTS.md     how to work in here, and the doubt rule in full
 <slug>/       one directory per yard. Never committed.
 ```
 
 Each yard holds `site.json` (geometry and the 3D obstruction model),
 `conditions.json` (soil, inventory, the person), `vision.json` (taste, with a
-strength on each want), `design.json`, `sun-hours.json`, `coverage.json`, a
-prose `profile.md`, and `maps/`, `photos/` and `design/`.
+strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
+`doubts.json` (what is in question, and what it blocks), a prose `profile.md`,
+and `maps/`, `photos/` and `design/`.
 
 `site.json`, `conditions.json` and `vision.json` are the sources of truth.
 Correct one and re-run, and every drawing, figure and cost regenerates.
@@ -200,6 +219,13 @@ assumption stays labelled as one. No invented precision. Where a data source has
 a known bias, the code says so out loud: ERA5 minimum temperatures run warm, so
 the frost dates report the ten-percent-risk date rather than the median, and a
 locally published figure overrides the model.
+
+A doubt goes in a file, not into a sentence on the way past. Provenance records
+where a number came from; the doubt board records whether anyone believes it, and
+those are different questions. Nothing gets settled silently: a waived doubt
+carries its reason, an automatically settled one carries the measured spread that
+justified it, and anything produced by forcing past an open doubt is stamped
+provisional and says why.
 
 Python 3.9 with numpy and matplotlib, `urllib` over `requests`, and no
 dependency added without a reason that survives being written down.

@@ -254,6 +254,8 @@ def main():
                                  'design.json carries a "layout" block')
     ap.add_argument('--outdir', default=None,
                     help='default: maps/ beside the spec, or the yard\'s design/')
+    ap.add_argument('--force', action='store_true',
+                    help='draw a yard whose board still has open doubts')
     args = ap.parse_args()
 
     # A slug is also a directory name here, so `os.path.exists` alone sends
@@ -263,7 +265,10 @@ def main():
             layout = json.load(fh)
         outdir = args.outdir or 'maps'
     else:
-        from . import yards                      # a slug, not a file
+        from . import doubts, yards              # a slug, not a file
+        # Only the yard branch is gated. A standalone spec file belongs to
+        # nothing and has no board to check.
+        doubts.gate(args.spec, 'drawbeds', force=args.force)
         design = yards.load(args.spec, 'design.json')
         if not design or 'layout' not in design:
             raise SystemExit('%r is neither a spec file nor a yard with a '

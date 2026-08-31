@@ -66,7 +66,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Polygon as MplPolygon, Circle
 
-from . import siteschema, solar, yards
+from . import doubts, siteschema, solar, yards
 
 AZ_BINS = 360
 EYE = 2.0                       # inches above grade: a seedling's point of view
@@ -1201,7 +1201,16 @@ def check_walked(slug, site, force=False):
 
 def run(slug, cell=6.0, outdir=None, quick=False, force=False):
     site = yards.load_site(slug)
-    provisional = check_walked(slug, site, force=force)
+    # Two gates, in cost order. An unwalked record is a whole missing stage; an
+    # open doubt is one assumption in question. Either makes the output
+    # provisional, and the stamp names which, because "provisional" without a
+    # reason is not something anyone can act on. `--quick` is exempt from the
+    # doubt gate: probing across a range is how a geometry doubt gets settled.
+    provisional = []
+    if check_walked(slug, site, force=force):
+        provisional.append(PROVISIONAL)
+    if not quick and doubts.gate(slug, "sunmodel", force=force):
+        provisional.append(doubts.PROVISIONAL)
     errs, warns = siteschema.validate(site)
     for w in warns:
         print("warning:", w)
@@ -1248,7 +1257,7 @@ def run(slug, cell=6.0, outdir=None, quick=False, force=False):
                                      for mon in months), 2),
     }
     if provisional:
-        result["provenance"] = PROVISIONAL
+        result["provenance"] = "; ".join(provisional)
     yards.save(slug, "sun-hours.json", result)
     print("wrote", yards.path(slug, "sun-hours.json"))
     print_markdown(m, table, clocks)
@@ -1264,8 +1273,9 @@ def main():
     ap.add_argument("--quick", action="store_true",
                     help="tables and shade clocks only, skip the slow figures")
     ap.add_argument("--force", action="store_true",
-                    help="model a yard whose site walk has not come back; the "
-                         "result is stamped provisional")
+                    help="model a yard whose site walk has not come back, or "
+                         "whose board still has open doubts; the result is "
+                         "stamped provisional and says which")
     args = ap.parse_args()
     run(args.slug, cell=args.cell, outdir=args.outdir, quick=args.quick,
         force=args.force)

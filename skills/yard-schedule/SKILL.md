@@ -17,8 +17,20 @@ to prevent.
 
 ```bash
 cd ~/personal/garden
+python3 -m lib.doubts <slug> --open       # both jobs below refuse while this is open
 python3 -m lib.bom <slug>
 ```
+
+Both `bom` and `schedule` refuse to run while a doubt that blocks them is open,
+and this is the stage where that matters most in cash terms. A bed whose size is
+in question prices the soil, the compost, the mulch and the plant count wrong all
+at once and in the same direction. A bed reported as already amended, wrongly,
+deletes two weekends from the front of the plan.
+
+If a run is forced through anyway, the output carries a `provenance` stamp saying
+it is provisional. **Never hand someone a provisional total without the word.** A
+number in a document gets acted on long after the caveat that came with it has
+been forgotten.
 
 Derives quantities from the design and the zone areas, subtracts what
 `conditions.json` says is on hand, and prices the remainder. Two things it does
@@ -176,6 +188,9 @@ is not, and next season's plan is only as good as what this one wrote down.
 
 - Never price from the defaults and call it a cost. Run sourcing-scout first, or
   label the number as a ballpark every time it appears
+- Never present a provisional total or a provisional calendar without saying so.
+  A quantity in doubt is a quantity bought twice, and the doubt is cheaper to
+  settle than the second delivery
 - Never schedule work into a stated travel gap, and never quietly drop the tasks
   that no longer fit
 - A task the person has not done before gets the how-to, in the schedule, at the

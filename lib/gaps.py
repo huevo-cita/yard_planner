@@ -36,7 +36,7 @@ import sys
 
 import numpy as np
 
-from . import conditions, siteschema, solar, sunmodel, yards
+from . import conditions, doubts, siteschema, solar, sunmodel, yards
 
 # the stated exchange rate: how much one unit of each is worth, on one scale
 WEIGHTS = {"hours_per_day": 10.0, "usd": 0.04, "decisions": 2.5}
@@ -466,6 +466,48 @@ VISION_GAPS = [
 ]
 
 
+def doubt_gaps(slug):
+    """Open doubts, as gaps, so there is one ranked list rather than two.
+
+    A doubt and a gap are the same kind of object seen from different sides: a
+    gap is something the record never knew, a doubt is something the record
+    claims and nobody believes. Both are priced in the same units and both change
+    what happens next, so a board kept separate from the gap report just means
+    two lists to read and one of them getting skipped.
+    """
+    out = []
+    for c in doubts.open_cards(slug):
+        priced = c.get("priced") or {}
+        # A card may be priced in more than one unit. The ordering is driven by
+        # whichever dominates, and the rest is said in the detail rather than
+        # summed into a single fake number.
+        if priced:
+            unit = max(priced, key=lambda u: float(priced[u]) *
+                       WEIGHTS.get(u, 1.0))
+            amount = float(priced[unit])
+        else:
+            unit, amount = "decisions", None
+
+        detail = c.get("detail") or "raised while working, and not yet settled"
+        if c.get("kind") == "choice" and c.get("options"):
+            detail += ". Options: " + "; ".join(
+                o["name"] + (f" ({o['cost']})" if o.get("cost") else "")
+                for o in c["options"])
+        blocks = ", ".join(c.get("blocks") or []) or "nothing"
+
+        out.append(_gap(
+            key=f"doubt.{c['id']}", section="doubt",
+            label=c["question"],
+            state="in question", unit=unit, amount=amount,
+            detail=f"{detail}. Blocks {blocks}",
+            how=(c.get("how_to_settle")
+                 or f"python3 -m lib.doubts {slug} --settle {c['id']} "
+                    f"--answer \"...\""),
+            effort=c.get("effort") or "unknown",
+            probe=(c.get("probe") or {}).get("measured")))
+    return out
+
+
 def vision_gaps(vision):
     if not vision:
         return [_gap(key="vision.missing", section="vision",
@@ -528,6 +570,7 @@ def audit(slug, quick=False):
         gaps.extend(site_gaps(site, quick=quick))
     gaps.extend(condition_gaps(cond))
     gaps.extend(vision_gaps(vision))
+    gaps.extend(doubt_gaps(slug))
     gaps.sort(key=score, reverse=True)
 
     known = {}
@@ -540,13 +583,21 @@ def audit(slug, quick=False):
         }
     if cond:
         known["conditions"] = conditions.soil_summary(cond)
+    board = doubts.open_cards(slug)
+    if board:
+        known["doubts"] = {
+            "open": len(board),
+            "blocking": sorted({b for c in board for b in (c.get("blocks") or [])}),
+            "unpriced": sum(1 for c in board if not c.get("priced")),
+        }
     coverage = {
         "yard": slug,
         "have": {"site.json": site is not None,
                  "conditions.json": cond is not None,
                  "vision.json": vision is not None,
                  "sun-hours.json": yards.load(slug, "sun-hours.json") is not None,
-                 "design.json": yards.load(slug, "design.json") is not None},
+                 "design.json": yards.load(slug, "design.json") is not None,
+                 "doubts.json": yards.load(slug, "doubts.json") is not None},
         "known": known,
         "exchange_rate": WEIGHTS,
         "gaps": gaps,
@@ -569,6 +620,14 @@ def report(coverage, limit=12):
     if soil:
         print(f"  soil confidence: {soil['confidence']}"
               + (f" ({', '.join(soil['basis'])})" if soil["basis"] else ""))
+    board = (coverage.get("known") or {}).get("doubts")
+    if board:
+        print(f"  {board['open']} open doubt"
+              f"{'s' if board['open'] > 1 else ''}, blocking "
+              f"{', '.join(board['blocking']) or 'nothing'}"
+              + (f" ({board['unpriced']} unpriced — "
+                 f"`python3 -m lib.doubts {slug} --price`)"
+                 if board["unpriced"] else ""))
 
     gaps = coverage["gaps"]
     if not gaps:

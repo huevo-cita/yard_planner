@@ -65,6 +65,7 @@ Each is its own skill. Load it and follow it; do not summarise it from here.
 
 | stage | skill | produces |
 | --- | --- | --- |
+| doubts raised along the way | any stage | `doubts.json` |
 | geometry, obstructions, climate | `yard-survey` | `site.json` |
 | ground truth for a thin record | `yard-site-walk` | `SITE-WALK.md`, then `measured` values |
 | light by zone and month | `yard-sun-model` | `sun-hours.json`, maps |
@@ -102,7 +103,45 @@ respects the fact that some people will go and measure and some will not, and
 both are legitimate. What is not legitimate is designing on an assumption without
 saying it was one.
 
-## Step 4 — Stop when it is good enough
+## Step 4 — Clear the board before each expensive stage
+
+A gap is something the record never knew. A doubt is something the record claims
+and nobody believes — usually because you formed it yourself while working. Both
+change what happens next, and only one of them used to have anywhere to live.
+
+```bash
+python3 -m lib.doubts <slug> --open     # what is in question, worst first
+python3 -m lib.doubts <slug> --price    # probe the ones a model can settle
+```
+
+The sun model, the design, the bed maps, the bill of materials and the schedule
+all refuse to run while a doubt that blocks them is open. That refusal is the
+whole point: settling a fence height takes two minutes, and re-running the model
+and reworking the design because the fence turned out to be open rail takes an
+afternoon.
+
+**File the doubt when you form it, not when you report.** If you are about to
+write "one caveat", "I've assumed", "not sure whether" or "we could either" about
+something the next stage depends on, that sentence is a card. `AGENTS.md` has the
+full trigger list and the commands.
+
+**Probe before you interrupt.** `--price` re-runs the shade model across the
+plausible range of any `fact` card carrying a probe, and settles the ones that do
+not move the answer as `probed-immaterial` with the measured spread as evidence.
+Most doubts die there, unread, which is what keeps the board worth reading.
+
+**Bring what is left as a batch, at the stage boundary.** Not one at a time
+mid-stage. Open doubts also appear in the `lib.gaps` output and in
+`coverage.json`, ranked against every other gap on the same exchange rate, so
+Step 3 and this step are one list rather than two.
+
+**A `choice` card is theirs to settle, not yours.** Put the options up with their
+pros, cons and costs and let them pick. Recording "bed against the house, or out
+in the open — shelter and a rain shadow against real rain and wind, and $120 of
+drip either way" is the difference between a decision and a guess that gets
+discovered in August.
+
+## Step 5 — Stop when it is good enough
 
 A complete record is not the goal. A good decision is.
 
@@ -154,6 +193,11 @@ Worth saying plainly at the start rather than at the end:
   at once gets four answered
 - Every value carries where it came from, and an assumption stays labelled an
   assumption until something measures it
+- A doubt goes in `doubts.json` before the stage it affects runs, never into
+  prose on the way past. Filing a card and running the job it blocks in the same
+  breath is the same mistake with an extra step
+- `--force` is not how you get unblocked. Settle the doubt, or waive it with a
+  reason on the record
 - After every stage, say what is now known and what it changed. A person who has
   answered twenty questions deserves to see them add up to something
 - Where two sources disagree, report both and say which is better. Never average

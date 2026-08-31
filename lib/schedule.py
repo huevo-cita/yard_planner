@@ -39,7 +39,7 @@ import datetime
 import json
 import re
 
-from . import conditions as cond_mod, yards
+from . import conditions as cond_mod, doubts, yards
 
 # Weeks indoors before the last frost. Ranges because varieties differ and
 # because a warm windowsill is not a greenhouse.
@@ -413,7 +413,12 @@ def _label_parts(plan):
                               f"{t['hours']} h of {totals[t['task']]}")
 
 
-def build(slug, target=None, hours_per_weekend=None, start_from=None):
+def build(slug, target=None, hours_per_weekend=None, start_from=None,
+          force=False):
+    # A schedule is a set of instructions with dates on it, and someone will act
+    # on the first weekend of it before anyone re-reads the caveats. An open doubt
+    # about what a bed is or where it goes reorders the whole calendar.
+    provisional = doubts.gate(slug, "schedule", force=force)
     site = yards.load(slug, "site.json") or {}
     cond = yards.load_conditions(slug)
     vis = yards.load_vision(slug)
@@ -516,6 +521,8 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None):
                {"through_day": d, "frequency": how} for d, how in WATERING_DECAY],
            "cautions": _cautions(plan, cond),
            }
+    if provisional:
+        out["provenance"] = doubts.PROVISIONAL
     restriction = ((cond.get("water") or {}).get("irrigation") or {}) \
         .get("restriction")
     if restriction:
@@ -539,13 +546,16 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None):
     return out
 
 
-def report(slug, target=None, hours=None):
-    p = build(slug, target, hours)
+def report(slug, target=None, hours=None, force=False):
+    p = build(slug, target, hours, force=force)
     if "error" in p:
         print(f"  {p['error']}")
         return
     print(f"{slug} — {p['total_hours']} hours of work, back-planned from "
           f"{p['target_date']}\n")
+    if p.get("provenance"):
+        print(f"  {p['provenance']}: the dates below rest on assumptions still "
+              f"in question\n")
     if p.get("warning"):
         print(f"  {p['warning']}\n")
     if p["last_frost"]:
@@ -593,6 +603,9 @@ def main():
     ap.add_argument("--harvest-by")
     ap.add_argument("--crop")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="plan a yard whose board still has open doubts; the "
+                         "result is stamped provisional")
     args = ap.parse_args()
 
     if args.seed_start:
@@ -616,9 +629,10 @@ def main():
         print(__doc__)
         return
     if args.json:
-        print(json.dumps(build(args.slug, args.target, args.hours), indent=2))
+        print(json.dumps(build(args.slug, args.target, args.hours,
+                               force=args.force), indent=2))
         return
-    report(args.slug, args.target, args.hours)
+    report(args.slug, args.target, args.hours, force=args.force)
 
 
 def _parse_frost(v):
