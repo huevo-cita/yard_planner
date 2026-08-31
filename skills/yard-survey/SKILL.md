@@ -231,6 +231,20 @@ Where the unknown is a number in `site.json`, give the card a `probe` so it can 
 priced without anyone going outside. `python3 -m lib.doubts <slug> --price` then
 settles the ones that turn out not to matter and leaves the rest for the walk.
 
+### Provenance is now load-bearing, so do not shade it
+
+Anything recorded as `assumed` or `reported` has to be answered for in an
+all-clear before the sun model will run on it — see `AGENTS.md`. That puts a
+small, real pressure on this step in the wrong direction: labelling a guess
+`derived`, or a remembered fence height `measured`, makes the gate go quiet.
+
+Do not. It buys one afternoon and costs the only thing in this repo that makes
+its numbers checkable, and it fails silently — nothing downstream can tell a
+mislabelled value from a measured one, which is the entire reason the label
+exists. Write the honest source and answer for it. Answering for a guess is one
+sentence, and if the sentence will not come, that is the survey telling you the
+guess matters.
+
 ## Rules
 
 - No invented precision. A tape gives inches, lidar gives a foot, OSM gives what

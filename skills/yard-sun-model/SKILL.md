@@ -21,9 +21,11 @@ geometry, so read the gap report before believing a number to a tenth of an hour
 
 ```bash
 cd ~/personal/garden
-python3 -m lib.doubts <slug> --open        # what is still in question
-python3 -m lib.sunmodel <slug> --quick     # coarse, a few seconds, for iterating
-python3 -m lib.sunmodel <slug>             # the real run and every drawing
+python3 -m lib.doubts <slug> --open           # what is still in question
+python3 -m lib.doubts <slug> --inputs sunmodel  # what is still a guess, and the
+                                              # command that clears it
+python3 -m lib.sunmodel <slug> --quick        # coarse, a few seconds, for iterating
+python3 -m lib.sunmodel <slug>                # the real run and every drawing
 ```
 
 **The full run refuses to start while a doubt that blocks it is open.** That is
@@ -32,8 +34,27 @@ prose, the model run anyway, the doubt then settled, and the whole run thrown
 away. `--quick` is deliberately exempt, because probing across a range is how a
 geometry doubt gets settled in the first place.
 
+**And it refuses while nothing has been said at all.** This is the job with the
+widest reach into `site.json` — the whole obstruction model, every crown, the
+lot lines and the frame — so it is usually the one with most to answer for. Run
+`--inputs sunmodel`, read the list of values that came from a guess or from
+somebody's memory, and file an all-clear that gives a reason for each, or cites
+the settled card that already answers it:
+
+```bash
+python3 -m lib.doubts <slug> --clear sunmodel \
+    --because 'features.trees.*.crown_base_height=lidar-derived, and --price put the whole range inside 0.1 h/day' \
+    --cite 'obstructions.fences.*.height=d4'
+```
+
+Writing those reasons is the point of the exercise, not the toll for it. A
+sentence you cannot finish is a doubt card you should be filing instead.
+
+If the geometry moves afterwards, the clearance goes stale and says which value
+moved. Re-file: most of the reasons will still be the right ones.
+
 So when the geometry is in question, the order is: file the doubt, price it,
-settle what matters, then run.
+settle what matters, clear the rest, then run.
 
 ```bash
 python3 -m lib.doubts <slug> --add "Is the west fence 6 ft board or 3 ft rail?" \

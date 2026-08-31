@@ -237,6 +237,10 @@ python3 -m lib.doubts <slug> --settle d3 \
 
 - Re-run `python3 -m lib.siteschema <slug>` and `python3 -m lib.drawsite <slug>`
   and look at the plan again
+- **Re-check `python3 -m lib.doubts <slug> --clearances`.** Folding readings in
+  moves the record, so any all-clear filed over the old numbers is now stale and
+  says so. That is the right answer and it is cheap to fix: most of the reasons
+  still hold, and the ones that no longer apply are the values you just measured
 - Re-run the sun model, because real tree species and real fence heights are
   usually the two largest corrections it will ever get. This is the run the gate
   was holding open for

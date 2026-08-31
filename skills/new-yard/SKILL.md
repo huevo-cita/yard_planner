@@ -110,8 +110,9 @@ and nobody believes — usually because you formed it yourself while working. Bo
 change what happens next, and only one of them used to have anywhere to live.
 
 ```bash
-python3 -m lib.doubts <slug> --open     # what is in question, worst first
-python3 -m lib.doubts <slug> --price    # probe the ones a model can settle
+python3 -m lib.doubts <slug> --open        # what is in question, worst first
+python3 -m lib.doubts <slug> --price       # probe the ones a model can settle
+python3 -m lib.doubts <slug> --clearances  # what has been attested, and for which job
 ```
 
 The sun model, the design, the bed maps, the bill of materials and the schedule
@@ -119,6 +120,24 @@ all refuse to run while a doubt that blocks them is open. That refusal is the
 whole point: settling a fence height takes two minutes, and re-running the model
 and reworking the design because the fence turned out to be open rail takes an
 afternoon.
+
+They also refuse until an **all-clear** has been filed for that job on that yard.
+An empty board is not permission — it is what a doubt that was thought and never
+written down looks like from outside. So before each expensive stage, ask what
+the job is leaning on and answer for it:
+
+```bash
+python3 -m lib.doubts <slug> --inputs sunmodel   # every assumed or reported value
+                                                 # it reads, and the filing command
+python3 -m lib.doubts <slug> --clear sunmodel --because 'path.glob.*=why this is fine'
+```
+
+Each job is asked only about the part of `site.json` it actually reads, so
+`sunmodel` carries most of it and `bom` usually carries a line. The clearance is
+bound to the values it covers: change one and it goes stale, and the refusal says
+which. Nothing stops a blanket reason covering everything at once — that hole is
+real and named in `AGENTS.md` — but a lazy sentence with a date on it is still
+something a person can read and disagree with, which silence is not.
 
 **File the doubt when you form it, not when you report.** If you are about to
 write "one caveat", "I've assumed", "not sure whether" or "we could either" about
@@ -197,7 +216,9 @@ Worth saying plainly at the start rather than at the end:
   prose on the way past. Filing a card and running the job it blocks in the same
   breath is the same mistake with an extra step
 - `--force` is not how you get unblocked. Settle the doubt, or waive it with a
-  reason on the record
+  reason on the record, and file the all-clear
+- Every assumed or reported value the next job reads gets a sentence before that
+  job runs. If you cannot finish the sentence, you have found a doubt card
 - After every stage, say what is now known and what it changed. A person who has
   answered twenty questions deserves to see them add up to something
 - Where two sources disagree, report both and say which is better. Never average

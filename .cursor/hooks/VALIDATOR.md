@@ -4,6 +4,11 @@ Two layers stop an expensive job from running on an assumption nobody believes.
 They are listed here worst-case-first, because each covers a case the one above it
 cannot see.
 
+Both now enforce two conditions rather than one. Nothing may be open on the
+board against the job, **and** there must be a current all-clear for it. The
+second is the newer half and the reason is in
+[Why silence had to stop counting](#why-silence-had-to-stop-counting).
+
 There was a third, and it was removed after being measured rather than reasoned
 about. [What cannot be enforced](#what-cannot-be-enforced) is the write-up, and it
 is the most useful section in this file: it marks the edge of what any guardrail
@@ -18,7 +23,9 @@ what to do instead.
 ## Layer 1 — `doubts.gate()`, in process
 
 In `lib/doubts.py`, called at the top of the expensive entrypoints. Raises
-`SystemExit` listing the open cards, their prices and how to settle them.
+`SystemExit` listing the open cards, their prices and how to settle them, and
+whatever is wrong with the all-clear — missing, gone stale, or not covering
+everything it claims to.
 
 Always holds, including for programmatic callers, and needs nothing installed.
 This is the layer that cannot be got around by editing a config file.
@@ -30,10 +37,16 @@ This is the layer that cannot be got around by editing a config file.
 
 | | |
 |---|---|
-| `deny` | open cards block this job. The message carries the cards, the options with their pros and cons, and the commands to settle them |
+| `deny` | open cards block this job, or there is no current all-clear for it |
 | `ask` | the same, with `--force`, so an override costs a human click instead of being the agent's to take |
-| `allow` + a note | nothing filed, but the record is mostly assumption and the board is empty. See below |
-| `allow` | everything else |
+| `allow` | everything else, including the cheap paths and any slug with no yard directory behind it |
+
+The denial text is no longer assembled here. `doubts.gate_json` returns a ready
+`agent_message` and the hook passes it through, because the version built in jq
+and the version raised by layer 1 were two wordings of the same refusal and only
+one of them was ever tested. The redirect is the only part of a block that does
+any good, so it has a test of its own now: it must name `--inputs` and `--clear`
+for the job in hand.
 
 It exists because layer 1 only fires once the command has been chosen, and the
 moment worth catching is earlier: an assistant that has just hedged in prose and
@@ -68,16 +81,89 @@ as the thing standing between a doubt and an expensive run — that is layer 1, 
 is in-process, has no registration to lose, and is why a miss here is survivable
 rather than serious.
 
-**The empty-board note.** No check here can read prose, but it can read the shape
-that an unfiled doubt leaves behind: a record built mostly on `assumed` and
-`reported` values, an expensive job about to run on it, and not one card ever
-raised. `doubts.unfiled_warning()` decides this, and it is deliberately a nudge
-rather than a refusal — plenty of legitimate early runs look exactly like that,
-and blocking them would make the whole thing something to disable.
+**Where else it fails open.** A slug with no directory behind it is allowed
+through, because the commonest cause is `GARDEN_ROOT` pointing at yards the
+editor never heard of rather than a typo, and denying every command on a yard
+this process cannot see is how the layer gets uninstalled. Layer 1 refuses
+anyway. (`jq`'s `//` is not usable for reading that flag: the alternative
+operator fires on `false` as well as on null, so `.yard_known // true` is `true`
+for every yard including the ones that do not exist. That cost an afternoon
+once.)
+
+**The empty-board note is gone**, and the all-clear is what replaced it. It used
+to read the shape an unfiled doubt leaves behind — a record built mostly on
+`assumed` and `reported` values, an expensive job about to run on it, and not one
+card ever raised — and say so without blocking. That was a guess at a threshold
+(`len(soft) >= 3 and measured <= 0.6`) attached to a nudge nothing had to answer.
+Requiring a written reason against each of those same values is the same
+observation with teeth, so keeping both would have meant saying it twice.
 
 The matcher and `JOBS` in `lib/doubts.py` have to agree. Drift is silent and
 total: a job added to `JOBS` but not to the matcher is simply never denied at this
-layer. `tools/doctor.py` checks the two against each other.
+layer. `tools/doctor.py` checks the two against each other, and checks the same
+thing for `JOB_INPUTS` in `lib/inputs.py`.
+
+## Why silence had to stop counting
+
+The original gate read an empty board as permission. That is backwards for the
+one failure it exists to prevent, because a doubt that was thought and never
+written down leaves an empty board — the state that looks most like confidence is
+produced by the state that is least like it.
+
+So the default is inverted. Each of the five jobs needs a positive all-clear in
+`all-clear.json` before it will run: for every value that job reads whose
+provenance is `assumed` or `reported`, either a settled doubt card id or a
+sentence saying why proceeding is all right. Missing, stale and full-of-holes all
+block identically.
+
+**Assumed-only, and per job.** A record is mostly derived and measured values,
+and asking about those would be noise. Only `assumed` and `reported` have to be
+answered for; `measured`, `lidar`, `photo`, `parcel`, `survey` and `derived` pass
+without comment. And the question is scoped to what the job actually reads —
+`lib/inputs.py` maps each job to its sections of `site.json` — because making
+`bom` account for a tree crown it never touches is how a gate ends up switched
+off. Measured across the three yards in the vault, `sunmodel` has to answer for
+between 3 and 62 values and `bom` for at most one, which is the difference
+between a mechanism and a tax.
+
+**Bound to a digest.** Each clearance stores a fingerprint of every value it
+covers, so editing `site.json` underneath it makes it stale and the refusal names
+which value moved. Without that it is a stamp collected once. Measuring a covered
+value is deliberately *not* invalidating: that path leaves the assumed set
+entirely, and blocking the run someone just made more trustworthy would train
+people out of measuring things.
+
+**How the input map is kept honest.** `lib/inputs.py` declares the map and
+`derive()` recovers the same thing by walking each job's module and its
+first-party imports with `ast`, collecting the top-level key of every read
+against the site record. The declared map is what runs; the derived one is what
+`drift()` compares it against, in `tools/doctor.py` and `tools/test_gate.py`. The
+derivation is coarse in three named ways — module granularity rather than call
+graph, top-level sections rather than paths, and `lib.doubts`/`lib.gaps` excluded
+because every gated job imports them and following them would make every map the
+union of all the others. All three over-approximate, which errs toward asking for
+more rather than less.
+
+### Two holes, stated rather than papered over
+
+**A lazy all-clear clears everything.** `--because '*=looks fine'` is accepted.
+There is no way to tell a considered blanket clearance from a careless one, and
+pretending otherwise would be the second guardrail-by-agent-judgement this file
+warns about. What the mechanism actually buys is narrower and still worth having:
+the omission stops being invisible. There is a file with a date on it saying
+which values were waved through and on what grounds, and a reviewer can disagree
+with a sentence in a way they cannot disagree with something nobody said.
+
+**Artifact dependencies are not transitive.** `bom` costs a `design.json` written
+against a `sun-hours.json` modelled on an assumed fence height. The fence is
+genuinely upstream of the total, and it is not in `bom`'s input set, because
+`bom` reads a file that already exists rather than the fence. The argument for
+stopping there is that the fence was attested when `sunmodel` ran and the
+clearance goes stale if it moves. The argument against is that nothing checks the
+two runs saw the same fence — a `sun-hours.json` produced under an all-clear that
+has since gone stale is indistinguishable from a fresh one. Closing that means
+stamping artifacts with the digest they were produced under and checking it
+downstream, which is a real design and was not attempted here.
 
 ## What cannot be enforced
 
@@ -125,13 +211,20 @@ collapse as a pattern to match. That is a real result and it is the reason
 regex: **the within-turn case is not externally enforceable, and the honest
 mechanism for it is discipline, not a gate.**
 
-What remains is layer 1, which is deterministic and in-process and always holds;
-layer 2, which is deterministic but not provably continuous, as above; and the
-empty-board note as the one trace an unfiled doubt reliably leaves.
+What remains is layer 1, which is deterministic and in-process and always holds,
+and layer 2, which is deterministic but not provably continuous, as above.
 
 If you are considering rebuilding this: re-run the sentinel experiment first. If a
 nonce written in the same turn still cannot be seen, nothing built on this event
 will work.
+
+**The all-clear is the answer to this section, not another attempt at it.** It
+does not try to detect an unwritten doubt, because that is settled as impossible
+above. It changes what the absence of one means: an assistant that hedges in
+prose and then reaches for the model still cannot be caught in the act, but it
+can be made to write a sentence about the fence height before the model runs at
+all. That is a different mechanism aimed at the same waste, and it works on the
+part of the event that *is* observable — the record on disk.
 
 ## Turning it off
 
@@ -141,8 +234,13 @@ Each layer detaches on its own:
   Keep the two in step — a config pointing at a missing script, with
   `failClosed` set, blocks every gated job.
 - **Layer 1**: this one is meant to be hard to remove. It is the backstop.
+- **The all-clear specifically**, leaving the doubt board in place: it is the
+  second condition in `doubts.gate()`, and dropping it is deleting the
+  `clearance` half of that function. Worth being honest about the trade if you
+  do — it is the half that covers the doubt nobody wrote down, which is the one
+  the whole mechanism was built for.
 
 Disabling a layer is a real decision and belongs in a commit message. Reaching
 for `--force` is not the same thing: it leaves the gate standing, costs a human
-approval, and stamps the output provisional so nobody quotes it later as a
-measurement.
+approval, and stamps the output provisional naming what it came past, so nobody
+quotes it later as a measurement.

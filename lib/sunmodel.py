@@ -1209,8 +1209,10 @@ def run(slug, cell=6.0, outdir=None, quick=False, force=False):
     provisional = []
     if check_walked(slug, site, force=force):
         provisional.append(PROVISIONAL)
-    if not quick and doubts.gate(slug, "sunmodel", force=force):
-        provisional.append(doubts.PROVISIONAL)
+    if not quick:
+        stamp = doubts.gate(slug, "sunmodel", force=force)
+        if stamp:
+            provisional.append(stamp)
     errs, warns = siteschema.validate(site)
     for w in warns:
         print("warning:", w)

@@ -522,7 +522,7 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
            "cautions": _cautions(plan, cond),
            }
     if provisional:
-        out["provenance"] = doubts.PROVISIONAL
+        out["provenance"] = provisional
     restriction = ((cond.get("water") or {}).get("irrigation") or {}) \
         .get("restriction")
     if restriction:

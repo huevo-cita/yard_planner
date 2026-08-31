@@ -110,6 +110,7 @@ the ranked gap report:
 
 ```bash
 python3 -m lib.doubts <slug> --open
+python3 -m lib.doubts <slug> --clearances
 python3 -m lib.gaps <slug>
 ```
 
@@ -117,27 +118,78 @@ Open doubts also appear in `coverage.json` and in the `lib.gaps` output, ranked
 against every other gap on the same exchange rate, so there is one list to read
 rather than two.
 
+## An empty board is not permission
+
+Everything above catches a doubt that got written down. The failure this file is
+about is the one that did not, and against that failure an empty board is not
+evidence of confidence — it is the signature of the problem.
+
+So the five expensive jobs also want a positive **all-clear**. For each value a
+job reads that came from a guess or from somebody's memory — provenance `assumed`
+or `reported` — the all-clear carries either a doubt card id or a written reason
+for running on it anyway. Nothing filed is a refusal, exactly like an open card.
+
+Start by asking what the job actually leans on. This is cheap, never gated, and
+prints the filing command with the paths already in it:
+
+```bash
+python3 -m lib.doubts <slug> --inputs sunmodel
+```
+
+Then file it, replacing each `TODO` with the real reason:
+
+```bash
+python3 -m lib.doubts <slug> --clear sunmodel \
+    --because 'obstructions.fences.*.height=stock 6 ft panels, and d4 measured the one that shades the bed' \
+    --cite 'features.trees.*.crown_base_height=d7'
+```
+
+`--because` takes a glob against the provenance path, so fourteen trees are one
+line. `--cite` points at a card that is already **settled or waived** — citing one
+that is still open is the original failure with a reference number on it, and it
+is refused. One filing can cover several jobs: `--clear sunmodel,design`, or
+`--clear all`.
+
+Each clearance is bound to a digest of the values it covers. Edit `site.json` and
+it goes stale, and stale blocks exactly like missing, naming which value moved.
+Measuring something it covered does not invalidate it: that is an improvement,
+not a change of subject.
+
+What this honestly does *not* solve: nothing stops `--because '*=looks fine'`.
+The gain is that the omission becomes a dated artifact making specific claims,
+which a person can disagree with, rather than a silence nobody can point at.
+
 ## The gate, and what it will not let you do
 
-Five jobs refuse to run while a doubt that blocks them is open: `sunmodel`,
-`design`, `drawbeds`, `bom`, `schedule`. Two layers enforce it.
+Five jobs refuse to run unless the yard is clear for them: `sunmodel`, `design`,
+`drawbeds`, `bom`, `schedule`. Clear means both — nothing open on the board
+against that job, and a current all-clear for it. Two layers enforce it.
 
-1. `doubts.gate()` inside each module, which raises `SystemExit` with the open
-   cards printed. This always holds, including for programmatic callers.
+1. `doubts.gate()` inside each module, which raises `SystemExit` listing the open
+   cards and whatever is wrong with the clearance. This always holds, including
+   for programmatic callers.
 2. `.cursor/hooks/doubt-gate.sh`, a `beforeShellExecution` hook that denies the
    shell command outright and tells you what to do instead. This exists because
    the in-process gate only fires after the command has been chosen, and the
    moment worth catching is earlier than that.
 
+Which values each job is answerable for is declared in `lib/inputs.py`, and
+recovered independently from the source by static analysis so the two can be
+compared; `tools/doctor.py` and `tools/test_gate.py` both check they still agree.
+`python3 -m lib.inputs` prints the map with the argument for each entry.
+
 The cheap paths are deliberately never gated, because they are how a doubt gets
-settled: `--quick` on the sun model, `lib.gaps`, `lib.doubts` itself,
-`lib.design --init`, `lib.bom --crossover`, the seed-date lookups.
+settled: `--quick` on the sun model, `lib.gaps`, `lib.inputs`, `lib.doubts`
+itself including `--inputs` and `--clear`, `lib.design --init`,
+`lib.bom --crossover`, the seed-date lookups.
 
 **`--force` is not the way past this.** It exists for the case where someone has
 looked at the board and decided to proceed anyway, and it costs a human approval
 through the hook. Output produced that way is stamped provisional, and the stamp
-says why. Do not reach for it to get unblocked; settle the doubt or waive it on
-the record:
+names what it came past — `PROVISIONAL - forced past 2 open doubts and a stale
+all-clear` — because "provisional" on its own is not something anyone can act on.
+Do not reach for it to get unblocked; settle the doubt or waive it on the record,
+and write the all-clear:
 
 ```bash
 python3 -m lib.doubts <slug> --waive <id> --reason "..."
@@ -154,5 +206,5 @@ ballpark rather than quotes — belong in the reporting, where the skills alread
 say them. Putting them on the board buries the doubts that are actually live.
 
 Run `python3 -m lib.doubts <slug> --check` if the board starts looking noisy; it
-flags cards that block nothing, choices with no alternatives, and anything settled
-without a reason.
+flags cards that block nothing, choices with no alternatives, anything settled
+without a reason, and an all-clear that has stopped covering what it claims to.

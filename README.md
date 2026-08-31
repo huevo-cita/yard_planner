@@ -17,8 +17,11 @@ taste ──────────> vision.json ──────────
                      │
                      ├──> coverage.json: what is still unknown, ranked by what it costs
                      │
-                     └──> doubts.json: what is in question — and a gate that stops
-                          the expensive stages until it is settled
+                     ├──> doubts.json: what is in question — and a gate that stops
+                     │    the expensive stages until it is settled
+                     │
+                     └──> all-clear.json: what was assumed and run on anyway, per
+                          job, with the reason, bound to the values it covers
 ```
 
 ## What it actually does
@@ -62,6 +65,17 @@ reads it. Most are settled automatically by re-running the model across the
 plausible range and discovering the answer barely moves; the rest come back as a
 decision with its options priced. See [AGENTS.md](AGENTS.md).
 
+**And refuses to run on silence.** An empty doubt board used to be permission,
+which reads the absence of a written doubt as confidence — when absence is
+exactly what the failure above produces. So the same five stages want a positive
+**all-clear** first: for every value the job reads whose provenance is `assumed`
+or `reported` rather than measured, either a doubt card id or a written reason
+for proceeding. `yard doubts <slug> --inputs sunmodel` prints that list, per job,
+with the command that files it. Each clearance is bound to a digest of the values
+it covers, so editing `site.json` under it makes it stale, and stale blocks like
+missing. Nothing prevents a lazy blanket clearance; what it buys is that the
+omission becomes a dated artifact making specific claims instead of a silence.
+
 **Costs and schedules it.** The bill of materials is netted against what the
 inventory says is already in the garage. The schedule back-plans in weekends
 from the target date, counts seed-start and days-to-maturity deadlines
@@ -79,15 +93,23 @@ pip install -r requirements.txt
 ./bin/yard install         # link the skills and subagents into ~/.cursor
 ./bin/yard doctor          # check the environment, and say what any gap costs
 
-python3 tools/test_gate.py # prove the doubt gate actually refuses
+python3 tools/test_gate.py   # prove the doubt gate actually refuses
+python3 tools/mutate_gate.py # prove those tests would notice if it stopped
 ```
 
 `test_gate.py` builds a scratch yard in a temporary directory, files a doubt, and
 checks that each of the five expensive jobs refuses, that it refuses *quickly*
-rather than after the work, that `--force` stamps what it came past, and that the
-cheap paths stay open. A non-zero exit that does not name the gate is reported as
-inconclusive rather than passing, because a job that dies for an unrelated reason
-also exits non-zero and would otherwise score as a win.
+rather than after the work, that a yard nobody has said anything about refuses
+too, that an all-clear goes stale the moment the record moves under it, that
+`--force` stamps what it came past, and that the cheap paths stay open. A
+non-zero exit that does not name the gate is reported as inconclusive rather than
+passing, because a job that dies for an unrelated reason also exits non-zero and
+would otherwise score as a win.
+
+`mutate_gate.py` answers the next question, which is whether those tests would
+notice. It breaks the gate seven ways on purpose — silence clears again, the
+freshness check goes away, the hook stops denying — runs the suite against each,
+restores the file, and fails if anything survived unnoticed.
 
 `doctor` names what breaks for anything missing, rather than only reporting its
 absence. The optional packages only limit what can be measured automatically;
@@ -108,6 +130,9 @@ yard sunmodel <slug>              # sun hours per zone per month, and the maps
 yard gaps     <slug>              # what is missing, worst first, with the cost
 yard doubts   <slug>              # what is in question, and what it blocks
 yard doubts   <slug> --price      # probe them, and settle the ones that do not matter
+yard doubts   <slug> --inputs bom # what an all-clear for that job has to answer
+yard doubts   <slug> --clear bom  # file it, and unblock the job
+yard inputs                       # which part of site.json each gated job reads
 yard design   <slug>              # check a design against the measured site
 yard bom      <slug>              # bill of materials, netted against what is here
 yard schedule <slug>              # the weekend plan, back-planned from the date
@@ -206,7 +231,8 @@ bin/yard      one entry point, runnable from any directory
 tools/        install, doctor, and the PII scrubber
 vault/        encrypted yard bundles, committed
 .cursor/      the doubt gate: a hook that denies the expensive jobs while a
-              doubt is open. See .cursor/hooks/VALIDATOR.md
+              doubt is open, or while nothing has been attested about what they
+              are running on. See .cursor/hooks/VALIDATOR.md
 AGENTS.md     how to work in here, and the doubt rule in full
 <slug>/       one directory per yard. Never committed.
 ```
@@ -214,8 +240,9 @@ AGENTS.md     how to work in here, and the doubt rule in full
 Each yard holds `site.json` (geometry and the 3D obstruction model),
 `conditions.json` (soil, inventory, the person), `vision.json` (taste, with a
 strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
-`doubts.json` (what is in question, and what it blocks), a prose `profile.md`,
-and `maps/`, `photos/` and `design/`.
+`doubts.json` (what is in question, and what it blocks), `all-clear.json` (what
+was assumed and run on anyway, and why), a prose `profile.md`, and `maps/`,
+`photos/` and `design/`.
 
 `site.json`, `conditions.json` and `vision.json` are the sources of truth.
 Correct one and re-run, and every drawing, figure and cost regenerates.

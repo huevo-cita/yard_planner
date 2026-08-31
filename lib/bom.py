@@ -305,7 +305,7 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
            "saved_by_using_what_is_here_usd": round(saved, 2),
            "prices": "local" if local else "national ballpark"}
     if provisional:
-        out["provenance"] = doubts.PROVISIONAL
+        out["provenance"] = provisional
     return out
 
 
