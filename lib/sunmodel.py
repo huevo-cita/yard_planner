@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """Year-round shade model for any yard described by a site.json.
 
-    python3 -m lib.sunmodel <slug> [--cell 6] [--outdir maps] [--quick]
+    python3 -m lib.sunmodel <slug> [--cell 6] [--outdir maps] [--quick] [--force]
+
+Refusing to run on an unwalked record
+-------------------------------------
+This is the most quietly persuasive thing the package produces. It returns hours
+to one decimal place for every zone and every month, and a number that precise
+gets believed and then designed against. On a record built only from a parcel
+polygon, an OpenStreetMap trace and a leaf-off lidar flight, that precision is
+unearned: tree species alone decide whether a crown shades in December, and no
+public dataset carries species.
+
+So a yard whose `site.json` still holds a non-empty `pending_site_walk` block is
+refused rather than modelled-and-caveated, because a caveat does not travel with
+a number once the number is in a design. `--force` overrides it, prints a loud
+warning, and stamps `provenance` into sun-hours.json so the output carries its
+own health warning wherever it goes.
 
 Method
 ------
@@ -14,6 +29,12 @@ Tree crowns cannot go in that horizon, because light passes underneath them
 through the bare trunks. They are modelled as ellipsoids and tested with an exact
 ray-ellipsoid intersection at every time step, which is what makes crown base
 height matter in the results rather than being quietly averaged away.
+
+Horizontal planes — eaves, awnings, pergolas, carports — cannot go in that
+horizon either, and for the same reason. They are held separately and tested at
+the point where each beam crosses the plane's own height, so steep sun is taken
+off the ground beneath and low sun passes under. An eave entered instead as a
+wall standing on the ground puts every bed beneath it indoors.
 
 The sun is stepped every five minutes in apparent solar time from sunrise to
 sunset on a representative day for each month. Each step contributes its five
@@ -86,7 +107,7 @@ class Model:
         ys = (np.arange(ny) + 0.5) * cell
         self.xs, self.ys, self.nx, self.ny = xs, ys, nx, ny
         gx, gy = np.meshgrid(xs, ys)                      # (ny, nx)
-        self.inside = gy > self.s * gx
+        self.inside = (gy > self.s * gx) & ~self._built_on(gx, gy)
         self.px = gx[self.inside]
         self.py = gy[self.inside]
         self.M = self.px.size
@@ -101,6 +122,22 @@ class Model:
         self.zones = self._zones()
 
     # ---------------------------------------------------- obstruction segments
+    def _built_on(self, gx, gy):
+        """Ground the house stands on, which is not yard.
+
+        A cell inside the wall footprint is indoors. Left in the grid it reads as
+        near-permanent shade — true, and irrelevant — and it drags down the mean
+        of every zone whose rectangle overlaps the house, which is every bed
+        drawn tight against a wall. A bed rectangle recorded as a rectangle
+        against a wall that is not quite axis-aligned always overlaps a little.
+        """
+        mask = np.zeros(gx.shape, dtype=bool)
+        walls = (self.S.get("obstructions", {}) or {}).get("house_walls") or {}
+        if walls.get("polygon"):
+            mask |= siteschema.in_polygon(
+                np.asarray(walls["polygon"], float), gx, gy)
+        return mask
+
     def _base_segments(self):
         """Opaque obstructions as vertical wall segments (x1, y1, x2, y2, h, kind)."""
         segs = []
@@ -256,22 +293,45 @@ class Model:
         sun of a summer evening, which arrives underneath it. Those two facts
         together are why a bed can be in shade all day and still scorch.
 
-        Each is a rectangle in the yard plane at a height, with a transmissivity
-        so that a slatted pergola or a shadecloth can be modelled as partial.
+        A house eave is the same object and the most consequential one, because
+        beds get planted tight against walls. Its shape is a ring rather than a
+        rectangle — the roof outline with the wall footprint taken out, the walls
+        themselves being opaque from grade up — so an overhead may carry a
+        `polygon` and an optional `hole` instead of an `x`/`y` rectangle. Put an
+        eave in as a wall and every bed beneath it is modelled as indoors.
+
+        Each sits in the yard plane at a height, with a transmissivity so that a
+        slatted pergola or a shadecloth can be modelled as partial.
         """
         out = []
         for o in (self.S.get("obstructions", {}) or {}).get("overheads", []) or []:
-            x = o.get("x")
-            y = o.get("y")
             h = o.get("height")
-            if not x or not y or h is None:
+            if h is None:
                 continue
+            ring = o.get("polygon")
+            x = o.get("x") or ([p[0] for p in ring] if ring else None)
+            y = o.get("y") or ([p[1] for p in ring] if ring else None)
+            if not x or not y:
+                continue
+            hole = o.get("hole")
             out.append({"id": o.get("id", "overhead"),
                         "x0": float(min(x)), "x1": float(max(x)),
                         "y0": float(min(y)), "y1": float(max(y)),
+                        "ring": np.asarray(ring, float) if ring else None,
+                        "hole": np.asarray(hole, float) if hole else None,
                         "height": float(h),
                         "tau": float(o.get("transmissivity", 0.0))})
         return out
+
+    def _overhead_covers(self, o, hx, hy):
+        """Whether the point where a beam crosses the plane is under this one."""
+        if o["ring"] is None:
+            return ((hx >= o["x0"]) & (hx <= o["x1"]) &
+                    (hy >= o["y0"]) & (hy <= o["y1"]))
+        cov = siteschema.in_polygon(o["ring"], hx, hy)
+        if o["hole"] is not None:
+            cov &= ~siteschema.in_polygon(o["hole"], hx, hy)
+        return cov
 
     def overhead_mult(self, d):
         """Beam multiplier per cell for the overhead planes in the way.
@@ -292,8 +352,7 @@ class Model:
             t = rise / dz
             hx = self.px + float(d[0]) * t
             hy = self.py + float(d[1]) * t
-            hit = ((hx >= o["x0"]) & (hx <= o["x1"]) &
-                   (hy >= o["y0"]) & (hy <= o["y1"]))
+            hit = self._overhead_covers(o, hx, hy)
             mult = np.where(hit, np.minimum(mult, o["tau"]), mult)
             any_hit |= hit
         return mult, any_hit
@@ -307,8 +366,7 @@ class Model:
                 continue
             t = rise / dz
             hx, hy = p[0] + float(d[0]) * t, p[1] + float(d[1]) * t
-            if o["x0"] <= hx <= o["x1"] and o["y0"] <= hy <= o["y1"] \
-                    and o["tau"] < 0.5:
+            if o["tau"] < 0.5 and self._overhead_covers(o, hx, hy):
                 return True
         return False
 
@@ -1094,8 +1152,56 @@ def print_markdown(m, table, clocks):
           f"season — {light_category(growing)}.**")
 
 
-def run(slug, cell=6.0, outdir=None, quick=False):
+PROVISIONAL = "PROVISIONAL - run against an unwalked record"
+
+
+def check_walked(slug, site, force=False):
+    """Refuse to model a yard whose field checklist has not come back yet.
+
+    Returns True when the refusal was overridden and the caller should stamp its
+    output provisional. Raises SystemExit otherwise, so the gate holds for
+    programmatic callers of run() and not only for the command line.
+    """
+    pending = site.get("pending_site_walk")
+    if not pending:
+        return False
+
+    n = pending.get("items")
+    count = f"{n} items" if n else "items"
+    checklist = pending.get("checklist") or os.path.join(
+        yards.yard_dir(slug), "SITE-WALK.md")
+
+    if force:
+        print(f"\n!! WARNING: modelling {slug} against an UNWALKED record. "
+              f"{count} are still\n"
+              f"!! outstanding in {checklist}. Every dimension below — lot lines, "
+              f"house and\n"
+              f"!! fence heights, tree crowns, and above all which trees keep "
+              f"their leaves —\n"
+              f"!! is public-data provenance, not ground truth. Treat the hours "
+              f"as an order of\n"
+              f"!! magnitude, not a measurement. Output stamped {PROVISIONAL!r}.\n")
+        return True
+
+    raise SystemExit(
+        f"refusing to model {slug}: its site walk has not come back.\n"
+        f"  {count} are still outstanding in {checklist}\n"
+        f"  Modelling now would run the shade model on unmeasured public data — a "
+        f"parcel\n"
+        f"  polygon, an OpenStreetMap trace and a leaf-off lidar flight — and "
+        f"return sun\n"
+        f"  hours to one decimal place that nothing on the ground has confirmed. "
+        f"Species\n"
+        f"  is the worst of it: leaf-off lidar cannot tell an evergreen from a "
+        f"bare oak,\n"
+        f"  and that single unknown decides the winter light in half this yard.\n"
+        f"  Do the walk, fold the readings back in as measured, then re-run.\n"
+        f"  To override anyway: python3 -m lib.sunmodel {slug} --force")
+
+
+def run(slug, cell=6.0, outdir=None, quick=False, force=False):
     site = yards.load_site(slug)
+    provisional = check_walked(slug, site, force=force)
     errs, warns = siteschema.validate(site)
     for w in warns:
         print("warning:", w)
@@ -1141,6 +1247,8 @@ def run(slug, cell=6.0, outdir=None, quick=False):
         "best_cell_hours": round(max(table["Whole yard"][mon]["best_cell"]
                                      for mon in months), 2),
     }
+    if provisional:
+        result["provenance"] = PROVISIONAL
     yards.save(slug, "sun-hours.json", result)
     print("wrote", yards.path(slug, "sun-hours.json"))
     print_markdown(m, table, clocks)
@@ -1155,8 +1263,12 @@ def main():
     ap.add_argument("--outdir", default=None)
     ap.add_argument("--quick", action="store_true",
                     help="tables and shade clocks only, skip the slow figures")
+    ap.add_argument("--force", action="store_true",
+                    help="model a yard whose site walk has not come back; the "
+                         "result is stamped provisional")
     args = ap.parse_args()
-    run(args.slug, cell=args.cell, outdir=args.outdir, quick=args.quick)
+    run(args.slug, cell=args.cell, outdir=args.outdir, quick=args.quick,
+        force=args.force)
 
 
 if __name__ == "__main__":

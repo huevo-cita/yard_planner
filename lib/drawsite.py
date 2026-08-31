@@ -473,9 +473,15 @@ def draw_plan(site, path):
     for ov in site.get("obstructions", {}).get("overheads", []) or []:
         ox0, ox1 = min(ov["x"]), max(ov["x"])
         oy0, oy1 = min(ov["y"]), max(ov["y"])
-        ax.add_patch(Rectangle((ox0, -oy1), ox1 - ox0, oy1 - oy0, fc="none",
-                               ec="#8a6d3b", lw=1.6, ls=(0, (7, 4)), zorder=10,
-                               clip_on=True))
+        for ring in (ov.get("polygon"), ov.get("hole")):
+            if ring:
+                ax.add_patch(Polygon([(p[0], -p[1]) for p in ring], closed=True,
+                                     fc="none", ec="#8a6d3b", lw=1.6,
+                                     ls=(0, (7, 4)), zorder=10, clip_on=True))
+        if not ov.get("polygon"):
+            ax.add_patch(Rectangle((ox0, -oy1), ox1 - ox0, oy1 - oy0, fc="none",
+                                   ec="#8a6d3b", lw=1.6, ls=(0, (7, 4)),
+                                   zorder=10, clip_on=True))
         ax.text((ox0 + ox1) / 2, -(oy0 + oy1) / 2,
                 (ov.get("label") or ov.get("id", "")).upper(),
                 fontsize=7.2, fontweight="bold", color="#8a6d3b",
