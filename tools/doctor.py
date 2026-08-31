@@ -183,6 +183,41 @@ def check_gate():
     return ok
 
 
+def check_calendar():
+    """Per yard: does tasks.json still agree with the documents it came from.
+
+    Reported here as well as in the hook because the hook only fires when a plan
+    document is edited from inside the editor. A section changed by hand, by a
+    script, or on another machine leaves the same stale digest and nothing says
+    so until somebody tries to render — which is the Saturday morning it matters.
+    """
+    from lib import week, yards
+
+    slugs = [s for s in yards.list_yards()
+             if os.path.exists(os.path.join(yards.yard_dir(s), "tasks.json"))]
+    if not slugs:
+        print("  ok    no yard keeps its dates in a tasks.json yet")
+        return True
+
+    ok = True
+    for slug in slugs:
+        problems = week.check(slug)
+        if not problems:
+            data = week.load(slug)
+            n = len(data.get("tasks", []))
+            doc = (data.get("google_doc") or {}).get("id")
+            print(f"  ok    {slug}: {n} dated tasks, agreeing with all "
+                  f"{len(data.get('sources', {}))} sections they came from"
+                  + ("" if doc else "  (not published to a Doc)"))
+            continue
+        ok = False
+        print(f"  FAIL  {slug}: {week.stamp(problems)}. "
+              f"`yard week {slug} --calendar` refuses until this is settled:")
+        for p in problems:
+            print(f"          {p['message']}")
+    return ok
+
+
 def check_git():
     r = subprocess.run(["git", "-C", ROOT, "check-ignore", "-q", "example-yard"],
                        check=False)
@@ -208,10 +243,12 @@ def main():
     e = check_git()
     print("\n doubt gate")
     f = check_gate()
+    print("\n dated tasks")
+    g = check_calendar()
     print("\n data")
     check_data()
 
-    ok = all([a, b, c, d, e, f])
+    ok = all([a, b, c, d, e, f, g])
     print("\n" + ("ready." if ok else
                   "not ready. The FAIL lines above have to be fixed first."))
     print("Optional packages only limit what can be measured automatically; "

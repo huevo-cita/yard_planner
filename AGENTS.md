@@ -345,3 +345,108 @@ filling the log with them buries the entries someone came to find.
 
 And it is not a place to put a decision that has not been made. That is a `choice`
 card on the doubt board, and it stays there until somebody chooses.
+
+# A date goes in tasks.json
+
+The third instance of the same bug, and by now the shape should be familiar: a
+fact that should have gone into a file goes into prose instead, where nothing
+reads it and nothing acts on it.
+
+## The failure
+
+Somebody asks what to do this weekend. The dates for a yard are spread across
+`PLAN.md`, which owns the garden-wide work, and `SOWING-CALENDAR.md`, which owns
+the bed and says so in its first line, and `SOURCING.md`, which owns every price
+and address and is keyed to no date at all. Each document is coherent. Answering
+the question means opening three of them and holding a shopping list beside a
+supplier list beside a bed map.
+
+So a yard keeps its dated actions in `tasks.json`, and `CALENDAR.md` is generated
+from it:
+
+```bash
+python3 -m lib.week <slug>                  # this week, one screen
+python3 -m lib.week <slug> --shop 3         # the next three weeks, by supplier
+python3 -m lib.week <slug> --calendar       # -> CALENDAR.md
+```
+
+The failure is a date, a duration, a planting position or a purchase written into
+one of those plan documents and not into `tasks.json`. The prose is then correct
+and the calendar is wrong, and the calendar is the one somebody reads on a
+Saturday morning on the way out of the door.
+
+## The rule
+
+**A date, a duration, a position or a price that is about to be written into an
+action document is a `tasks.json` entry first.** Then write the prose, if the
+prose still needs it.
+
+```bash
+python3 -m lib.week <slug> --check        # does tasks.json still agree
+python3 -m lib.week <slug> --restamp      # after re-reading a section
+```
+
+A task carries where it happens down to the square or the foot-mark, what to do,
+what gates it, and what to do if the window closes:
+
+```json
+{"id": "t016", "date": "2026-09-19", "minutes": 45, "kind": "sow",
+ "title": "Direct-sow carrots", "critical": true,
+ "where": {"bed": "raised bed", "squares": ["5-W1", "5-2", "6-W1"],
+           "map": "design/raised-bed.png"},
+ "how": ["1/4 in deep", "seeds about 1 in apart", "in rows 6 in apart"],
+ "gate": {"kind": "soil_temp", "below_f": 85,
+          "miss": "sow anyway on 20 Sep, thickly, and accept patchy germination"},
+ "source": ["SOWING-CALENDAR.md#4"], "changelog": ["c64"], "done": false}
+```
+
+Use `window` instead of `date` where the day is genuinely loose, and `repeat` for
+a standing job. Where the date was chosen rather than stated in the source, say
+so with `date_inferred` and a `date_note` giving where it came from — the check
+below trusts that flag and it is the only thing keeping it honest.
+
+## Two checks, because they catch different things
+
+`tasks.json` records a digest of every section it was extracted from. Edit one
+and it goes stale, naming which. This is the same mechanism as the all-clear in
+`doubts.py`, and it is the layer that catches **a task nobody ever transcribed**,
+which no amount of comparing dates can.
+
+Separately, every task's own date has to still appear somewhere in a section it
+cites. That catches the specific case of a date that moved.
+
+The direction of the second check is deliberate. Scanning the prose for dates and
+asking which are missing from `tasks.json` sounds equivalent and is not: the
+target date appears dozens of times in those documents, and a check that fires on
+every mention is the linter crying wolf, which is how a check gets switched off
+inside a week.
+
+`--calendar` refuses while either fails, `--force` renders and stamps the page
+with what it came past, and `.cursor/hooks/plan-prose.sh` runs `--check` the
+moment a plan document is written, so the disagreement surfaces while the reason
+for it is still to hand.
+
+## Publishing, and why it is a cycle
+
+The calendar goes to one Google Doc with tickable checkboxes. Regenerating the
+body would wipe the ticks, so read them first:
+
+```bash
+# 1  gdrive downloadFile(fileId=..., exportMimeType='text/markdown')
+python3 -m lib.week <slug> --sync <exported.md>   # ticks -> done in tasks.json
+python3 -m lib.week <slug> --calendar             # re-render, done tasks as [x]
+python3 -m lib.week <slug> --publish              # .docx + the checkbox runs
+# 4  gdrive uploadFile(localPath=<.docx>, fileId=<the same id>)
+# 5  one createParagraphBullets per run, in order, then verify on a fresh export
+```
+
+That also makes `tasks.json` a record of what was actually done, which is what
+next season's rotation log wants.
+
+## What this is not for
+
+Not everything with a number in it. `tasks.json` holds what somebody does on a
+day. The bed rules, the plant palette, the pest tables, the budget tiers and the
+technique notes stay where they are and get linked from the task that needs them
+— a calendar carrying all of that is a plan document again, and there is already
+one of those.

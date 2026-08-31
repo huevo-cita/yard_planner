@@ -175,11 +175,38 @@ as it changes the list: a monthly budget phases naturally into "infrastructure
 this spring, planting next autumn," which is usually the better garden anyway
 because autumn planting establishes better in most climates.
 
-## Step 7 — Deliver it
+## Step 7 — The dates go in tasks.json first
+
+Every dated action the back-plan produced goes into `<slug>/tasks.json` before
+any of it is written as prose. That file is the single source for what happens on
+a day, and `CALENDAR.md` — the document somebody actually reads on a Saturday
+morning — is generated from it:
+
+```bash
+python3 -m lib.week <slug> --calendar    # -> CALENDAR.md, then buildhtml it
+python3 -m lib.week <slug>               # this week, to the terminal
+python3 -m lib.week <slug> --shop 3      # the next three weeks, grouped by supplier
+python3 -m lib.week <slug> --check       # has the prose drifted from the file
+```
+
+A task carries the day, the duration, the position down to the square or the
+foot-mark, what gates it and what to do if the window closes. Everything it
+leans on is cited in `source`, and `tasks.json` keeps a digest of each cited
+section — so a date later changed in `PLAN.md` and not here is caught rather than
+silently disagreeing. `--calendar` refuses while it does.
+
+The schema and the two checks are in [AGENTS.md](../../AGENTS.md), under "A date
+goes in tasks.json". Do not hand-write `CALENDAR.md`; it is overwritten on the
+next render.
+
+## Step 8 — Deliver the plan
 
 `PLAN.md` in the yard's folder, and it has a shape. This is a specification, not
 a suggestion, because the alternative was tried: "write the plan as markdown" is
 what the instruction used to say, and one plan reached 9,522 words.
+
+It opens with a line pointing at `CALENDAR.md` for what to do this week, because
+the plan is the reference and the calendar is the instruction.
 
 ```
 # <address> — the plan to <target date>
@@ -222,7 +249,8 @@ python3 -m lib.changelog <slug> --lint          # what is still in the wrong fil
 
 The full rule, with the phrase list that should trigger it, is in
 [AGENTS.md](../../AGENTS.md). A separate calendar — sowing dates, a rotation — is
-its own document with its own budget, not a section bolted onto the plan.
+its own document with its own budget, not a section bolted onto the plan, and its
+dates go into `tasks.json` along with everything else's.
 
 For something printable:
 
