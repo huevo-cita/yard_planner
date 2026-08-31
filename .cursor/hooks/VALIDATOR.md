@@ -127,11 +127,21 @@ between 3 and 62 values and `bom` for at most one, which is the difference
 between a mechanism and a tax.
 
 **Bound to a digest.** Each clearance stores a fingerprint of every value it
-covers, so editing `site.json` underneath it makes it stale and the refusal names
-which value moved. Without that it is a stamp collected once. Measuring a covered
-value is deliberately *not* invalidating: that path leaves the assumed set
-entirely, and blocking the run someone just made more trustworthy would train
-people out of measuring things.
+covers, so changing one of those makes it stale and the refusal names which value
+moved. Without that it is a stamp collected once. What it covers is exactly the
+assumed and reported values, plus a census of how many things there are under the
+sections the job reads — see the third hole below for what that leaves out.
+Measuring a covered value is deliberately *not* invalidating: that path leaves
+the assumed set entirely, and blocking the run someone just made more trustworthy
+would train people out of measuring things.
+
+**And renewable, which is the part that decides whether it survives.** A
+clearance goes stale when one value moves, and the reasons written against the
+other fifteen are still the right reasons. `--clear <job> --renew` re-files,
+carrying forward every line whose value has not moved and refusing to carry one
+whose value has; only what changed needs a new sentence. Without that the honest
+prediction is `--force`, and the provisional stamp stops meaning anything the
+first time it becomes routine.
 
 **How the input map is kept honest.** `lib/inputs.py` declares the map and
 `derive()` recovers the same thing by walking each job's module and its
@@ -144,15 +154,51 @@ because every gated job imports them and following them would make every map the
 union of all the others. All three over-approximate, which errs toward asking for
 more rather than less.
 
-### Two holes, stated rather than papered over
+**A fourth errs the other way, and it is the one to watch.** `derive()` only
+recognises a read made through a name it believes holds the record: the
+`SITE_ALIASES` set, plus whatever plain assignment from one of those it can
+follow within the module. A record reached any other way is invisible, and an
+invisible read means `drift()` reports clean about a section it never saw.
 
-**A lazy all-clear clears everything.** `--because '*=looks fine'` is accepted.
+```python
+site["obstructions"]              # seen
+rec = site or {}
+rec.get("obstructions")           # seen — `rec` is learned from the line above
+
+def shade(record):                # not seen: a parameter under a new name
+    return record["obstructions"] # drift() reports no problem
+```
+
+That is a false negative in the check whose whole job is catching false
+negatives. Following parameters is dataflow analysis and was not attempted, so
+`SITE_ALIASES` is maintained by hand, and a clean `drift()` is evidence that the
+declared map covers what the scan can see rather than proof that it covers what
+the code reads.
+
+### Three holes, stated rather than papered over
+
+**A lazy all-clear clears everything.** `--because '*=fine, I looked'` is
+accepted, and clears the record in one line.
 There is no way to tell a considered blanket clearance from a careless one, and
 pretending otherwise would be the second guardrail-by-agent-judgement this file
 warns about. What the mechanism actually buys is narrower and still worth having:
 the omission stops being invisible. There is a file with a date on it saying
 which values were waved through and on what grounds, and a reviewer can disagree
 with a sentence in a way they cannot disagree with something nobody said.
+
+**A clearance does not see a measured value change.** Only the assumed and
+reported values are fingerprinted, so a fence recorded as `measured` can go from
+six feet to twelve underneath a current clearance and the sun model will run on
+it without a word. Half of that is deliberate and defensible: a measurement is
+not something anyone should have to re-attest, and treating every correction as
+grounds for re-filing is how the mechanism gets switched off. The other half was
+not defensible — a whole new obstruction carrying no provenance entry at all was
+equally invisible, because there was nothing to fingerprint — so `inputs.census`
+records how many things there are under the sections each job reads, and a
+collection appearing, growing or vanishing stales the clearance and is named.
+That closes the addition case and leaves the edit case open on purpose. A
+clearance filed before the census existed is not held to one; it starts being
+held the first time it is renewed.
 
 **Artifact dependencies are not transitive.** `bom` costs a `design.json` written
 against a `sun-hours.json` modelled on an assumed fence height. The fence is

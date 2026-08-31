@@ -11,11 +11,20 @@ Every file is restored in a `finally`, and the whole run re-verifies a clean
 tree at the end, because a harness that leaves the repo broken is worse than no
 harness.
 
+**It edits the working tree.** `lib/doubts.py`, `lib/inputs.py` and
+`.cursor/hooks/doubt-gate.sh` are rewritten in place for the length of one test
+run each — around ten seconds — and put back afterwards. A `SIGKILL`, a power
+cut, or a `git commit -a` from another terminal inside that window will catch a
+deliberately broken gate, and the commit will look ordinary. `git diff` after a
+crash says what happened, and `git checkout` on those three files fixes it. Do
+not run this on a tree with uncommitted work you would not want to re-derive.
+
     python3 tools/mutate_gate.py            # all of them
     python3 tools/mutate_gate.py --list
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -37,7 +46,7 @@ MUTATIONS = [
         "lib/doubts.py",
         "the freshness check is dropped, so one all-clear rubber-stamps the "
         "yard forever",
-        "    if moved or appeared:\n        detail = []",
+        "    if moved or appeared or shape:\n        detail = []",
         "    if False:\n        detail = []",
     ),
     (
@@ -78,6 +87,30 @@ MUTATIONS = [
         '                     "zones"],',
     ),
     (
+        "renew-carries-the-moved",
+        "lib/doubts.py",
+        "renewing carries a reason forward for a value that has since changed, "
+        "which turns the one convenience here into a rubber stamp",
+        '        if touched and not any(p in out["moved"] for p in touched):',
+        '        if touched:',
+    ),
+    (
+        "shape-blind",
+        "lib/doubts.py",
+        "the census check goes away, so a new obstruction carrying no "
+        "provenance entry is invisible to every clearance",
+        '    was = filed.get("census")\n    if was is None:\n        return []',
+        '    was = filed.get("census")\n    if True:\n        return []',
+    ),
+    (
+        "alias-blind",
+        "lib/inputs.py",
+        "the scan stops following a record assigned to a local name, so "
+        "drift() reports clean on a section it never saw",
+        "        if tree is not None:\n            self._learn_aliases(tree)",
+        "        if tree is None:\n            self._learn_aliases(tree)",
+    ),
+    (
         "hook-allows-silence",
         ".cursor/hooks/doubt-gate.sh",
         "the hook stops denying and only the in-process gate is left, so the "
@@ -99,6 +132,17 @@ def run_suite(timeout=900):
     return p.returncode, failed, incon, p.stdout
 
 
+def drop_pycache():
+    """So a rewritten module is never read through a cache of the old one.
+
+    Rewriting a file in place and re-running immediately is exactly the case
+    where mtime-based invalidation is at its least reliable, and a stale or
+    half-written .pyc shows up here as a test that fails for no visible reason.
+    """
+    for d in ("lib", "tools"):
+        shutil.rmtree(os.path.join(ROOT, d, "__pycache__"), ignore_errors=True)
+
+
 def apply(path, old, new):
     full = os.path.join(ROOT, path)
     with open(full) as f:
@@ -109,12 +153,14 @@ def apply(path, old, new):
                          f"this harness needs updating before it can be trusted")
     with open(full, "w") as f:
         f.write(text.replace(old, new))
+    drop_pycache()
     return text
 
 
 def restore(path, text):
     with open(os.path.join(ROOT, path), "w") as f:
         f.write(text)
+    drop_pycache()
 
 
 def main():

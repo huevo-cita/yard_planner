@@ -135,9 +135,13 @@ python3 -m lib.doubts <slug> --clear sunmodel --because 'path.glob.*=why this is
 Each job is asked only about the part of `site.json` it actually reads, so
 `sunmodel` carries most of it and `bom` usually carries a line. The clearance is
 bound to the values it covers: change one and it goes stale, and the refusal says
-which. Nothing stops a blanket reason covering everything at once — that hole is
-real and named in `AGENTS.md` — but a lazy sentence with a date on it is still
-something a person can read and disagree with, which silence is not.
+which. When that happens use `--clear <job> --renew`, which carries forward every
+reason whose value has not moved — retyping sixteen sentences to correct one tree
+height is how this ends up being `--force`d instead. Nothing stops a blanket
+reason covering everything at once — that hole is real and named in `AGENTS.md`,
+along with the fact that a `measured` value can change underneath a clearance
+without staling it — but a lazy sentence with a date on it is still something a
+person can read and disagree with, which silence is not.
 
 **File the doubt when you form it, not when you report.** If you are about to
 write "one caveat", "I've assumed", "not sure whether" or "we could either" about

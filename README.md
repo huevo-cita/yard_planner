@@ -72,9 +72,16 @@ exactly what the failure above produces. So the same five stages want a positive
 or `reported` rather than measured, either a doubt card id or a written reason
 for proceeding. `yard doubts <slug> --inputs sunmodel` prints that list, per job,
 with the command that files it. Each clearance is bound to a digest of the values
-it covers, so editing `site.json` under it makes it stale, and stale blocks like
-missing. Nothing prevents a lazy blanket clearance; what it buys is that the
+it covers, so changing one of those makes it stale, and stale blocks like
+missing — with `yard doubts <slug> --clear sunmodel --renew` to carry forward
+every reason whose value did not move. What it covers is narrower than the whole
+file: the assumed and reported values, and a census that notices something being
+added or removed. A measured value can be corrected underneath it without
+invalidating it. Nothing prevents a lazy blanket clearance either —
+`--because '*=fine, I looked'` is accepted — and what it buys is only that the
 omission becomes a dated artifact making specific claims instead of a silence.
+The holes are set out in
+[.cursor/hooks/VALIDATOR.md](.cursor/hooks/VALIDATOR.md).
 
 **Costs and schedules it.** The bill of materials is netted against what the
 inventory says is already in the garage. The schedule back-plans in weekends
@@ -100,7 +107,7 @@ python3 tools/mutate_gate.py # prove those tests would notice if it stopped
 `test_gate.py` builds a scratch yard in a temporary directory, files a doubt, and
 checks that each of the five expensive jobs refuses, that it refuses *quickly*
 rather than after the work, that a yard nobody has said anything about refuses
-too, that an all-clear goes stale the moment the record moves under it, that
+too, that an all-clear goes stale the moment a value it covers moves, that
 `--force` stamps what it came past, and that the cheap paths stay open. A
 non-zero exit that does not name the gate is reported as inconclusive rather than
 passing, because a job that dies for an unrelated reason also exits non-zero and
@@ -132,6 +139,7 @@ yard doubts   <slug>              # what is in question, and what it blocks
 yard doubts   <slug> --price      # probe them, and settle the ones that do not matter
 yard doubts   <slug> --inputs bom # what an all-clear for that job has to answer
 yard doubts   <slug> --clear bom  # file it, and unblock the job
+yard doubts   <slug> --clear bom --renew   # re-file, keeping the reasons that stand
 yard inputs                       # which part of site.json each gated job reads
 yard design   <slug>              # check a design against the measured site
 yard bom      <slug>              # bill of materials, netted against what is here

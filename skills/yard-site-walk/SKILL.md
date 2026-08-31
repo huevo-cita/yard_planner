@@ -239,8 +239,10 @@ python3 -m lib.doubts <slug> --settle d3 \
   and look at the plan again
 - **Re-check `python3 -m lib.doubts <slug> --clearances`.** Folding readings in
   moves the record, so any all-clear filed over the old numbers is now stale and
-  says so. That is the right answer and it is cheap to fix: most of the reasons
-  still hold, and the ones that no longer apply are the values you just measured
+  says so. That is the right answer and it is one command to fix:
+  `--clear <job> --renew` carries forward every reason whose value has not moved,
+  and the ones that no longer apply are the values you just measured — which is
+  the good case, because a measured value drops out of the question entirely
 - Re-run the sun model, because real tree species and real fence heights are
   usually the two largest corrections it will ever get. This is the run the gate
   was holding open for

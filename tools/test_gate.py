@@ -127,6 +127,11 @@ FIXTURES = {
 # becomes a sentence somebody signed rather than an omission.
 BLANKET = "*=scratch fixture; none of these values describe a real place"
 
+# The example the docs use for the blanket-clearance hole. Kept here so the
+# claim and the code cannot come apart: `check_clearance` files it and greps for
+# it, and an example the code refuses is a hole nobody has actually demonstrated.
+LAZY_EXAMPLE = "*=fine, I looked"
+
 
 def make_yard(root):
     d = os.path.join(root, SLUG)
@@ -314,6 +319,33 @@ def check_inputs_map(root):
            "zones.West bed.y is measured and still turned up in a soft set"
            if measured else "")
 
+    # The derivation reads through a local name bound to the record. This is the
+    # difference between drift() catching a section and reporting clean on one it
+    # never saw, so it is worth pinning rather than assuming.
+    seen = _sections_read('rec = site or {}\nx = rec.get("obstructions")\n')
+    record("pass" if seen == {"obstructions"} else "FAIL",
+           "a read through a local alias of the record is still seen",
+           "" if seen == {"obstructions"} else f"found {sorted(seen)}")
+
+    # And the limit of that, tested so the docs stay true. A record arriving as
+    # a parameter under a new name is invisible, which is a false negative in
+    # drift() and is stated as one in lib/inputs.py and VALIDATOR.md.
+    blind = _sections_read('def shade(record):\n    return record["boundary"]\n')
+    record("pass" if blind == set() else "FAIL",
+           "a record reached only as a parameter is not seen (the stated limit)",
+           "" if blind == set() else
+           f"found {sorted(blind)} — if the scan has been widened, the "
+           f"limitation described in lib/inputs.py and VALIDATOR.md needs "
+           f"rewriting to match")
+
+
+def _sections_read(src):
+    import ast
+    tree = ast.parse(src)
+    v = inputs._Reads(tree)
+    v.visit(tree)
+    return set(v.sections)
+
 
 def check_clearance(root):
     """The all-clear: required, specific, and bound to what it was written over."""
@@ -350,7 +382,7 @@ def check_clearance(root):
     stale = clearance_state(root, "sunmodel") == "stale"
     says_why = SOFT_SUNMODEL_ONLY in out and "stale" in out.lower()
     record("pass" if rc != 0 and stale and says_why else "FAIL",
-           "editing site.json makes the all-clear stale, and the refusal says which value moved",
+           "editing a value it covers makes the all-clear stale, and names it",
            "" if (rc != 0 and stale and says_why)
            else f"rc={rc} state={clearance_state(root, 'sunmodel')}\n"
                 f"{out.strip()[-400:]}")
@@ -377,6 +409,15 @@ def check_clearance(root):
            "an all-clear that misses an assumed input is refused, and names it",
            "" if (rc != 0 and named and still)
            else f"rc={rc} state={clearance_state(root, 'sunmodel')}\n{out}")
+
+    # The same check across a filing that covers several jobs at once, where
+    # the temptation is to let a job through on another job's coverage.
+    reset_board(root)
+    rc, out = file_allclear(root, "all", f"{SOFT_EVERYWHERE}=paced it twice")
+    ok = rc != 0 and "sunmodel" in out and clearance_state(root, "bom") == "missing"
+    record("pass" if ok else "FAIL",
+           "--clear all is refused whole when one job is left with a gap",
+           "" if ok else f"rc={rc} bom={clearance_state(root, 'bom')}\n{out}")
 
     reset_board(root)
     rc, out = file_allclear(root, "sunmodel", "*=TODO why this is fine")
@@ -431,6 +472,211 @@ def check_clearance(root):
     record("pass" if useful else "FAIL",
            "--inputs names the guessed values and prints a command that files them",
            "" if useful else f"rc={rc}\n{out.strip()[:500]}")
+
+    # The docs illustrate the blanket-clearance hole with a specific string. An
+    # earlier version used one the code rejects for being under twelve
+    # characters, so the single example offered for the hole was one of the few
+    # strings that did not demonstrate it. Pin both ends.
+    reset_board(root)
+    rc, out = file_allclear(root, "sunmodel", LAZY_EXAMPLE)
+    filed = rc == 0 and clearance_state(root, "sunmodel") == "ok"
+    docs = [f for f in ("AGENTS.md", "README.md", ".cursor/hooks/VALIDATOR.md",
+                        "lib/doubts.py")
+            if LAZY_EXAMPLE not in open(os.path.join(ROOT, f)).read()]
+    record("pass" if filed and not docs else "FAIL",
+           "the blanket clearance the docs describe as accepted is accepted",
+           "" if (filed and not docs)
+           else (f"rc={rc}: {out.strip()[:200]}" if not filed
+                 else f"{LAZY_EXAMPLE!r} is not the example in {docs}, so the "
+                      f"docs and this check have come apart"))
+
+    reset_board(root)
+    rc, out = file_allclear(root, "sunmodel", "*=too short")
+    ok = rc != 0 and "too short" in out
+    record("pass" if ok else "FAIL",
+           "a reason under twelve characters is refused, and says so",
+           "" if ok else f"rc={rc}\n{out}")
+
+    # The hole, tested so that it stays the hole it is documented to be rather
+    # than becoming a surprise. Only assumed and reported values are
+    # fingerprinted, so a measured one can be corrected underneath a clearance
+    # without invalidating it. That is defensible — nobody has to re-attest a
+    # measurement — but it is not what "editing site.json makes it stale" would
+    # mean, and the docs must not say that.
+    reset_board(root)
+    file_allclear(root, "sunmodel")
+    site = read_site(root)
+    site["zones"]["West bed"]["y"] = [2, 200]      # measured, per the fixture
+    write_site(root, site)
+    ok = clearance_state(root, "sunmodel") == "ok"
+    record("pass" if ok else "FAIL",
+           "a measured value can change under a clearance without staling it "
+           "(the documented hole)",
+           "" if ok else f"went {clearance_state(root, 'sunmodel')}; if this is "
+                         f"a deliberate tightening, the three docs saying it is "
+                         f"a hole need changing too")
+
+    # The half of that hole which is not defensible: a whole new obstruction
+    # with no provenance entry anywhere near it is invisible to the
+    # fingerprints, because there is nothing to fingerprint.
+    reset_board(root)
+    site = read_site(root)
+    site["obstructions"] = {"fences": [{"height": 6.0, "points": [[0, 0], [40, 0]]}]}
+    site["provenance"]["obstructions.fences.0.height"] = {"source": "measured"}
+    write_site(root, site)
+    file_allclear(root, "sunmodel")
+    site["obstructions"]["walls"] = [
+        {"height": 10.0, "points": [[0, 30], [40, 30]]}]
+    write_site(root, site)
+    rc, out, _ = run(JOB_ARGS["sunmodel"], root)
+    stale = clearance_state(root, "sunmodel") == "stale"
+    named = "obstructions.walls" in out
+    record("pass" if rc != 0 and stale and named else "FAIL",
+           "an unprovenanced obstruction appearing stales the clearance, and is named",
+           "" if (rc != 0 and stale and named)
+           else f"rc={rc} state={clearance_state(root, 'sunmodel')}\n"
+                f"{out.strip()[-400:]}")
+
+    # And the other direction. A fence coming down changes the light as surely
+    # as one going up, and leaves nothing behind to fingerprint.
+    reset_board(root)
+    site = read_site(root)
+    site["obstructions"] = {"fences": [{"height": 6.0}, {"height": 7.0}]}
+    write_site(root, site)
+    file_allclear(root, "sunmodel")
+    site["obstructions"]["fences"].pop()
+    write_site(root, site)
+    ok = clearance_state(root, "sunmodel") == "stale"
+    record("pass" if ok else "FAIL",
+           "an obstruction being removed stales the clearance too",
+           "" if ok else f"state={clearance_state(root, 'sunmodel')} after a "
+                         f"fence was deleted from the record")
+
+
+# The reasons already written down are the expensive part of an all-clear, and a
+# mechanism that throws them away every time one value moves is a mechanism that
+# gets --force'd instead. These are the checks on getting them back.
+THREE_LINES = (f"zones.*=paced with a stride I have checked against a tape",
+               f"boundary.*=county parcel polygon, good to about a foot",
+               f"features.*=crown read off the shadow at noon, near enough")
+KEPT = "county parcel polygon, good to about a foot"
+
+
+def entries_on_record(root, job):
+    p = os.path.join(root, SLUG, "all-clear.json")
+    with open(p) as f:
+        return ((json.load(f).get("jobs") or {}).get(job) or {}).get("entries") or []
+
+
+def check_renewal(root):
+    """Re-filing keeps what still stands, and only what still stands."""
+    print("\n renewing an all-clear")
+
+    reset_board(root)
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew")
+    ok = rc != 0 and "no all-clear on record" in out
+    record("pass" if ok else "FAIL",
+           "--renew with nothing on record is refused, not filed from thin air",
+           "" if ok else f"rc={rc}\n{out}")
+
+    # One value moves. The other two reasons are still about the values they
+    # were written for, and the tool has them.
+    reset_board(root)
+    file_allclear(root, "sunmodel", *THREE_LINES)
+    site = read_site(root)
+    site["zones"]["West bed"]["x"] = [2, 30]
+    write_site(root, site)
+    before = clearance_state(root, "sunmodel")
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew",
+                          "--because", "zones.*=re-paced after the bed was cut back")
+    on_record = entries_on_record(root, "sunmodel")
+    kept = any(KEPT == (e.get("why") or "") for e in on_record)
+    fresh = any("re-paced" in (e.get("why") or "") for e in on_record)
+    ok = before == "stale" and rc == 0 and kept and fresh and \
+        clearance_state(root, "sunmodel") == "ok"
+    record("pass" if ok else "FAIL",
+           "--renew carries forward the reasons whose values did not move",
+           "" if ok else f"was {before}, rc={rc}, kept={kept}, fresh={fresh}, "
+                         f"now {clearance_state(root, 'sunmodel')}\n{out}")
+
+    # The property that makes the above safe rather than a rubber stamp.
+    reset_board(root)
+    file_allclear(root, "sunmodel", *THREE_LINES)
+    site = read_site(root)
+    site["zones"]["West bed"]["x"] = [2, 30]
+    write_site(root, site)
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew")
+    refused = rc != 0 and SOFT_EVERYWHERE in out
+    still = clearance_state(root, "sunmodel") == "stale"
+    record("pass" if refused and still else "FAIL",
+           "--renew will not carry a reason for a value that moved, and says which",
+           "" if (refused and still)
+           else f"rc={rc} state={clearance_state(root, 'sunmodel')}\n{out}")
+
+    # Renewing re-derives the soft set rather than trusting the old one, so a
+    # path that has newly become assumed cannot ride in on a filing that never
+    # looked at it.
+    reset_board(root)
+    file_allclear(root, "sunmodel", *THREE_LINES)
+    site = read_site(root)
+    site["obstructions"] = {"fences": [{"height": 6.0}]}
+    site["provenance"]["obstructions.fences.0.height"] = {"source": "assumed"}
+    write_site(root, site)
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew")
+    ok = rc != 0 and "obstructions.fences.0.height" in out
+    record("pass" if ok else "FAIL",
+           "--renew cannot carry a path that has newly become assumed",
+           "" if ok else f"rc={rc} state={clearance_state(root, 'sunmodel')}\n"
+                         f"{out}")
+
+    # A shape change moves nothing that was fingerprinted, so every reason still
+    # stands and re-affirming is the one command the refusal advertises.
+    reset_board(root)
+    file_allclear(root, "sunmodel", *THREE_LINES)
+    site = read_site(root)
+    site.setdefault("obstructions", {})["walls"] = [{"height": 10.0}]
+    write_site(root, site)
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew")
+    kept = sum(1 for e in entries_on_record(root, "sunmodel") if e.get("why"))
+    ok = rc == 0 and kept == 3 and clearance_state(root, "sunmodel") == "ok"
+    record("pass" if ok else "FAIL",
+           "after an addition nothing has to be retyped: bare --renew re-affirms",
+           "" if ok else f"rc={rc} kept={kept} "
+                         f"state={clearance_state(root, 'sunmodel')}\n{out}")
+
+    # A line can rot without its value moving.
+    reset_board(root)
+    file_card(root, "sunmodel", "is the west fence solid board?")
+    doubtcmd(root, "--settle", "d1", "--answer", "solid board", "--by", "measured")
+    doubtcmd(root, "--clear", "sunmodel", "--cite", "*=d1")
+    board = os.path.join(root, SLUG, "doubts.json")
+    with open(board) as f:
+        doc = json.load(f)
+    doc["cards"][0]["status"] = "open"
+    with open(board, "w") as f:
+        json.dump(doc, f)
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew")
+    ok = rc != 0 and "still open" in out.lower()
+    record("pass" if ok else "FAIL",
+           "--renew will not carry a line citing a card that has been reopened",
+           "" if ok else f"rc={rc}\n{out}")
+
+    # And the other route to the same place: the printed draft should hand back
+    # what is on record, so the only TODO in a re-file is the thing that changed.
+    reset_board(root)
+    file_allclear(root, "sunmodel", *THREE_LINES)
+    site = read_site(root)
+    site["zones"]["West bed"]["x"] = [2, 30]
+    write_site(root, site)
+    rc, out, _ = doubtcmd(root, "--inputs", "sunmodel")
+    hands_back = KEPT in out
+    todo = "TODO" in out
+    only_moved = out.count("TODO why") == 1
+    record("pass" if rc == 0 and hands_back and todo and only_moved else "FAIL",
+           "--inputs reprints the reasons on record, and only TODOs what moved",
+           "" if (rc == 0 and hands_back and todo and only_moved)
+           else f"rc={rc} hands_back={hands_back} todo={todo} "
+                f"only_moved={only_moved}\n{out.strip()[-700:]}")
 
 
 JOB_ARGS = {
@@ -513,6 +759,8 @@ CHEAP = [
     ("doubts --inputs sunmodel", ["-m", "lib.doubts", SLUG, "--inputs",
                                   "sunmodel"]),
     ("doubts --clearances", ["-m", "lib.doubts", SLUG, "--clearances"]),
+    ("doubts --clear --renew", ["-m", "lib.doubts", SLUG, "--clear", "sunmodel",
+                                "--renew"]),
     ("inputs", ["-m", "lib.inputs", SLUG]),
     ("gaps", ["-m", "lib.gaps", SLUG]),
 ]
@@ -681,6 +929,7 @@ def main():
         check_lifecycle(root)
         check_inputs_map(root)
         check_clearance(root)
+        check_renewal(root)
         check_refusals(root)
         check_force(root)
         check_cheap_paths(root)

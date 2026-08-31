@@ -50,8 +50,12 @@ python3 -m lib.doubts <slug> --clear sunmodel \
 Writing those reasons is the point of the exercise, not the toll for it. A
 sentence you cannot finish is a doubt card you should be filing instead.
 
-If the geometry moves afterwards, the clearance goes stale and says which value
-moved. Re-file: most of the reasons will still be the right ones.
+If one of those values moves afterwards, or an obstruction is added or removed,
+the clearance goes stale and says which. Do not retype the rest:
+`--clear sunmodel --renew` keeps every reason whose value has not moved and asks
+only about what changed. Note what staleness does *not* catch — a value recorded
+as `measured` can be corrected underneath a current clearance without a word, so
+a correction to a measured fence height is still yours to think about.
 
 So when the geometry is in question, the order is: file the doubt, price it,
 settle what matters, clear the rest, then run.

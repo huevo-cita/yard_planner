@@ -145,19 +145,33 @@ python3 -m lib.doubts <slug> --clear sunmodel \
 ```
 
 `--because` takes a glob against the provenance path, so fourteen trees are one
-line. `--cite` points at a card that is already **settled or waived** — citing one
-that is still open is the original failure with a reference number on it, and it
-is refused. One filing can cover several jobs: `--clear sunmodel,design`, or
-`--clear all`.
+line. A reason under twelve characters is refused as too short to be one anybody
+could disagree with. `--cite` points at a card that is already **settled or
+waived** — citing one that is still open is the original failure with a reference
+number on it, and it is refused. One filing can cover several jobs:
+`--clear sunmodel,design`, or `--clear all`.
 
-Each clearance is bound to a digest of the values it covers. Edit `site.json` and
-it goes stale, and stale blocks exactly like missing, naming which value moved.
-Measuring something it covered does not invalidate it: that is an improvement,
-not a change of subject.
+Each clearance is bound to a digest of the values it covers. Change one of those
+and it goes stale, and stale blocks exactly like missing, naming which value
+moved. Read that literally: it covers the assumed and reported values, plus a
+census that notices something being added or removed. It does **not** notice a
+measured value being corrected. Measuring something it covered does not
+invalidate it either: that is an improvement, not a change of subject.
 
-What this honestly does *not* solve: nothing stops `--because '*=looks fine'`.
-The gain is that the omission becomes a dated artifact making specific claims,
-which a person can disagree with, rather than a silence nobody can point at.
+When it does go stale, do not retype the reasons that are still right:
+
+```bash
+python3 -m lib.doubts <slug> --clear sunmodel --renew
+```
+
+`--renew` carries forward every line whose value has not moved, and refuses to
+carry one whose value has, naming it so it gets a fresh answer. Whatever moved
+takes a new `--because` on the same command; the rest is kept.
+
+What this honestly does *not* solve: nothing stops
+`--because '*=fine, I looked'`. The gain is that the omission becomes a dated
+artifact making specific claims, which a person can disagree with, rather than a
+silence nobody can point at.
 
 ## The gate, and what it will not let you do
 
