@@ -151,19 +151,33 @@ python3 -m lib.doubts <slug> --clear sunmodel \
 ```
 
 `--because` takes a glob against the provenance path, so fourteen trees are one
-line. `--cite` points at a card that is already **settled or waived** — citing one
-that is still open is the original failure with a reference number on it, and it
-is refused. One filing can cover several jobs: `--clear sunmodel,design`, or
-`--clear all`.
+line. A reason under twelve characters is refused as too short to be one anybody
+could disagree with. `--cite` points at a card that is already **settled or
+waived** — citing one that is still open is the original failure with a reference
+number on it, and it is refused. One filing can cover several jobs:
+`--clear sunmodel,design`, or `--clear all`.
 
-Each clearance is bound to a digest of the values it covers. Edit `site.json` and
-it goes stale, and stale blocks exactly like missing, naming which value moved.
-Measuring something it covered does not invalidate it: that is an improvement,
-not a change of subject.
+Each clearance is bound to a digest of the values it covers. Change one of those
+and it goes stale, and stale blocks exactly like missing, naming which value
+moved. Read that literally: it covers the assumed and reported values, plus a
+census that notices something being added or removed. It does **not** notice a
+measured value being corrected. Measuring something it covered does not
+invalidate it either: that is an improvement, not a change of subject.
 
-What is honestly *not* solved: nothing stops `--because '*=looks fine'`. The gain
-is that the omission becomes an artifact with a date on it, which a person can
-disagree with, rather than a silence nobody can point at.
+When it does go stale, do not retype the reasons that are still right:
+
+```bash
+python3 -m lib.doubts <slug> --clear sunmodel --renew
+```
+
+`--renew` carries forward every line whose value has not moved, and refuses to
+carry one whose value has, naming it so it gets a fresh answer. Whatever moved
+takes a new `--because` on the same command; the rest is kept.
+
+What this honestly does *not* solve: nothing stops
+`--because '*=fine, I looked'`. The gain is that the omission becomes a dated
+artifact making specific claims, which a person can disagree with, rather than a
+silence nobody can point at.
 
 ## The gate, and what it will not let you do
 
@@ -171,18 +185,18 @@ Five jobs refuse to run unless the yard is clear for them: `sunmodel`, `design`,
 `drawbeds`, `bom`, `schedule`. Clear means both — nothing open on the board
 against that job, and a current all-clear for it. Two layers enforce it.
 
-1. `doubts.gate()` inside each module, which raises `SystemExit` with the open
-   cards and the missing clearance printed. This always holds, including for
-   programmatic callers.
+1. `doubts.gate()` inside each module, which raises `SystemExit` listing the open
+   cards and whatever is wrong with the clearance. This always holds, including
+   for programmatic callers.
 2. `.cursor/hooks/doubt-gate.sh`, a `beforeShellExecution` hook that denies the
    shell command outright and tells you what to do instead. This exists because
    the in-process gate only fires after the command has been chosen, and the
    moment worth catching is earlier than that.
 
-Which values each job is answerable for is declared in `lib/inputs.py` and
-recovered from the source by static analysis, and `tools/doctor.py` and
-`tools/test_gate.py` both check the two still agree. `python3 -m lib.inputs`
-prints the map with the argument for each entry.
+Which values each job is answerable for is declared in `lib/inputs.py`, and
+recovered independently from the source by static analysis so the two can be
+compared; `tools/doctor.py` and `tools/test_gate.py` both check they still agree.
+`python3 -m lib.inputs` prints the map with the argument for each entry.
 
 The cheap paths are deliberately never gated, because they are how a doubt gets
 settled: `--quick` on the sun model, `lib.gaps`, `lib.inputs`, `lib.doubts`
@@ -193,9 +207,9 @@ itself including `--inputs` and `--clear`, `lib.design --init`,
 looked at the board and decided to proceed anyway, and it costs a human approval
 through the hook. Output produced that way is stamped provisional, and the stamp
 names what it came past — `PROVISIONAL - forced past 2 open doubts and a stale
-all-clear` — because "provisional" on its own is not something anyone can act
-on. Do not reach for it to get unblocked; settle the doubt or waive it on the
-record, and write the all-clear:
+all-clear` — because "provisional" on its own is not something anyone can act on.
+Do not reach for it to get unblocked; settle the doubt or waive it on the record,
+and write the all-clear:
 
 ```bash
 python3 -m lib.doubts <slug> --waive <id> --reason "..."

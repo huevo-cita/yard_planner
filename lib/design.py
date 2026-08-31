@@ -512,13 +512,13 @@ def check(slug, force=False):
     # artifact this module can produce: it reads as a verdict, and a `blocking`
     # objection that evaporates once a fence turns out to be open rail has cost
     # someone a replanning session for nothing.
-    if doubts.gate(slug, "design", force=force):
+    stamp = doubts.gate(slug, "design", force=force)
+    if stamp:
         open_now = doubts.open_cards(slug, job="design")
         out.append(_obj("note", "doubts",
-                        f"these objections were computed with "
-                        f"{len(open_now)} open doubt"
-                        f"{'s' if len(open_now) > 1 else ''} on the board — "
-                        + "; ".join(c["question"] for c in open_now)
+                        stamp
+                        + (" — " + "; ".join(c["question"] for c in open_now)
+                           if open_now else "")
                         + ". Treat every verdict below as provisional",
                         f"python3 -m lib.doubts {slug} --open"))
     if not sun:

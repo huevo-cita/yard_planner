@@ -20,6 +20,9 @@ taste ──────────> vision.json ──────────
                      ├──> doubts.json: what is in question — and a gate that stops
                      │    the expensive stages until it is settled
                      │
+                     ├──> all-clear.json: what was assumed and run on anyway, per
+                     │    job, with the reason, bound to the values it covers
+                     │
                      └──> changelog.json: what changed and why the plan reads as it
                           does, so the plan itself can just say what to do
 ```
@@ -70,11 +73,18 @@ which reads the absence of a written doubt as confidence — when absence is
 exactly what the failure above produces. So the same five stages want a positive
 **all-clear** first: for every value the job reads whose provenance is `assumed`
 or `reported` rather than measured, either a doubt card id or a written reason
-for proceeding. `python3 -m lib.doubts <slug> --inputs sunmodel` prints that list
-and the command that files it. Each clearance is bound to a digest of the values
-it covers, so editing `site.json` under it makes it stale, and stale blocks like
-missing. Nothing prevents a lazy blanket clearance; what it buys is that the
+for proceeding. `yard doubts <slug> --inputs sunmodel` prints that list, per job,
+with the command that files it. Each clearance is bound to a digest of the values
+it covers, so changing one of those makes it stale, and stale blocks like
+missing — with `yard doubts <slug> --clear sunmodel --renew` to carry forward
+every reason whose value did not move. What it covers is narrower than the whole
+file: the assumed and reported values, and a census that notices something being
+added or removed. A measured value can be corrected underneath it without
+invalidating it. Nothing prevents a lazy blanket clearance either —
+`--because '*=fine, I looked'` is accepted — and what it buys is only that the
 omission becomes a dated artifact making specific claims instead of a silence.
+The holes are set out in
+[.cursor/hooks/VALIDATOR.md](.cursor/hooks/VALIDATOR.md).
 
 **Says what to do, not what it used to say.** A plan is read to find out what to
 do this weekend, and every sentence about how the plan used to be different is a
@@ -104,15 +114,24 @@ pip install -r requirements.txt
 ./bin/yard install         # link the skills and subagents into ~/.cursor
 ./bin/yard doctor          # check the environment, and say what any gap costs
 
-python3 tools/test_gate.py # prove the doubt gate actually refuses
+python3 tools/test_gate.py   # prove the doubt gate actually refuses
+python3 tools/mutate_gate.py # prove those tests would notice if it stopped
 ```
 
 `test_gate.py` builds a scratch yard in a temporary directory, files a doubt, and
 checks that each of the five expensive jobs refuses, that it refuses *quickly*
-rather than after the work, that `--force` stamps what it came past, and that the
-cheap paths stay open. A non-zero exit that does not name the gate is reported as
-inconclusive rather than passing, because a job that dies for an unrelated reason
-also exits non-zero and would otherwise score as a win.
+rather than after the work, that a yard nobody has said anything about refuses
+too, that an all-clear goes stale the moment a value it covers moves, that
+`--force` stamps what it came past, and that the cheap paths stay open. A
+non-zero exit that does not name the gate is reported as inconclusive rather than
+passing, because a job that dies for an unrelated reason also exits non-zero and
+would otherwise score as a win.
+
+`mutate_gate.py` answers the next question, which is whether those tests would
+notice. It breaks the gate ten ways on purpose — silence clears again, the
+freshness check goes away, a renewal carries forward a reason whose value moved,
+the hook stops denying — runs the suite against each,
+restores the file, and fails if anything survived unnoticed.
 
 `doctor` names what breaks for anything missing, rather than only reporting its
 absence. The optional packages only limit what can be measured automatically;
@@ -133,6 +152,10 @@ yard sunmodel <slug>              # sun hours per zone per month, and the maps
 yard gaps     <slug>              # what is missing, worst first, with the cost
 yard doubts   <slug>              # what is in question, and what it blocks
 yard doubts   <slug> --price      # probe them, and settle the ones that do not matter
+yard doubts   <slug> --inputs bom # what an all-clear for that job has to answer
+yard doubts   <slug> --clear bom  # file it, and unblock the job
+yard doubts   <slug> --clear bom --renew   # re-file, keeping the reasons that stand
+yard inputs                       # which part of site.json each gated job reads
 yard changelog <slug>             # what changed, and why the plan reads as it does
 yard changelog <slug> --lint      # prose in the plan that belongs in the log
 yard design   <slug>              # check a design against the measured site
@@ -233,18 +256,20 @@ bin/yard      one entry point, runnable from any directory
 tools/        install, doctor, and the PII scrubber
 vault/        encrypted yard bundles, committed
 .cursor/      the doubt gate, which denies the expensive jobs while a doubt is
-              open, and the plan-prose check, which reads a plan document as it
-              is written. See .cursor/hooks/VALIDATOR.md
-AGENTS.md     how to work in here, and the doubt rule in full
+              open or while nothing has been attested about what they are
+              running on, and the plan-prose check, which reads a plan document
+              as it is written. See .cursor/hooks/VALIDATOR.md
+AGENTS.md     how to work in here, and both rules in full
 <slug>/       one directory per yard. Never committed.
 ```
 
 Each yard holds `site.json` (geometry and the 3D obstruction model),
 `conditions.json` (soil, inventory, the person), `vision.json` (taste, with a
 strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
-`doubts.json` (what is in question, and what it blocks), `changelog.json` (what
-changed and why it reads as it does), a prose `profile.md`, and `maps/`,
-`photos/` and `design/`.
+`doubts.json` (what is in question, and what it blocks), `all-clear.json` (what
+was assumed and run on anyway, and why), `changelog.json` (what changed and why
+it reads as it does), a prose `profile.md`, and `maps/`, `photos/` and
+`design/`.
 
 The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 `SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true

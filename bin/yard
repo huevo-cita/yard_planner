@@ -32,7 +32,7 @@ PYTHON="${YARD_PYTHON:-python3}"
 cd "$REPO"
 
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
-photomeasure soil climate conditions gaps doubts changelog vision design
+photomeasure soil climate conditions gaps doubts inputs changelog vision design
 bom schedule builddoc buildhtml vault"
 
 case "${1:-}" in

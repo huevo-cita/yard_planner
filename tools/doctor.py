@@ -157,6 +157,22 @@ def check_gate():
         else:
             print(f"  ok    matcher covers all {len(doubts.JOBS)} gated jobs")
 
+    # The all-clear asks about the values a job reads, so the map of which
+    # values those are has to still describe the code. Drift here is worse than
+    # silent: the gate keeps refusing and keeps accepting clearances, and the
+    # clearances quietly stop covering something.
+    from lib import inputs
+    problems = inputs.drift()
+    if problems:
+        print(f"  FAIL  the per-job input map has drifted from lib/. An "
+              f"all-clear would attest to the wrong set:")
+        for p in problems:
+            print(f"          {p}")
+        ok = False
+    else:
+        print(f"  ok    the all-clear knows what each of the "
+              f"{len(doubts.JOBS)} jobs reads")
+
     from lib import yards
     if yards.GARDEN_ROOT != yards.REPO_ROOT:
         print("  warn  GARDEN_ROOT is set away from the checkout. The hook is a "

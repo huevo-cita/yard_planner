@@ -14,10 +14,17 @@
 # Contract: reads the beforeShellExecution payload on stdin, always prints one
 # valid JSON object, always exits 0. `permission` is one of:
 #
-#   deny    a gated job, on a yard with open doubts blocking it
+#   deny    a gated job on a yard that is not clear for it — either an open
+#           doubt blocking it, or no current all-clear attesting to the values
+#           it reads that were assumed or reported rather than measured
 #   ask     the same, but with --force, so the override costs a human click
 #           rather than being the agent's to take
 #   allow   everything else, including the cheap inspection paths
+#
+# The deny text itself is built in `lib.doubts.gate_json` and passed through
+# whole. It used to be assembled here in jq, which meant the wording the hook
+# showed and the wording the in-process gate raised drifted apart and only one
+# of them was ever tested.
 #
 # Deliberately fails open on anything it cannot work out — an unparseable
 # command, an unknown yard, a missing interpreter. A gate that blocks work it
@@ -153,74 +160,39 @@ done
 VERDICT="$(cd "$REPO" && "$PYTHON" -m lib.doubts "$SLUG" --gate "$JOB" 2>/dev/null)"
 [ -n "$VERDICT" ] || allow
 
+# A slug with no directory behind it is a yard this process cannot see, which is
+# usually GARDEN_ROOT pointing somewhere the editor never heard about rather than
+# a typo. Fail open; the in-process gate is stricter and still refuses.
+#
+# `//` is not usable here: jq's alternative operator fires on `false` as well as
+# on null, so `.yard_known // true` is `true` for every yard including the ones
+# that do not exist.
+KNOWN="$(printf '%s' "$VERDICT" \
+  | jq -r 'if has("yard_known") then .yard_known else true end' 2>/dev/null)"
+[ "$KNOWN" = "false" ] && allow
+
 BLOCKED="$(printf '%s' "$VERDICT" | jq -r '.blocked // false' 2>/dev/null)"
+[ "$BLOCKED" = "true" ] || allow
 
-if [ "$BLOCKED" != "true" ]; then
-  # Nothing is filed against this job. Before waving it through, check for the
-  # shape the *unfiled* failure leaves: a record built mostly on assumption,
-  # about to have an expensive job run on it, with an empty board. Allowed, but
-  # said out loud, because the gate cannot read a doubt that was never written
-  # down and this is the only trace such a doubt leaves.
-  UNFILED="$(printf '%s' "$VERDICT" | jq -r 'if .unfiled then
-      "This is about to run \(.unfiled.job) on \(.yard), whose record is "
-      + "\(.unfiled.assumed_count) assumed or reported values with only "
-      + "\((.unfiled.measured_fraction * 100) | floor)% of it measured, and "
-      + "whose doubt board is completely empty.\n\nAssumed, among others:\n"
-      + ([.unfiled.examples[] | "  - \(.)"] | join("\n"))
-      + "\n\nThat is allowed. But if you have been hedging about any of these in "
-      + "the conversation — an assumed height, a species read off a leaf-off "
-      + "lidar flight, a fence you are not sure is opaque — file it now rather "
-      + "than after this run:\n\n  python3 -m lib.doubts \(.yard) --add \"...\" "
-      + "--kind fact --blocks \(.unfiled.job)\n\nRe-running this because a "
-      + "hedge turned out to matter is the exact cost this board exists to "
-      + "avoid."
-    else empty end' 2>/dev/null)"
-  if [ -n "$UNFILED" ]; then
-    emit "allow" "$UNFILED" ""
-  fi
-  allow
-fi
+AGENT="$(printf '%s' "$VERDICT" | jq -r '.agent_message // empty' 2>/dev/null)"
+USER="$(printf '%s' "$VERDICT" | jq -r '.user_message // empty' 2>/dev/null)"
+WHY="$(printf '%s' "$VERDICT" | jq -r '(.reasons // []) | join(" and ")' 2>/dev/null)"
 
-COUNT="$(printf '%s' "$VERDICT" | jq -r '.count // 0' 2>/dev/null)"
-# The options are rendered inline rather than referenced, because a choice with
-# its trade-offs sitting in another file is a choice that gets guessed at.
-LIST="$(printf '%s' "$VERDICT" | jq -r '
-  .cards[]
-  | "  [\(.id)] \(.question)"
-  + "\n        costs \(.priced)"
-  + (if .how_to_settle then "\n        to settle \(.how_to_settle)" else "" end)
-  + ([.options[]?
-      | "\n        option: \(.name)"
-      + (if .pro  then "\n            pro  \(.pro)"  else "" end)
-      + (if .con  then "\n            con  \(.con)"  else "" end)
-      + (if .cost then "\n            cost \(.cost)" else "" end)
-     ] | join(""))' 2>/dev/null)"
+# An older lib.doubts, or a jq that choked: block, but say something usable
+# rather than emitting an empty denial the agent cannot act on.
+[ -n "$AGENT" ] || AGENT="Blocked: $JOB on $SLUG is not clear to run.
 
-PLURAL="s"; [ "$COUNT" = "1" ] && PLURAL=""
-
-AGENT="Blocked: $SLUG has $COUNT open doubt$PLURAL on its board that would change what $JOB produces.
-
-$LIST
-
-Do not re-run this with --force to get past it. Settle the doubt first, because that is cheaper than running this twice:
-
-  - a fact that can be probed:   python3 -m lib.doubts $SLUG --price
-  - a fact someone measured:     python3 -m lib.doubts $SLUG --settle <id> --answer \"...\" --by measured
-  - a choice: put the options, with their pros, cons and costs, in front of the
-    person and let them pick, then record it with --by decided
-  - genuinely not worth settling: python3 -m lib.doubts $SLUG --waive <id> --reason \"...\"
-
-If you raised one of these doubts yourself in the last few messages, that is exactly the case this gate exists for. Settle it now rather than running the expensive job and re-running it afterwards."
-
-USER="$SLUG has $COUNT open doubt$PLURAL blocking $JOB. Blocked until they are settled or waived."
+  python3 -m lib.doubts $SLUG --open        what is still in question
+  python3 -m lib.doubts $SLUG --inputs $JOB   what an all-clear has to answer"
+[ -n "$USER" ] || USER="$SLUG: $JOB is blocked by the doubt gate."
 
 case "$CMD" in
   *--force*)
     emit "ask" \
-      "This is a --force override past $COUNT open doubt$PLURAL on $SLUG. It needs a person to approve it, and the output will be stamped provisional.
+      "This is a --force override past $WHY on $SLUG. It needs a person to approve it, and the output will be stamped provisional, naming what it came past.
 
-$LIST" \
-      "Approve running $JOB on $SLUG with $COUNT open doubt$PLURAL? The output will be stamped provisional."
+$AGENT" \
+      "Approve running $JOB on $SLUG past $WHY? The output will be stamped provisional."
     ;;
 esac
 

@@ -25,6 +25,7 @@ cd ~/personal/garden
 python3 -m lib.yards <slug>          # what exists
 python3 -m lib.gaps <slug>           # what is missing, and what it costs
 python3 -m lib.doubts <slug> --open  # what is claimed and not believed
+python3 -m lib.doubts <slug> --clearances  # what has been attested, per job
 ```
 
 `sun-hours.json` is not optional. Designing without it is guessing, and the guess
@@ -35,18 +36,26 @@ If a top-ranked gap would change the design, close it first. When crown spread i
 worth two and a half hours a day, the difference is a vegetable bed or a shade
 garden, and no amount of careful plant selection survives getting that backwards.
 
-**The linter refuses to run while a doubt that blocks the design is open.** An
-objection list computed on doubtful geometry is the most misleading thing this
-skill can produce, because it reads as a verdict — and a `blocking` objection
-that evaporates once the fence turns out to be open rail has cost someone a
-replanning session for nothing.
+**The linter refuses to run while a doubt that blocks the design is open, and
+while there is no current all-clear for it.** An objection list computed on
+doubtful geometry is the most misleading thing this skill can produce, because it
+reads as a verdict — and a `blocking` objection that evaporates once the fence
+turns out to be open rail has cost someone a replanning session for nothing.
 
-Two moves before designing:
+`design` reads far less of `site.json` than the sun model does — bed identity and
+size from `zones`, heat and chill from `climate` — so its all-clear is usually a
+line or two. `python3 -m lib.doubts <slug> --inputs design` prints the list and
+the command; `--clear design,drawbeds` covers the bed maps in the same filing.
+
+Three moves before designing:
 
 - **Check `sun-hours.json` is not provisional.** If it carries a `provenance`
   field, the geometry behind it was never settled and every light figure below is
   an order of magnitude rather than a measurement. Say so, and re-run the model
-  properly before placing anything.
+  properly before placing anything. Note that the gate cannot do this for you: an
+  all-clear for `design` says nothing about the run that produced the light
+  figures, and a `sun-hours.json` written under a clearance that has since gone
+  stale looks exactly like a fresh one.
 - **Turn a design fork into a card rather than a paragraph.** A choice you are
   about to resolve on the person's behalf — bed here or there, one large tree or
   three small, gravel or flagstone — goes on the board with its options priced,

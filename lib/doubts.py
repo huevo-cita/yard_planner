@@ -10,6 +10,13 @@
     python3 -m lib.doubts <slug> --settle d3 --answer "..." --by measured
     python3 -m lib.doubts <slug> --waive d3 --reason "..."
 
+    python3 -m lib.doubts <slug> --inputs sunmodel   what an all-clear must answer
+    python3 -m lib.doubts <slug> --clear sunmodel --because 'path.*=reason'
+    python3 -m lib.doubts <slug> --clear sunmodel --renew   keep the reasons whose
+                                                     value has not moved
+    python3 -m lib.doubts <slug> --clearances        what is attested, and whether
+                                                     it is still current
+
 Why this file exists
 --------------------
 `site.json` provenance records where a number came from. `lib.gaps` prices what
@@ -47,10 +54,42 @@ What is left is the board worth putting in front of someone.
 Nothing is ever settled silently. Waiving requires a reason, and a job forced
 past an open doubt stamps its own output provisional, the same way a sun model
 run against an unwalked record does.
+
+The all-clear, and why an empty board is not permission
+-------------------------------------------------------
+The board catches a doubt that was written down. The failure it exists for is a
+doubt that was *not* — voiced in prose on the way past, and discharged by being
+said. Against that failure an empty board is the exact signature of the problem,
+and reading it as consent gets it backwards.
+
+So the five expensive jobs also require an all-clear: a positive statement, in
+`all-clear.json`, that every value the job leans on which was **assumed or
+reported** rather than measured has been looked at, with either a doubt card id
+or a written reason against each one. No all-clear is a refusal, the same as an
+open card.
+
+`lib.inputs` says which parts of site.json each job reads, so the question is
+the job's own and not the whole record. The clearance is bound to a digest of
+the values it covers, so changing one of those makes it stale, and stale blocks
+exactly like missing. Note the scope of that carefully: **only** the assumed and
+reported values are fingerprinted, so a measured value can change underneath a
+clearance, and a whole new obstruction carrying no provenance entry can be added
+underneath it, without it noticing. See `--renew`, which hands back every reason
+whose value has not moved so that re-filing is one command rather than sixteen.
+
+Be clear about what this does and does not buy. Nothing stops someone writing
+`--because '*=fine, I looked'` and clearing the whole record in one line. The
+gain is narrower than that and still worth having: the omission becomes an
+artifact. Instead of silence, there is a file with a date on it saying which
+values were waved through and on what grounds, and a reviewer can disagree with
+a sentence in a way they cannot disagree with something nobody said.
 """
 import argparse
 import datetime
+import fnmatch
+import hashlib
 import json
+import os
 import sys
 
 from . import yards
@@ -321,104 +360,665 @@ def price(slug, settle_immaterial=True):
     return results
 
 
+# --------------------------------------------------------------- the all-clear
+
+CLEARANCE_FILE = "all-clear.json"
+CLEARANCE_VERSION = 1
+
+# An all-clear filed from a half-edited draft is worse than none, because it
+# looks like an answer. `draft()` writes its blanks in this vocabulary so that
+# leaving one in is refused rather than recorded.
+PLACEHOLDER_PREFIXES = ("todo", "tbd", "fixme", "xxx", "...", "why ")
+PLACEHOLDER_EXACT = ("?", "n/a", "na", "none", "reason", "-")
+
+
+def blank_clearances(slug):
+    return {"yard": slug, "schema_version": CLEARANCE_VERSION, "jobs": {}}
+
+
+def load_clearances(slug):
+    return yards.load(slug, CLEARANCE_FILE) or blank_clearances(slug)
+
+
+def soft_inputs(slug, job, site=None):
+    """The assumed-or-reported values this job reads. Empty is a real answer."""
+    from . import inputs
+    if site is None:
+        site = yards.load(slug, "site.json") or {}
+    return inputs.soft_inputs(site, job)
+
+
+def _covers(entry, path):
+    return any(fnmatch.fnmatch(path, pat) for pat in entry.get("paths", []))
+
+
+def entry(paths, doubt=None, why=None):
+    """One line of an all-clear: some paths, and why running on them is all right."""
+    if isinstance(paths, str):
+        paths = [paths]
+    return {"paths": list(paths), "doubt": doubt or None,
+            "why": (why or "").strip() or None}
+
+
+def _entry_problems(e, board):
+    """Whether this line actually says anything. Cheap to satisfy, not free."""
+    out = []
+    if not e.get("paths"):
+        out.append("an entry with no paths covers nothing")
+    cited = e.get("doubt")
+    why = (e.get("why") or "").strip()
+
+    if not cited and not why:
+        out.append(f"{'/'.join(e.get('paths') or ['?'])} has neither a doubt id "
+                   f"nor a reason. One or the other is the whole mechanism")
+    flat = why.lower().strip(" .!")
+    if why and (flat.startswith(PLACEHOLDER_PREFIXES) or
+                flat in PLACEHOLDER_EXACT):
+        out.append(f"{'/'.join(e.get('paths') or ['?'])} still carries {why!r} "
+                   f"from the draft. Filing a half-edited draft is worse than "
+                   f"filing nothing, because it looks like an answer")
+    elif why and len(why) < 12:
+        out.append(f"{'/'.join(e.get('paths') or ['?'])} carries {why!r}, which "
+                   f"is too short to be a reason anyone could disagree with")
+    if cited:
+        c = find(board, cited)
+        if c is None:
+            out.append(f"{'/'.join(e.get('paths') or ['?'])} cites {cited}, "
+                       f"which is not on the board")
+        elif c.get("status") == "open" and not why:
+            # Citing a card that is still open is the original failure wearing a
+            # badge: the doubt was noticed, written down, and then run past.
+            out.append(f"{'/'.join(e.get('paths') or ['?'])} cites {cited}, "
+                       f"which is still open. Settle or waive it, or give a "
+                       f"reason for proceeding while it stands")
+    return out
+
+
+def _digest(covered, census=None):
+    body = json.dumps([sorted(covered.items()), sorted((census or {}).items())],
+                      sort_keys=True, default=str)
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
+def file_clearance(slug, jobs, entries, note=None):
+    """Record an all-clear for one or more jobs. Refuses if it leaves a gap.
+
+    Filing is checked here *and* re-checked in `clearance_state`, because the
+    file is editable by hand and a check that only runs at write time is a check
+    that can be walked around with a text editor.
+    """
+    from . import inputs
+    board = load(slug)
+    site = yards.load(slug, "site.json") or {}
+    entries = [dict(e) for e in entries]
+
+    problems = []
+    for e in entries:
+        problems += _entry_problems(e, board)
+
+    written = {}
+    for job in jobs:
+        if job not in JOBS:
+            problems.append(f"{job!r} is not a gated job; nothing would ever "
+                            f"read an all-clear for it")
+            continue
+        soft = soft_inputs(slug, job, site=site)
+        missed = [s["path"] for s in soft
+                  if not any(_covers(e, s["path"]) for e in entries)]
+        if missed:
+            problems.append(
+                f"{job}: {len(missed)} assumed or reported input"
+                f"{'s' if len(missed) > 1 else ''} nothing in this all-clear "
+                f"addresses — " + ", ".join(missed[:6])
+                + (f", and {len(missed) - 6} more" if len(missed) > 6 else ""))
+            continue
+        written[job] = {
+            "job": job,
+            "filed": TODAY,
+            "note": note,
+            "entries": entries,
+            "covered": {s["path"]: f"{s['source']}/{s['fingerprint']}"
+                        for s in soft},
+            # Not covered by the fingerprints, because nothing here carries a
+            # provenance entry to fingerprint. See inputs.census.
+            "census": inputs.census(site, job),
+        }
+        written[job]["digest"] = _digest(written[job]["covered"],
+                                         written[job]["census"])
+
+    if problems:
+        raise SystemExit(
+            "refusing to file this all-clear:\n  "
+            + "\n  ".join(problems)
+            + f"\n\n  See what has to be answered:  python3 -m lib.doubts "
+              f"{slug} --inputs {list(jobs)[0]}")
+
+    # A line that matches nothing anywhere in this filing is not an error — the
+    # path may be about to exist — but it is almost always a typo in a glob, and
+    # a typo here silently narrows what the clearance actually covers.
+    every = {p for job in written for p in written[job]["covered"]}
+    dead = [e for e in entries
+            if not any(_covers(e, p) for p in every)] if every else []
+
+    doc = load_clearances(slug)
+    doc.setdefault("jobs", {}).update(written)
+    yards.save(slug, CLEARANCE_FILE, doc)
+    return written, dead
+
+
+def _shape_changes(filed, job, site):
+    """What has been added to or removed from the record since it was filed.
+
+    The fingerprints only see values that carry a provenance entry, so this is
+    the only thing standing between a clearance and a new obstruction that
+    carries none. A clearance filed before this existed has no census recorded
+    and is not held to one; it goes current again the first time it is renewed.
+    """
+    from . import inputs
+    was = filed.get("census")
+    if was is None:
+        return []
+    now = inputs.census(site, job)
+    gone = {p for p in was if p not in now}
+    new = {p for p in now if p not in was}
+
+    def buried(path, family):
+        """True if an ancestor is in the same list, so this line adds nothing."""
+        parts = path.split(".")
+        return any(".".join(parts[:i]) in family for i in range(1, len(parts)))
+
+    out = []
+    for path in sorted(set(was) | set(now)):
+        before, after = was.get(path), now.get(path)
+        if before == after:
+            continue
+        # One new wall shows up as the wall, its parent's count, and every
+        # collection inside it. Only the outermost line is worth printing.
+        if buried(path, new if before is None else gone):
+            continue
+        if before is not None and after is not None and any(
+                p.rsplit(".", 1)[0] == path for p in new | gone):
+            continue
+        if before is None:
+            prov = (site or {}).get("provenance") or {}
+            silent = not any(p == path or p.startswith(path + ".")
+                             for p in prov)
+            out.append(f"{path} was added to the record after the all-clear "
+                       f"was filed, holding {after}"
+                       + (", and carries no provenance entry, so nothing has "
+                          "ever asked where it came from" if silent else ""))
+        elif after is None:
+            out.append(f"{path} has been removed from the record since the "
+                       f"all-clear was filed")
+        else:
+            out.append(f"{path} held {before} and now holds {after}")
+    return out
+
+
+def clearance_state(slug, job, site=None):
+    """Whether this job has a current all-clear, and if not, precisely why not.
+
+    Returns a dict whose `state` is one of ok, missing, stale or unsound. The
+    detail lines are written to be pasted in front of whoever is blocked, so
+    they name the paths rather than counting them.
+    """
+    if site is None:
+        site = yards.load(slug, "site.json") or {}
+    soft = soft_inputs(slug, job, site=site)
+    doc = load_clearances(slug)
+    filed = (doc.get("jobs") or {}).get(job)
+
+    base = {"job": job, "soft": len(soft),
+            "filed": (filed or {}).get("filed"),
+            "digest": (filed or {}).get("digest"), "detail": []}
+
+    if not filed:
+        return dict(base, state="missing", summary=(
+            f"no all-clear on record for {job} — "
+            + (f"{len(soft)} of the values it reads "
+               f"{'were' if len(soft) > 1 else 'was'} assumed or reported "
+               f"rather than measured, and nothing says why running on "
+               f"{'them' if len(soft) > 1 else 'it'} is all right" if soft
+               else "nothing it reads is assumed or reported, so this is a "
+                    "one-line formality, but it is still required, because a "
+                    "record that has never written down where a number came "
+                    "from looks exactly like one that measured everything")))
+
+    covered = filed.get("covered") or {}
+    entries = filed.get("entries") or []
+    board = load(slug)
+
+    moved, appeared, unaddressed = [], [], []
+    for s in soft:
+        want = f"{s['source']}/{s['fingerprint']}"
+        have = covered.get(s["path"])
+        if have is None:
+            appeared.append(s["path"])
+        elif have != want:
+            moved.append((s["path"], have.split("/")[0], s["source"]))
+        if not any(_covers(e, s["path"]) for e in entries):
+            unaddressed.append(s["path"])
+
+    shape = _shape_changes(filed, job, site)
+
+    if moved or appeared or shape:
+        detail = []
+        for path, was, now in moved:
+            detail.append(f"{path} has changed since the all-clear was filed"
+                          + (f" (provenance {was} -> {now})" if was != now
+                             else " (the value itself moved)"))
+        for path in appeared:
+            detail.append(f"{path} is assumed or reported and was not in the "
+                          f"record when the all-clear was filed")
+        detail += shape[:6]
+        if len(shape) > 6:
+            detail.append(f"and {len(shape) - 6} more additions or removals")
+        n = len(moved) + len(appeared)
+        said = []
+        if n:
+            said.append(f"{n} of the values it was written over "
+                        f"{'have' if n > 1 else 'has'} moved underneath it")
+        if shape:
+            said.append(f"the record has gained or lost {len(shape)} thing"
+                        f"{'s' if len(shape) > 1 else ''} it reads")
+        return dict(base, state="stale", detail=detail, summary=(
+            f"the all-clear for {job}, filed {filed.get('filed')}, has gone "
+            f"stale — " + " and ".join(said)))
+
+    problems = unaddressed and [
+        f"{p} is assumed or reported and no entry in the all-clear matches it"
+        for p in unaddressed] or []
+    for e in entries:
+        problems += _entry_problems(e, board)
+    if problems:
+        return dict(base, state="unsound", detail=problems, summary=(
+            f"the all-clear for {job} does not hold up: "
+            f"{len(problems)} problem{'s' if len(problems) > 1 else ''} in what "
+            f"it claims"))
+
+    return dict(base, state="ok", summary=(
+        f"all-clear filed {filed.get('filed')} covering {len(soft)} assumed or "
+        f"reported input{'s' if len(soft) != 1 else ''}"))
+
+
+def renewal(slug, job, site=None):
+    """Which lines of a filed all-clear still stand, and which paths moved.
+
+    A clearance goes stale when one value moves, and the reasons written against
+    the other fifteen are still the right reasons. Making someone retype those
+    to correct a single tree height is how this gets `--force`d instead, so the
+    tool hands them back — but only for paths whose value has not moved. A path
+    that changed, or that has newly become assumed since the filing, is never
+    carried: it is returned in `needs` for a fresh answer.
+    """
+    if site is None:
+        site = yards.load(slug, "site.json") or {}
+    soft = soft_inputs(slug, job, site=site)
+    filed = (load_clearances(slug).get("jobs") or {}).get(job)
+    out = {"job": job, "filed": filed, "carry": [], "needs": [],
+           "moved": {}, "soft": soft}
+    if not filed:
+        out["needs"] = [s["path"] for s in soft]
+        return out
+
+    covered = filed.get("covered") or {}
+    for s in soft:
+        have, want = covered.get(s["path"]), f"{s['source']}/{s['fingerprint']}"
+        if have is None:
+            out["moved"][s["path"]] = ("is assumed or reported and was not in "
+                                       "the record when the all-clear was filed")
+        elif have != want:
+            was = have.split("/")[0]
+            out["moved"][s["path"]] = (
+                "has changed since the all-clear was filed"
+                + (f" (provenance {was} -> {s['source']})" if was != s["source"]
+                   else " (the value itself moved)"))
+
+    # An entry is carried whole or not at all. A glob covering fourteen trees,
+    # one of which moved, is a sentence written about the fourteen — so the
+    # honest thing is to put the whole line back in front of someone rather than
+    # to keep it for thirteen and quietly drop the one that changed.
+    for e in filed.get("entries") or []:
+        touched = [s["path"] for s in soft if _covers(e, s["path"])]
+        if touched and not any(p in out["moved"] for p in touched):
+            out["carry"].append(dict(e))
+
+    held = {s["path"] for s in soft
+            if any(_covers(e, s["path"]) for e in out["carry"])}
+    out["needs"] = [s["path"] for s in soft if s["path"] not in held]
+    return out
+
+
+def renew_clearance(slug, jobs, entries=None, note=None):
+    """Re-file the all-clears for `jobs`, keeping every line that still stands.
+
+    Nothing is written unless every job comes out fully covered, so a renewal
+    that half-works does not leave one job cleared and the next one refused.
+    Coverage is re-checked from scratch by `file_clearance`, which is what stops
+    a path that has newly become assumed from riding in on an old filing.
+    """
+    entries = [dict(e) for e in entries or []]
+    site = yards.load(slug, "site.json") or {}
+
+    board = load(slug)
+    plans, short, bad = {}, {}, []
+    for job in jobs:
+        if job not in JOBS:
+            raise SystemExit(f"{job!r} is not a gated job. One of: "
+                             + ", ".join(sorted(JOBS)))
+        r = renewal(slug, job, site=site)
+        if not r["filed"]:
+            raise SystemExit(
+                f"nothing to renew: there is no all-clear on record for {job} "
+                f"on {slug}.\n  File one first:  python3 -m lib.doubts {slug} "
+                f"--inputs {job}")
+        plans[job] = r
+        left = [p for p in r["needs"] if not any(_covers(e, p) for e in entries)]
+        if left:
+            short[job] = left
+        # A line can rot without its value moving — the card it cites gets
+        # reopened. Checked before anything is written, so a renewal across
+        # several jobs cannot half-succeed.
+        for e in r["carry"]:
+            bad += [f"{job}: {p}" for p in _entry_problems(e, board)]
+
+    if bad:
+        raise SystemExit(
+            "refusing to renew: a line on record no longer holds up.\n  "
+            + "\n  ".join(bad)
+            + "\n\n  Replace it on the command line, or settle what it cites.")
+
+    if short:
+        lines = ["refusing to renew: some values have moved and nothing here "
+                 "answers for them."]
+        for job, left in short.items():
+            r = plans[job]
+            lines.append(f"\n  {job}: {len(r['carry'])} line"
+                         f"{'s' if len(r['carry']) != 1 else ''} on record "
+                         f"still stand{'' if len(r['carry']) != 1 else 's'} and "
+                         f"would be kept. These need a fresh answer:")
+            for p in left[:8]:
+                lines.append(f"    {p}"
+                             + (f" — {r['moved'][p]}" if p in r["moved"]
+                                else " — covered by a line that is being "
+                                     "dropped, because another path it covers "
+                                     "moved"))
+            if len(left) > 8:
+                lines.append(f"    and {len(left) - 8} more")
+        wanted = sorted({p for left in short.values() for p in left})
+        lines += [
+            "",
+            "  Renewing carries the old reason forward, so it may only carry a",
+            "  reason that is still about the same value. Give one for each of",
+            "  the above and the rest is kept:",
+            f"    python3 -m lib.doubts {slug} --clear {','.join(jobs)} "
+            f"--renew \\",
+        ]
+        for i, p in enumerate(wanted[:8]):
+            tail = " \\" if i < min(len(wanted), 8) - 1 else ""
+            lines.append(f"        --because '{p}=what is now true about "
+                         f"it'{tail}")
+        if len(wanted) > 8:
+            lines.append(f"        and {len(wanted) - 8} more; "
+                         f"python3 -m lib.doubts {slug} --inputs "
+                         f"{list(short)[0]} lists them")
+        raise SystemExit("\n".join(lines))
+
+    out = {}
+    for job in jobs:
+        plan = plans[job]
+        written, _ = file_clearance(
+            slug, [job], plan["carry"] + entries,
+            note=note or plan["filed"].get("note"))
+        out[job] = dict(written[job], carried=len(plan["carry"]),
+                        answered=len(entries), moved=len(plan["moved"]))
+    return out
+
+
+def draft(slug, job):
+    """A pre-filled command that files the all-clear, with the reasons left blank.
+
+    The whole mechanism turns on this being close to one command. Anyone who has
+    to type sixty dotted paths out of a provenance map will disable the gate
+    instead, and they will be right to. So where a reason is already on record
+    against a path whose value has not moved, the draft hands that reason back
+    rather than a blank: the only `TODO` in a re-file is the thing that changed.
+    """
+    from . import inputs
+    soft = soft_inputs(slug, job)
+    if not soft:
+        return (f"python3 -m lib.doubts {slug} --clear {job} \\\n"
+                f"    --note 'nothing {job} reads is assumed or reported'")
+
+    r = renewal(slug, job)
+    recorded = {}   # path -> the entry on record that still stands for it
+    for e in r["carry"]:
+        for s in soft:
+            if _covers(e, s["path"]):
+                recorded[s["path"]] = e
+
+    by_path = {s["path"]: s for s in soft}
+    lines = [f"python3 -m lib.doubts {slug} --clear {job} \\"]
+    grouped = inputs.group(list(by_path))
+    for i, (pattern, members) in enumerate(grouped):
+        sources = sorted({by_path[m]["source"] for m in members})
+        tail = " \\" if i < len(grouped) - 1 else ""
+        held = {id(recorded[m]) for m in members if m in recorded}
+        if len(held) == 1 and all(m in recorded for m in members):
+            e = recorded[members[0]]
+            if e.get("doubt"):
+                lines.append(f"    --cite '{pattern}={e['doubt']}'{tail}")
+            else:
+                lines.append(f"    --because '{pattern}="
+                             f"{_shquote(e['why'])}'{tail}")
+        else:
+            lines.append(f"    --because '{pattern}=TODO why "
+                         f"{', '.join(sources)} is good enough here, or cite a "
+                         f"settled card'{tail}")
+    return "\n".join(lines)
+
+
+def _shquote(text):
+    """For pasting inside single quotes. An apostrophe in a reason is common."""
+    return str(text).replace("'", "'\\''")
+
+
 # -------------------------------------------------------------------- the gate
 
-PROVISIONAL = "PROVISIONAL - run with open doubts"
+PROVISIONAL = "PROVISIONAL"
+
+# What is wrong, in the two or three words that go into a provisional stamp and
+# into the hook's one-line summary. One copy, because the stamp and the block
+# describing the same yard differently is how a reader stops trusting either.
+CLEARANCE_FAULT = {
+    "missing": "no all-clear",
+    "stale": "a stale all-clear",
+    "unsound": "an all-clear that does not hold up",
+}
+
+
+def _fault(cards, clearance):
+    reasons = []
+    if cards:
+        reasons.append(f"{len(cards)} open doubt"
+                       f"{'s' if len(cards) > 1 else ''}")
+    if clearance["state"] != "ok":
+        reasons.append(CLEARANCE_FAULT[clearance["state"]])
+    return reasons
 
 
 def gate(slug, job, force=False):
-    """Refuse to run an expensive job while a doubt that would change it is open.
+    """Refuse to run an expensive job unless the yard is clear for it.
 
-    Returns True when the refusal was overridden and the caller should stamp its
-    output provisional. Raises SystemExit otherwise, so the gate holds for
-    programmatic callers and not only for the command line. Deliberately the same
-    contract as `sunmodel.check_walked`.
+    Two conditions, and both must hold. Nothing on the board may be open against
+    this job, and there must be a current all-clear for it. The second is the
+    one that inverts the default: silence used to mean permission, and silence
+    is what the failure produces.
+
+    Returns a provisional stamp naming what was overridden when `force` is set
+    and the caller should mark its output. Raises SystemExit otherwise, so the
+    gate holds for programmatic callers and not only for the command line.
+    Deliberately the same contract as `sunmodel.check_walked`.
     """
     cards = open_cards(slug, job=job)
-    if not cards:
+    clearance = clearance_state(slug, job)
+    if not cards and clearance["state"] == "ok":
         return False
 
-    n = len(cards)
-    count = f"{n} open doubt{'s' if n > 1 else ''}"
     what = JOBS.get(job, job)
+    summary = " and ".join(_fault(cards, clearance))
 
     if force:
         # stderr, not stdout: several of these jobs have a --json mode, and a
         # warning printed into the payload turns a machine-readable artifact into
         # a parse error. A warning nobody can pipe past is not a kindness.
-        say = [f"\n!! WARNING: running {job} on {slug} with {count} outstanding.",
-               f"!! This produces {what} on assumptions that are still in",
-               f"!! question, and settling any one of them may change it:", ""]
-        say += [f"!!   [{c['id']}] {c['question']}  ({native(c)})" for c in cards]
-        say.append(f"!! Output stamped {PROVISIONAL!r}.\n")
+        say = [f"\n!! WARNING: running {job} on {slug} past {summary}.", ""]
+        if cards:
+            say += [f"!! This produces {what} on assumptions that are still in",
+                    f"!! question, and settling any one of them may change it:",
+                    ""]
+            say += [f"!!   [{c['id']}] {c['question']}  ({native(c)})"
+                    for c in cards]
+            say.append("")
+        if clearance["state"] != "ok":
+            say.append(f"!! {clearance['summary']}.")
+            say += [f"!!   - {d}" for d in clearance["detail"]]
+            if clearance["soft"]:
+                say += [f"!! Nobody has said why running on those "
+                        f"{clearance['soft']} guessed or remembered values is",
+                        f"!! all right, so this output rests on them unexamined.",
+                        ""]
+            else:
+                say += ["!! Nothing it reads is recorded as assumed or "
+                        "reported, so the all-clear would",
+                        "!! have been a formality — but it was not filed, "
+                        "which is not the same as", "!! looking.", ""]
+        stamp = f"{PROVISIONAL} - forced past {summary}"
+        say += [f"!! Output stamped {stamp!r}.\n"]
         print("\n".join(say), file=sys.stderr)
-        return True
+        return stamp
 
-    lines = [f"refusing to run {job} on {slug}: {count} would change the answer.",
-             f"  This would produce {what}, and these are still open:",
-             ""]
-    for c in cards:
-        lines.append(f"  [{c['id']}] {c['question']}")
-        lines.append(f"        costs     {native(c)}")
-        if c.get("kind") == "choice" and c.get("options"):
-            for o in c["options"]:
-                bits = [b for b in (o.get("pro"), o.get("con"), o.get("cost"))
-                        if b]
-                lines.append(f"        option    {o['name']}"
-                             + (f" — {'; '.join(str(b) for b in bits)}"
-                                if bits else ""))
-        if c.get("how_to_settle"):
-            effort = f"  ({c['effort']})" if c.get("effort") else ""
-            lines.append(f"        to settle {c['how_to_settle']}{effort}")
-        lines.append("")
-    lines += [
-        "  Settling one of these is cheap. Running this, discovering the answer",
-        "  moved, and running it again is not. That is the whole reason this",
-        "  gate exists.",
-        "",
-        f"  Probe what can be probed:  python3 -m lib.doubts {slug} --price",
-        f"  Settle one:                python3 -m lib.doubts {slug} --settle "
-        f"{cards[0]['id']} --answer \"...\" --by measured",
-        f"  Set one aside, on record:  python3 -m lib.doubts {slug} --waive "
-        f"{cards[0]['id']} --reason \"...\"",
-        f"  Override anyway:           python3 -m lib.{job} {slug} --force",
-    ]
-    raise SystemExit("\n".join(lines))
+    raise SystemExit("\n".join(refusal(slug, job, cards, clearance)))
 
 
-def unfiled_warning(slug, job):
-    """A yard leaning on assumptions with nothing at all on its board.
+def refusal(slug, job, cards, clearance):
+    """The refusal, as lines. Shared with the hook so there is one wording.
 
-    The gate can only stop what has been written down, which leaves the original
-    failure half-covered: the doubt that was voiced in prose and never filed. No
-    check here can read prose, but it can read the shape that failure leaves
-    behind — a record largely built on `assumed` and `reported` values, about to
-    have an expensive job run on it, and not one card ever raised against it.
-
-    That is a nudge rather than a refusal. Plenty of legitimate early runs look
-    exactly like this, and blocking them would make the gate something to be
-    disabled rather than used.
+    A block without a redirect is useless, so most of this is the redirect.
     """
-    from . import siteschema
-    board = load(slug)
-    if board.get("cards"):
-        return None
-    site = yards.load(slug, "site.json")
-    if not site:
-        return None
+    what = JOBS.get(job, job)
+    lines = []
 
-    soft = [p for p, e in (site.get("provenance") or {}).items()
-            if e.get("source") in ("assumed", "reported")]
-    if not soft:
-        return None
-    measured = siteschema.measured_fraction(site)
-    # Two assumptions on an otherwise measured record is not the pattern; a
-    # record that is mostly assumption with an empty board is.
-    if len(soft) < 3 or measured > 0.6:
-        return None
-    return {"job": job, "assumed_count": len(soft),
-            "measured_fraction": round(measured, 2),
-            "examples": sorted(soft)[:5]}
+    if cards:
+        n = len(cards)
+        lines += [f"refusing to run {job} on {slug}: {n} open "
+                  f"doubt{'s' if n > 1 else ''} would change the answer.",
+                  f"  This would produce {what}, and these are still open:",
+                  ""]
+        for c in cards:
+            lines.append(f"  [{c['id']}] {c['question']}")
+            lines.append(f"        costs     {native(c)}")
+            if c.get("kind") == "choice" and c.get("options"):
+                for o in c["options"]:
+                    bits = [b for b in (o.get("pro"), o.get("con"),
+                                        o.get("cost")) if b]
+                    lines.append(f"        option    {o['name']}"
+                                 + (f" — {'; '.join(str(b) for b in bits)}"
+                                    if bits else ""))
+            if c.get("how_to_settle"):
+                effort = f"  ({c['effort']})" if c.get("effort") else ""
+                lines.append(f"        to settle {c['how_to_settle']}{effort}")
+            lines.append("")
+        lines += [
+            "  Settling one of these is cheap. Running this, discovering the",
+            "  answer moved, and running it again is not. That is the whole",
+            "  reason this gate exists.",
+            "",
+            f"  Probe what can be probed:  python3 -m lib.doubts {slug} --price",
+            f"  Settle one:                python3 -m lib.doubts {slug} "
+            f"--settle {cards[0]['id']} --answer \"...\" --by measured",
+            f"  Set one aside, on record:  python3 -m lib.doubts {slug} "
+            f"--waive {cards[0]['id']} --reason \"...\"",
+            "",
+        ]
+
+    if clearance["state"] != "ok":
+        if not cards:
+            lines.append(f"refusing to run {job} on {slug}: "
+                         f"{clearance['summary']}.")
+        else:
+            lines.append(f"Also: {clearance['summary']}.")
+        for d in clearance["detail"]:
+            lines.append(f"  - {d}")
+        lines.append("")
+        lines += [f"  {ln}" for ln in WHY_CLEARANCE[clearance["state"]]]
+        lines += [
+            "",
+            "  What has to be answered, with the command pre-filled:",
+            f"    python3 -m lib.doubts {slug} --inputs {job}",
+            "",
+            "  File it, replacing each TODO with the real reason (a reason "
+            "under 12",
+            "  characters is refused as too short to disagree with):",
+            f"    python3 -m lib.doubts {slug} --clear {job} "
+            f"--because 'some.path.*=why running on this is all right'",
+            "",
+        ]
+        if clearance["state"] == "stale":
+            lines += [
+                "  Or keep every reason whose value has not moved, and answer "
+                "only for",
+                "  what changed:",
+                f"    python3 -m lib.doubts {slug} --clear {job} --renew",
+                "",
+            ]
+        lines += [
+            "  Where a card on the board already answers a path, cite it "
+            "instead — once",
+            "  the card is settled or waived, because citing an open one is "
+            "the failure",
+            "  this gate is about, with a reference number on it:",
+            f"    python3 -m lib.doubts {slug} --clear {job} "
+            f"--cite 'obstructions.fences.*.height=d3'",
+            "",
+            "  One filing can cover several jobs: --clear sunmodel,design or "
+            "--clear all.",
+            "",
+        ]
+
+    lines.append(f"  Override anyway:           python3 -m lib.{job} {slug} "
+                 f"--force")
+    return lines
+
+
+# Why each refusal is a refusal, in the words that make it worth complying with
+# rather than disabling. Kept apart from `refusal` so the three cases can be
+# read against each other.
+WHY_CLEARANCE = {
+    "missing": [
+        "An empty doubt board is not permission. It is also exactly what a",
+        "doubt that was thought and never written down looks like from",
+        "outside, and that doubt is the whole reason this gate exists. So",
+        "silence does not clear a job: for every value the job reads that was",
+        "assumed or reported rather than measured, there has to be either a",
+        "doubt card id or a sentence saying why proceeding on it is all right.",
+    ],
+    "stale": [
+        "An all-clear is bound to the values it was written over, so that it",
+        "is a statement about this record rather than a stamp collected once.",
+        "Something it covered has changed, which means nobody has looked at",
+        "the record as it stands now. Most of the reasons on record will still",
+        "be the right ones, and --renew keeps exactly those: every line whose",
+        "value has not moved is carried forward, and only what changed has to",
+        "be answered again.",
+    ],
+    "unsound": [
+        "There is an all-clear, but it does not answer for everything the job",
+        "reads, or one of its lines does not say anything. A clearance with a",
+        "hole in it is worse than none, because it reads as though someone",
+        "checked.",
+    ],
+}
 
 
 def gate_json(slug, job):
@@ -427,14 +1027,43 @@ def gate_json(slug, job):
     Always exits 0 and reports in the payload, because the caller is a shell
     script under `set -e` and an exit code would be read as a broken hook rather
     than as a refusal.
+
+    The agent-facing wording is built here rather than in jq. The redirect is the
+    part of a denial that does any good, and keeping one copy of it in Python
+    means it is the same text the in-process gate raises and it can be tested
+    without a shell.
     """
     cards = open_cards(slug, job=job)
+    clearance = clearance_state(slug, job)
+    blocked = bool(cards) or clearance["state"] != "ok"
+
+    reasons = _fault(cards, clearance)
+
+    agent = ""
+    if blocked:
+        agent = (f"Blocked: {job} on {slug} is held up by "
+                 f"{' and '.join(reasons)}.\n\n"
+                 + "\n".join(refusal(slug, job, cards, clearance))
+                 + "\n\nDo not reach for --force to get unblocked. If you "
+                   "hedged about any of these in the last few messages, that "
+                   "is exactly the case this gate exists for: write the hedge "
+                   "down, settle it or say in the all-clear why it does not "
+                   "matter, and then run.")
+
     return {
         "yard": slug,
+        # Whether this slug is a yard at all. The hook fails open on a yard it
+        # cannot find, because it is a child of the editor and does not inherit
+        # a shell's GARDEN_ROOT; blocking every command on a yard it simply
+        # cannot see is how the whole layer gets uninstalled. The in-process
+        # gate is deliberately stricter and refuses anyway.
+        "yard_known": os.path.isdir(yards.yard_dir(slug)),
         "job": job,
-        "blocked": bool(cards),
+        "blocked": blocked,
         "count": len(cards),
-        "unfiled": unfiled_warning(slug, job) if not cards else None,
+        "reasons": reasons,
+        "clearance": {k: clearance[k]
+                      for k in ("state", "summary", "detail", "soft", "filed")},
         # Options travel with the verdict so that a blocked agent can put the
         # trade in front of a person in the same breath as the refusal, rather
         # than having to go and look the card up first.
@@ -442,6 +1071,9 @@ def gate_json(slug, job):
                    "priced": native(c), "how_to_settle": c.get("how_to_settle"),
                    "options": c.get("options") or []}
                   for c in cards],
+        "agent_message": agent,
+        "user_message": (f"{slug}: {job} blocked by {' and '.join(reasons)}."
+                         if blocked else ""),
     }
 
 
@@ -539,6 +1171,95 @@ def report(slug, only_open=False):
     return board
 
 
+def show_inputs(slug, job):
+    """What an all-clear for this job has to answer, and the command that files it."""
+    from . import inputs
+    if job not in JOBS:
+        raise SystemExit(f"{job!r} is not a gated job. One of: "
+                         + ", ".join(sorted(JOBS)))
+    soft = soft_inputs(slug, job)
+    sections = ", ".join(sorted(inputs.declared(job)))
+    print(f"{slug} — what {job} reads, and what is still a guess\n")
+    print(f"  reads   site.json: {sections}")
+    for line in _wrap(inputs.JOB_INPUTS[job]["why"], 68):
+        print(f"          {line}")
+    print()
+
+    if not soft:
+        print("  Nothing it reads is assumed or reported. The all-clear is a "
+              "formality here,")
+        print("  but it is still required, because a record that has recorded "
+              "no provenance at")
+        print("  all looks exactly like one that was measured throughout.")
+    else:
+        print(f"  {len(soft)} value{'s' if len(soft) > 1 else ''} it reads "
+              f"came from a guess or from somebody's memory:\n")
+        by_path = {s["path"]: s for s in soft}
+        for pattern, members in inputs.group(list(by_path)):
+            srcs = sorted({by_path[m]["source"] for m in members})
+            note = by_path[members[0]]["note"]
+            print(f"    {pattern}")
+            print(f"        {len(members)} value"
+                  f"{'s' if len(members) > 1 else ''}, {', '.join(srcs)}"
+                  + (f" — {note[:56]}" if note else ""))
+    print()
+    state = clearance_state(slug, job)
+    print(f"  on record: {state['summary']}")
+    for d in state["detail"]:
+        print(f"    - {d}")
+    if state["state"] == "ok":
+        return
+
+    r = renewal(slug, job)
+    if r["carry"]:
+        kept, need = len(r["carry"]), len(r["needs"])
+        print(f"\n  {kept} line{'s' if kept != 1 else ''} already on record "
+              f"{'are' if kept != 1 else 'is'} still about the value "
+              f"{'they were' if kept != 1 else 'it was'} written for.")
+        if not need:
+            print("  Nothing has to be re-answered, so this is one command:\n")
+            print(f"    python3 -m lib.doubts {slug} --clear {job} --renew")
+            return
+        print(f"  {need} value{'s' if need != 1 else ''} moved and "
+              f"need{'' if need != 1 else 's'} a fresh answer; renewing keeps "
+              f"the rest:\n")
+        print(f"    python3 -m lib.doubts {slug} --clear {job} --renew \\")
+        for i, p in enumerate(sorted(r["needs"])):
+            tail = " \\" if i < len(r["needs"]) - 1 else ""
+            print(f"        --because '{p}=what is now true about "
+                  f"it'{tail}")
+        for p in sorted(r["needs"]):
+            why = r["moved"].get(p, "is covered by a line being dropped, "
+                                    "because another path it covers moved")
+            print(f"      ^ {p} {why}")
+        print("\n  Or file the whole thing again. The reasons still standing "
+              "are filled in\n  below; the TODO is the part that changed:\n")
+    else:
+        print("\n  File it with this, replacing each TODO with the actual "
+              "reason, or swap a\n  --because for --cite 'paths=d3' where a "
+              "settled card already answers it.\n  A reason under 12 "
+              "characters is refused as too short to disagree with:\n")
+    print(draft(slug, job))
+
+
+def show_clearances(slug):
+    doc = load_clearances(slug)
+    filed = doc.get("jobs") or {}
+    print(f"{slug} — all-clears\n")
+    for job in sorted(JOBS):
+        state = clearance_state(slug, job)
+        mark = {"ok": "ok   ", "missing": "none ", "stale": "STALE",
+                "unsound": "BAD  "}[state["state"]]
+        print(f"  {mark}  {job:10s} {state['summary']}")
+        for d in state["detail"]:
+            print(f"          - {d}")
+        for e in (filed.get(job) or {}).get("entries") or []:
+            answer = e.get("doubt") and f"cites {e['doubt']}" or e.get("why")
+            print(f"          {', '.join(e['paths'])}")
+            print(f"              {answer}")
+        print()
+
+
 def _wrap(text, width):
     from .vision import _wrap as w
     return w(str(text), width)
@@ -578,6 +1299,26 @@ def main():
     ap.add_argument("--gate", metavar="JOB",
                     help="the gate's verdict as JSON, for the hook")
 
+    ap.add_argument("--inputs", metavar="JOB",
+                    help="the assumed and reported values JOB reads, and a "
+                         "pre-filled command that clears them")
+    ap.add_argument("--clear", metavar="JOBS",
+                    help="file an all-clear for one or more gated jobs, "
+                         "comma-separated, or 'all'")
+    ap.add_argument("--renew", action="store_true",
+                    help="re-file, keeping every line on record whose value "
+                         "has not moved. Any that has still needs a --because")
+    ap.add_argument("--because", action="append", default=[], metavar="PATHS=WHY",
+                    help="why it is safe to run on these paths. Repeatable; "
+                         "PATHS is a glob against the provenance path. Under "
+                         "12 characters is refused as too short to be a reason "
+                         "anyone could disagree with")
+    ap.add_argument("--cite", action="append", default=[], metavar="PATHS=ID",
+                    help="the settled doubt card that answers these paths")
+    ap.add_argument("--note", help="a line about the all-clear as a whole")
+    ap.add_argument("--clearances", action="store_true",
+                    help="what has been attested, and whether it still holds")
+
     ap.add_argument("--settle", metavar="ID")
     ap.add_argument("--answer")
     ap.add_argument("--by", default="decided", choices=sorted(SETTLED_BY))
@@ -587,6 +1328,60 @@ def main():
 
     if args.gate:
         print(json.dumps(gate_json(args.slug, args.gate), indent=2))
+        return
+
+    if args.inputs:
+        show_inputs(args.slug, args.inputs)
+        return
+
+    if args.renew and not args.clear:
+        raise SystemExit("--renew re-files an all-clear, so it needs to know "
+                         "which one: --clear <job> --renew")
+
+    if args.clear:
+        jobs = (sorted(JOBS) if args.clear.strip() == "all"
+                else [j.strip() for j in args.clear.split(",") if j.strip()])
+        entries = []
+        for spec in args.because:
+            paths, _, why = spec.partition("=")
+            entries.append(entry(paths.strip(), why=why))
+        for spec in args.cite:
+            paths, _, cid = spec.partition("=")
+            entries.append(entry(paths.strip(), doubt=cid.strip() or None))
+
+        dead = []
+        if args.renew:
+            written = renew_clearance(args.slug, jobs, entries, note=args.note)
+            for job in sorted(written):
+                w = written[job]
+                print(f"all-clear renewed for {job} on {args.slug} "
+                      f"({w['carried']} line"
+                      f"{'s' if w['carried'] != 1 else ''} carried forward, "
+                      f"{w['answered']} answered again, {len(w['covered'])} "
+                      f"value{'s' if len(w['covered']) != 1 else ''} "
+                      f"re-fingerprinted, digest {w['digest']})")
+        else:
+            written, dead = file_clearance(args.slug, jobs, entries,
+                                           note=args.note)
+            for job in sorted(written):
+                w = written[job]
+                print(f"all-clear filed for {job} on {args.slug} "
+                      f"({len(w['covered'])} assumed or reported input"
+                      f"{'s' if len(w['covered']) != 1 else ''}, "
+                      f"digest {w['digest']})")
+        for e in dead:
+            print(f"  note: {', '.join(e['paths'])} matches nothing on this "
+                  f"record. Check the glob — a typo here quietly narrows what "
+                  f"the all-clear covers")
+        # Deliberately not "the moment site.json moves": only the assumed and
+        # reported values are fingerprinted, so a measured value can change
+        # underneath this and it will still read as current.
+        print(f"  it holds until a value it covers changes: "
+              f"python3 -m lib.doubts {args.slug} --clearances")
+        return
+
+    if args.clearances:
+        show_clearances(args.slug)
         return
 
     if args.init:
@@ -659,6 +1454,10 @@ def main():
     if args.check:
         board = yards.load(args.slug, "doubts.json") or blank(args.slug)
         problems = check(board)
+        for job in sorted(JOBS):
+            state = clearance_state(args.slug, job)
+            if state["state"] == "unsound":
+                problems += [f"all-clear for {job}: {d}" for d in state["detail"]]
         if not problems:
             print(f"{args.slug}: the board is well formed")
             return

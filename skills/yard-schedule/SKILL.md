@@ -18,6 +18,8 @@ to prevent.
 ```bash
 cd ~/personal/garden
 python3 -m lib.doubts <slug> --open       # both jobs below refuse while this is open
+python3 -m lib.doubts <slug> --inputs bom # what is still a guess, and how to clear it
+python3 -m lib.doubts <slug> --clear bom,schedule --because '...=...'
 python3 -m lib.bom <slug>
 ```
 
@@ -27,10 +29,16 @@ in question prices the soil, the compost, the mulch and the plant count wrong al
 at once and in the same direction. A bed reported as already amended, wrongly,
 deletes two weekends from the front of the plan.
 
+They also refuse until an all-clear says, in writing, why it is safe to cost a
+bed whose dimensions came from pacing rather than a tape. Both jobs read a narrow
+slice of `site.json` — bed geometry from `zones`, frost and heat from `climate` —
+so on most yards this is one line covering `zones.*`, and the two can be cleared
+in the same filing.
+
 If a run is forced through anyway, the output carries a `provenance` stamp saying
-it is provisional. **Never hand someone a provisional total without the word.** A
-number in a document gets acted on long after the caveat that came with it has
-been forgotten.
+it is provisional and naming what it came past. **Never hand someone a
+provisional total without the word.** A number in a document gets acted on long
+after the caveat that came with it has been forgotten.
 
 Derives quantities from the design and the zone areas, subtracts what
 `conditions.json` says is on hand, and prices the remainder. Two things it does
