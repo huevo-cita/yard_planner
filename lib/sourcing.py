@@ -124,6 +124,7 @@ EARTH_R_MI = 3958.8
 # of materials; `tools/test_sourcing.py` checks the two still agree.
 POT_SIZES = frozenset(["seed", "plug", "4in", "1gal", "3gal", "5gal", "7gal",
                        "15gal", "b&b"])
+COMMONEST_POT = "1gal"
 
 
 # ------------------------------------------------------------------ the record
@@ -607,10 +608,34 @@ def _norm(item):
     return re.sub(r"\s+", " ", s)
 
 
+def normalize_size(size):
+    """One spelling for a pot size, because a design and a price list rarely
+    agree on it.
+
+    `4 in`, `4in`, `4 inch` and `#1` are the same shelf. Left unnormalised they
+    are four separate price classes, each with too little evidence to median,
+    and every one of them falls through to a national guess. `#3` is the trade's
+    own shorthand for a three-gallon."""
+    s = re.sub(r"[\s._-]+", "", str(size or "").lower())
+    if not s:
+        return None
+    m = re.fullmatch(r"#(\d+)", s)
+    if m:
+        return f"{m.group(1)}gal"
+    m = re.fullmatch(r"(\d+)(?:in|inch|inches|\")", s)
+    if m:
+        return f"{m.group(1)}in"
+    m = re.fullmatch(r"(\d+)(?:gal|gallon|gallons|g)", s)
+    if m:
+        return f"{m.group(1)}gal"
+    return {"bb": "b&b", "b&b": "b&b", "balled": "b&b",
+            "bareroot": "bare root", "seeds": "seed"}.get(s, s)
+
+
 def pot_size(item):
     """The size a plant line is bought at, from `plant: Name (1gal)`."""
     m = re.search(r"\(([^()]*)\)\s*$", str(item or ""))
-    return m.group(1).strip().lower() if m else None
+    return normalize_size(m.group(1)) if m else None
 
 
 def item_class(item, unit):
@@ -698,6 +723,21 @@ def _from_class(item, unit, index):
                       f"'{want}' prices, ${vals[0]:,.2f}–${vals[-1]:,.2f}")}
 
 
+def _entries(defaults):
+    """The priced entries in a price map, skipping its prose.
+
+    A hand-written `local-prices.json` carries underscore-prefixed keys holding
+    the research notes — where the figures came from, what the delivery finding
+    was — beside the items. Anything reading the map by key never noticed; this
+    module reads it by value, to take medians across a class."""
+    return [v for v in (defaults or {}).values() if isinstance(v, dict)]
+
+
+def _entry(defaults, item):
+    got = (defaults or {}).get(item)
+    return got if isinstance(got, dict) else {}
+
+
 def _from_national(item, unit, defaults, plant_defaults):
     """The last rung, which must always return something.
 
@@ -707,24 +747,28 @@ def _from_national(item, unit, defaults, plant_defaults):
     size = pot_size(item)
     if str(item or "").startswith("plant: ") and plant_defaults:
         each = plant_defaults.get(size)
-        if each is None:
-            vals = sorted(float(v) for v in plant_defaults.values() if v)
-            each = statistics.median(vals) if vals else None
-            basis = (f"no local evidence and no ballpark for a {size or 'plant'}; "
-                     f"median of {len(vals)} national plant sizes")
-        else:
+        if each is not None:
             basis = f"national ballpark for a {size} plant, not a local quote"
+        elif plant_defaults.get(COMMONEST_POT) is not None:
+            # Not the median across sizes: those run from a seed packet to a
+            # balled tree, so their middle is not an estimate of anything. The
+            # commonest retail size is at least a shelf somebody has seen.
+            each = plant_defaults[COMMONEST_POT]
+            basis = (f"pot size {size!r} is not one this priced; treated as a "
+                     f"{COMMONEST_POT}, which is a guess about the size as well "
+                     f"as the price")
+        else:
+            return None
         if each is None:
             return None
         return _national(each, basis)
 
-    p = (defaults or {}).get(item) or {}
-    each = p.get("unit_usd")
+    each = _entry(defaults, item).get("unit_usd")
     if each is not None:
         return _national(float(each),
                          f"national ballpark for {item}, not a local quote")
 
-    vals = sorted(float(v.get("unit_usd")) for v in (defaults or {}).values()
+    vals = sorted(float(v["unit_usd"]) for v in _entries(defaults)
                   if v.get("unit") == unit and v.get("unit_usd"))
     if not vals:
         return None
@@ -781,9 +825,9 @@ def bulk_estimate(item, defaults):
     `lib.bom` drops a bulk line whose material it has never heard of. Rather than
     lose it, synthesise a rate from the materials it does know and let the line
     through labelled as an estimate."""
-    bags = sorted(float(p["bag_usd"]) for p in (defaults or {}).values()
+    bags = sorted(float(p["bag_usd"]) for p in _entries(defaults)
                   if p.get("bag_usd"))
-    bulk = sorted(float(p["bulk_usd_per_yard"]) for p in (defaults or {}).values()
+    bulk = sorted(float(p["bulk_usd_per_yard"]) for p in _entries(defaults)
                   if p.get("bulk_usd_per_yard"))
     if not bags and not bulk:
         return None

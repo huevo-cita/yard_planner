@@ -460,6 +460,22 @@ def check_ladder(sourcing, bom):
        "and a thing nobody has ever heard of still gets a number",
        unknown and unknown["basis"])
 
+    # A hand-written local-prices.json carries underscore-prefixed prose keys
+    # beside the items. Reading the map by key never met them; taking a median
+    # across its values does, and did, on the first real yard it was pointed at.
+    prosey = {"_source": "sourcing research, Austin TX, 2026-08-30",
+              "_delivery_finding": "bulk delivery never earns back its fee here",
+              **bom.PRICES}
+    try:
+        got = sourcing.price_for("unobtanium", "each", src, defaults=prosey,
+                                 plant_defaults=bom.PLANT_PRICES, order=order)
+        crashed = None
+    except Exception as exc:
+        got, crashed = None, f"{type(exc).__name__}: {exc}"
+    ok(got and got["usd"] > 0,
+       "and a price file carrying research notes among its items does not "
+       "bring the bill down", crashed)
+
 
 def check_bill(bom, sourcing):
     need = quiet(bom.requirements, SLUG)
@@ -569,12 +585,48 @@ def check_moves(sourcing, root):
         json.dump(TASKS, f, indent=2)
 
 
+def check_sizes(sourcing, bom):
+    """A design and a price list rarely spell a pot size the same way."""
+    want = {"4 in": "4in", "4in": "4in", "4 inch": "4in", "4 INCHES": "4in",
+            "1 gal": "1gal", "1gal": "1gal", "1 gallon": "1gal", "#3": "3gal",
+            "15 gal": "15gal", "B&B": "b&b", "bb": "b&b", "seeds": "seed",
+            "plug": "plug", None: None, "": None}
+    wrong = {k: sourcing.normalize_size(k) for k, v in want.items()
+             if sourcing.normalize_size(k) != v}
+    ok(not wrong, "every spelling of a pot size resolves to one price class",
+       wrong)
+
+    ok(all(sourcing.normalize_size(s) in sourcing.POT_SIZES
+           for s in sourcing.POT_SIZES),
+       "and the canonical spellings survive normalising unchanged")
+
+    # The bug this was written for. `4 in` missed the ballpark table, so twelve
+    # 4-inch violas were priced off a median that spanned seed to balled tree
+    # and came to $456.
+    small = sourcing.price_for("plant: Viola (4 in)", "each", {},
+                               defaults=bom.PRICES,
+                               plant_defaults=bom.PLANT_PRICES)
+    ok(small["usd"] == bom.PLANT_PRICES["4in"],
+       "a spaced pot size is priced as the shelf it actually is",
+       f"${small['usd']} against ${bom.PLANT_PRICES['4in']}: {small['basis']}")
+
+    odd = sourcing.price_for("plant: Something (bare root)", "each", {},
+                             defaults=bom.PRICES,
+                             plant_defaults=bom.PLANT_PRICES)
+    ok(odd and odd["usd"] == bom.PLANT_PRICES[sourcing.COMMONEST_POT]
+       and "guess about the size" in odd["basis"],
+       "and a size nothing recognises says so rather than averaging a seed "
+       "packet against a balled tree", odd and odd["basis"])
+
+
 def check_agreement(sourcing, bom):
     """The two modules keep one list of pot sizes between them."""
     ok(set(bom.PLANT_PRICES) == set(sourcing.POT_SIZES),
        "lib.sourcing and lib.bom agree on what sizes a plant is sold in",
        f"only in bom: {sorted(set(bom.PLANT_PRICES) - set(sourcing.POT_SIZES))}, "
        f"only in sourcing: {sorted(set(sourcing.POT_SIZES) - set(bom.PLANT_PRICES))}")
+    ok(sourcing.COMMONEST_POT in bom.PLANT_PRICES,
+       "and on the size an unrecognised one falls back to")
 
 
 def check_evidence(sourcing):
@@ -640,6 +692,8 @@ def main():
         check_moves(sourcing, root)
         print("\n the evidence check")
         check_evidence(sourcing)
+        print("\n pot sizes")
+        check_sizes(sourcing, bom)
         print("\n drift")
         check_agreement(sourcing, bom)
     finally:

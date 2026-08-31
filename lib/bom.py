@@ -161,7 +161,11 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         if p.get("existing") or p.get("role") == "existing":
             continue
         n = int(p.get("count", 1))
-        size = p.get("pot_size", DEFAULT_POT)
+        # Normalised here rather than at the price lookup, so that the item key
+        # a quote has to match is the same string whichever spelling the design
+        # used. `4 in` and `4in` priced as two classes is how twelve violas came
+        # to be worth $456.
+        size = sourcing.normalize_size(p.get("pot_size")) or DEFAULT_POT
         add(f"plant: {p['name']} ({size})", n, "each",
             f"{n} in {p.get('zone', 'the yard')}")
 
@@ -258,7 +262,7 @@ def _price_each(item, unit, overlay, merged, src, index, order):
                              order=order)
     if got and got.get("firm"):
         return got
-    each = (overlay.get(item) or {}).get("unit_usd")
+    each = sourcing._entry(overlay, item).get("unit_usd")
     if each is not None:
         return {"usd": float(each), "low": float(each), "high": float(each),
                 "rung": "published", "firm": True, "n": 1,
@@ -323,8 +327,8 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
             continue
 
         if unit == "cu ft":
-            firm = bool((overlay.get(item) or {}).get("bag_usd") or
-                        (overlay.get(item) or {}).get("bulk_usd_per_yard"))
+            firm = bool(sourcing._entry(overlay, item).get("bag_usd") or
+                        sourcing._entry(overlay, item).get("bulk_usd_per_yard"))
             rates = prices
             basis = ("local rates" if firm else
                      f"national ballpark rate for {item}")
