@@ -16,7 +16,10 @@ Top-level keys
     boundary      the yard outline, and the measurements it was fitted from
     zones         named regions of the yard floor
     features      trees, and anything sitting in or on the yard
-    obstructions  house, fences, neighbouring buildings: what casts shade
+    obstructions  house, fences, neighbouring buildings: what casts shade from
+                  the ground up, plus `overheads` for the things that cast shade
+                  from a height and let light in underneath — eaves, awnings,
+                  pergolas, carports
     provenance    dotted path -> how that number came to be known
     assumptions   plain-language list of what was assumed
     verify_on_site  plain-language list of what to go and check
@@ -44,6 +47,8 @@ list. That is the whole point of tracking it.
 import json
 import os
 import sys
+
+import numpy as np
 
 from . import yards
 
@@ -312,11 +317,157 @@ def validate(site):
         if site["provenance"][p].get("source") not in SOURCES:
             warns.append(f"provenance {p} has an unrecognised source")
 
+    for i, fid, h, ratio in roofs_as_walls(site):
+        height = f"{h:.0f} in" if h else "its stated height"
+        warns.append(
+            f"obstructions.fences.{i} ({fid}) is a CLOSED ring at {height} that "
+            f"contains every wall corner and encloses {ratio:.0%} of the wall "
+            f"footprint's area. That is a ROOF outline, not a wall. Every fence "
+            f"polyline is modelled as a vertical wall from the ground to its "
+            f"height, so this stands the eave overhang on the ground and models "
+            f"every bed under it as indoors — losing the low winter sun that in "
+            f"reality passes underneath a ledge nine feet up. Carry the WALL "
+            f"footprint in the fence list, and move the roof outline to "
+            f"obstructions.overheads as a horizontal plane: "
+            f'{{"polygon": <roof>, "hole": <walls>, "height": <eave>, '
+            f'"transmissivity": 0}}.')
+
+    for label, key, where, frac in enclosed_zones(site):
+        msg = (f"zone {label!r} (zones.{key}) has {frac:.0%} of its footprint "
+               f"inside {where}, which is opaque from grade up. That ground is "
+               f"indoors: it cannot be planted, it reads as permanent shade, "
+               f"and it pulls the zone's mean down for a reason that has "
+               f"nothing to do with light. Correct the zone rectangle or the "
+               f"obstruction — a bed recorded square against a wall that runs "
+               f"at an angle always overlaps a little.")
+        if frac >= 0.5:
+            errs.append(msg + " At this fraction the zone is mostly indoors "
+                              "and its average means nothing.")
+        else:
+            warns.append(msg)
+
     return errs, warns
 
 
 def zone_names(site):
     return list((site.get("zones") or {}).keys())
+
+
+# ------------------------------------------------------------------- geometry
+
+def in_polygon(poly, x, y):
+    """Even-odd point-in-polygon, vectorised over x and y.
+
+    A repeated closing vertex is harmless: a zero-length edge straddles nothing.
+    """
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    inside = np.zeros(np.broadcast(x, y).shape, dtype=bool)
+    x1, y1 = poly[-1]
+    for x2, y2 in poly:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cut = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+        inside ^= ((y1 > y) != (y2 > y)) & (x < cut)
+        x1, y1 = x2, y2
+    return inside
+
+
+def polygon_area(poly):
+    """Signed area by the shoelace formula. A closing vertex is tolerated."""
+    p = poly[:-1] if list(poly[0]) == list(poly[-1]) else poly
+    return sum(p[i][0] * p[(i + 1) % len(p)][1] - p[(i + 1) % len(p)][0] * p[i][1]
+               for i in range(len(p))) / 2.0
+
+
+def ground_rings(site):
+    """Everything opaque that stands on the ground, as (label, polygon).
+
+    A fence polyline whose endpoints coincide is not a fence: it encloses
+    something, and the shade model will run an opaque wall right round it from
+    grade to its height. The house footprint comes first so that a record which
+    carries the same polygon twice reports it under its own name.
+    """
+    out = []
+    obs = site.get("obstructions") or {}
+    walls = (obs.get("house_walls") or {}).get("polygon")
+    if walls:
+        out.append(("obstructions.house_walls", walls))
+    for i, f in enumerate(obs.get("fences") or []):
+        pts = f.get("points") or []
+        if len(pts) > 3 and list(pts[0]) == list(pts[-1]) and f.get("opaque", True):
+            out.append((f"obstructions.fences.{i} ({f.get('id', 'fence')})", pts))
+    for i, b in enumerate(obs.get("context_buildings") or []):
+        if b.get("polygon"):
+            name = b.get("name") or b.get("id") or "building"
+            out.append((f"obstructions.context_buildings.{i} ({name})",
+                        b["polygon"]))
+    return out
+
+
+def roofs_as_walls(site):
+    """Closed fence rings that swallow the wall footprint: a roof entered as a wall.
+
+    An eave is a horizontal shelf nine feet up. Entered in the fence list it
+    becomes a vertical wall standing on the ground, and every bed tucked under
+    the overhang is then modelled as being inside the building. The signature is
+    exact and needs no threshold on height: a ring that contains every wall
+    corner and encloses materially more area than the walls do is the wall
+    outline offset outward by its own eaves.
+    """
+    obs = site.get("obstructions") or {}
+    walls = (obs.get("house_walls") or {}).get("polygon")
+    if not walls:
+        return []
+    wa = abs(polygon_area(walls))
+    if wa <= 0:
+        return []
+    out = []
+    for i, f in enumerate(obs.get("fences") or []):
+        pts = f.get("points") or []
+        if len(pts) < 4 or list(pts[0]) != list(pts[-1]) \
+                or not f.get("opaque", True):
+            continue
+        ra = abs(polygon_area(pts))
+        if ra <= wa * 1.05:
+            continue
+        if in_polygon(np.asarray(pts, float), [p[0] for p in walls],
+                      [p[1] for p in walls]).all():
+            out.append((i, f.get("id", "fence"), f.get("height"), ra / wa))
+    return out
+
+
+def enclosed_zones(site, sample=11):
+    """Zones whose floor falls inside something opaque standing on the ground.
+
+    A bed modelled as indoors is always a bug, whatever put it there — a roof
+    outline entered as a wall, a bed rectangle recorded square against a wall
+    that runs at an angle, a neighbouring footprint traced over the line. It
+    reads as near-permanent shade, which is true and useless, and it drags the
+    zone's mean down without ever looking like an error.
+
+    Returns (label, key, obstruction label, fraction) worst-first, naming only
+    the worst offender per zone so one buried bed does not report five times.
+    """
+    rings = ground_rings(site)
+    if not rings:
+        return []
+    f = (np.arange(sample) + 0.5) / sample
+    out = []
+    for key, spec in (site.get("zones") or {}).items():
+        xr, yr = spec.get("x"), spec.get("y")
+        if not xr or not yr:
+            continue
+        gx, gy = np.meshgrid(xr[0] + f * (xr[1] - xr[0]),
+                             yr[0] + f * (yr[1] - yr[0]))
+        worst, where = 0.0, None
+        for label, poly in rings:
+            frac = float(in_polygon(np.asarray(poly, float), gx, gy).mean())
+            if frac > worst:
+                worst, where = frac, label
+        if worst > 0.02:
+            out.append((spec.get("label_short") or spec.get("label") or key,
+                        key, where, worst))
+    return sorted(out, key=lambda r: -r[3])
 
 
 def load(slug):
