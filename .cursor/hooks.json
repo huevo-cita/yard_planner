@@ -7,12 +7,6 @@
         "matcher": "lib\\.(sunmodel|design|drawbeds|bom|schedule)|yard\\s+(sunmodel|design|drawbeds|bom|schedule)",
         "failClosed": true,
         "timeout": 20
-      },
-      {
-        "type": "prompt",
-        "matcher": "lib\\.(sunmodel|design|drawbeds|bom|schedule)|yard\\s+(sunmodel|design|drawbeds|bom|schedule)",
-        "timeout": 25,
-        "prompt": "You are the unfiled-doubt validator for a garden-planning repo. See .cursor/hooks/VALIDATOR.md for the rule you are enforcing.\n\nThis repo has a hard rule: a doubt about the inputs to an expensive job must be filed as a card in the yard's doubts.json BEFORE that job runs, never voiced as prose and then run past. The five expensive jobs are sunmodel, design, drawbeds, bom and schedule. The deterministic gate that reads doubts.json runs separately and has already had its say. Your job is the one thing it cannot do: notice a doubt that was spoken and never written down.\n\nDecide whether to allow this command. DENY only if the recent conversation contains a specific, unresolved hedge about an input this job depends on that has not been filed as a doubt card. Real examples of what to catch: 'I've assumed that fence is solid board', 'the lidar was leaf-off so the species is a guess', 'not sure whether that bed is 4 or 6 feet deep', 'we could put it against the house or out in the open'.\n\nALLOW in every other case, including all of these:\n- you cannot see the conversation, or have no evidence either way\n- the hedge was already filed as a doubt card, or already settled or waived\n- the uncertainty is a standing limit of the model rather than a live question about this yard: clouds, diffuse light, the far horizon, future tree growth, catalogue days-to-maturity, default prices being national ballpark figures. Those belong in the reporting and the skills already say them\n- the command is a cheap inspection path: --quick, --init, --crossover, a seed-date lookup\n\nFail open. A validator that blocks work it does not understand gets deleted, and then there is no validator.\n\nReply with only a JSON object. To allow: {\"permission\":\"allow\"}. To deny: {\"permission\":\"deny\",\"agent_message\":\"<name the exact hedge you found, quoting it, and give the python3 -m lib.doubts <slug> --add command to file it>\",\"user_message\":\"<one short line naming the unfiled doubt>\"}\n\nHook input: $ARGUMENTS"
       }
     ]
   }
