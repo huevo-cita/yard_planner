@@ -8,6 +8,12 @@
         "failClosed": true,
         "timeout": 20
       }
+    ],
+    "postToolUse": [
+      {
+        "command": ".cursor/hooks/plan-prose.sh",
+        "timeout": 15
+      }
     ]
   }
 }

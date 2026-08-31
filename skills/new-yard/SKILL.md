@@ -160,9 +160,12 @@ Most conversations are this, not a new yard.
 ```bash
 python3 -m lib.yards <slug>      # what it has
 python3 -m lib.gaps <slug>       # what it is missing
+python3 -m lib.changelog <slug>  # what has already been decided, and why
 ```
 
-Then go to the stage that answers the question. Someone asking why their roses
+Read the log before re-arguing something. It is the record of decisions already
+made, and reopening one that was settled for a good reason is how a plan loses a
+week. Then go to the stage that answers the question. Someone asking why their roses
 are dying needs `yard-sun-model` and possibly `yard-conditions`, not a fresh
 intake.
 
@@ -198,6 +201,11 @@ Worth saying plainly at the start rather than at the end:
   breath is the same mistake with an extra step
 - `--force` is not how you get unblocked. Settle the doubt, or waive it with a
   reason on the record
+- A change goes in `changelog.json`, never into the plan as a paragraph about
+  what the plan used to say. Correct the document to the new fact, file what moved
+  and why, and leave a `[cNN]` reference where the reason is worth finding.
+  `python3 -m lib.changelog <slug> --lint` is the check; the rule is in
+  [AGENTS.md](../../AGENTS.md)
 - After every stage, say what is now known and what it changed. A person who has
   answered twenty questions deserves to see them add up to something
 - Where two sources disagree, report both and say which is better. Never average

@@ -246,6 +246,24 @@ python3 -m lib.doubts <slug> --settle d3 \
 Then say what changed. Someone who spent three hours in the sun with a tape has
 earned a straight answer about what it moved.
 
+Say it in the conversation, and file the ones that moved a plan:
+
+```bash
+python3 -m lib.changelog <slug> --from-doubts     # the cards the walk settled
+python3 -m lib.changelog <slug> --add "West fence is 6 ft solid board" \
+  --kind correction --subject "west fence" \
+  --why "measured 6 ft solid cedar; the street photo predated the rebuild" \
+  --source "site walk, taped" --affects PLAN.md
+python3 -m lib.changelog <slug> --render
+```
+
+A walk that corrects the record is the main source of `correction` entries, and
+they are the ones a reader deciding whether to trust the plan comes looking for.
+What it must **not** do is go into `PLAN.md` as a paragraph about what the plan
+used to assume. Correct the plan and let the log hold the assumption. The rule is
+in [AGENTS.md](../../AGENTS.md); `python3 -m lib.changelog <slug> --lint` checks
+`SITE-WALK.md` too.
+
 ## What not to do
 
 - Do not ship a template. If the checklist would read the same for a different

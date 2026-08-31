@@ -131,7 +131,22 @@ Work backward from the transplant window and give real dates:
 
 ## Step 6: Write it down
 
-Two updates, both required, or the next rotation starts blind.
+A sowing calendar is a dated document with its own budget — `SOWING-CALENDAR.md`,
+not a section bolted onto `PLAN.md`, and the plan should say only that the dates
+live there. It is held to the same contract as the plan: sowing dates, transplant
+dates, technique, and no account of what the dates used to be. When a date moves,
+move it and file the reason:
+
+```bash
+python3 -m lib.changelog <slug> --add "Carrots direct-sown, not started indoors" \
+  --kind change --subject carrots --was "..." --now "..." --why "..." \
+  --affects SOWING-CALENDAR.md
+python3 -m lib.changelog <slug> --lint
+```
+
+The full rule is in [AGENTS.md](../../AGENTS.md).
+
+Two updates below, both required, or the next rotation starts blind.
 
 **The log.** Append a new section to `<yard>/raised-bed-log.md`: the season, the
 crops by zone with families, and a placeholder for the outcome. Fill in the previous season's
