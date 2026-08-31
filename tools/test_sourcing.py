@@ -184,10 +184,47 @@ SUPPLIERS = {
          "reviews": [{"platform": "google", "rating": 4.5, "count": 200,
                       "as_of": "2026-08-01", "url": "u", "via": "web search"}],
          "verified_open": {"as_of": "2026-08-01", "how": "site"}},
+        # The only irrigation counter. Nothing better-ranked shares its trade,
+        # so no reassignment may ever take its orders.
+        {"id": "drip", "name": "Drip Counter", "categories": ["irrigation"],
+         "address": "trade", "lat": 30.29, "lon": -97.69, "distance_mi": 4.0,
+         "reviews": [{"platform": "google", "rating": 4.0, "count": 150,
+                      "as_of": "2026-08-01", "url": "u", "via": "web search"}],
+         "verified_open": {"as_of": "2026-08-01", "how": "site"}},
         # Nobody looked this one up.
         {"id": "unchecked", "name": "Unchecked Place",
          "categories": ["nursery"], "address": "somewhere",
          "lat": 30.30, "lon": -97.73, "distance_mi": 3.0},
+    ],
+}
+
+# Buying from the worst-ranked nursery on the board, so every nursery line has
+# somewhere better to go and the question is only which moves are safe.
+TASKS = {
+    "yard": SLUG, "target_date": "2027-03-01",
+    "suppliers": {
+        "mediocre": {"name": "Near Mediocre", "distance_mi": 99,
+                     "note": "holds paid orders for a week, which is the only "
+                             "thing making the September window work"},
+        "drip": {"name": "Drip Counter", "distance_mi": 99},
+        "unchecked": {"name": "Unchecked Place", "distance_mi": 99},
+    },
+    # The critical purchase is deliberately given the last id, so that sorting
+    # by risk and sorting by id disagree. With them in agreement, a build that
+    # ignores risk entirely still comes back in the right order.
+    "shopping": [
+        {"id": "b01", "item": "Compost", "supplier": "mediocre"},
+        {"id": "b02", "item": "Drip emitters", "supplier": "drip"},
+        {"id": "b03", "item": "Broccoli transplants", "supplier": "mediocre"},
+        {"id": "b04", "item": "A pot", "supplier": "unchecked"},
+    ],
+    "tasks": [
+        {"id": "t001", "date": "2026-10-01", "title": "Top up the beds",
+         "gate": {"kind": "soil_temp", "below_f": 85}, "buy": ["b01"]},
+        {"id": "t002", "date": "2026-09-20", "title": "Run the drip line",
+         "buy": ["b02"]},
+        {"id": "t003", "date": "2026-09-19", "title": "Plant the broccoli",
+         "critical": True, "buy": ["b03"]},
     ],
 }
 
@@ -199,7 +236,7 @@ def make_yard(root):
     os.makedirs(d, exist_ok=True)
     for name, obj in (("site.json", SITE), ("design.json", DESIGN),
                       ("conditions.json", CONDITIONS),
-                      ("sourcing.json", SUPPLIERS),
+                      ("sourcing.json", SUPPLIERS), ("tasks.json", TASKS),
                       ("doubts.json", {"yard": SLUG, "doubts": []})):
         with open(os.path.join(d, name), "w") as f:
             json.dump(obj, f, indent=2)
@@ -474,6 +511,64 @@ def check_bill(bom, sourcing):
        [(g["item"], g["at_risk_usd"]) for g in gaps["gaps"]])
 
 
+def check_moves(sourcing, root):
+    found = sourcing.moves(SLUG, today=TODAY)
+    ids = [m["shopping"] for m in found["moves"]]
+
+    ok("b02" not in ids,
+       "an irrigation order is not reassigned to a better-reviewed nursery",
+       f"proposed moves: {ids}")
+    ok(set(ids) == {"b01", "b03"},
+       "the two nursery orders at the worst-ranked shop both move",
+       f"proposed moves: {ids}")
+
+    ok(ids == ["b03", "b01"],
+       "and the one under a critical task is read first, id order notwithstanding",
+       f"order: {[(m['shopping'], m['risk']) for m in found['moves']]}")
+
+    crit = found["moves"][0]
+    ok(crit["risk"] > found["moves"][1]["risk"],
+       "a critical task outranks a gated one",
+       [(m["shopping"], m["risk"], m["risk_why"]) for m in found["moves"]])
+
+    # The sentence somebody has to read. A shorter drive is a poor trade for a
+    # week-long hold when the purchase has a three-day window.
+    ok(crit["gives_up"] and "holds paid orders" in crit["gives_up"],
+       "and the move names what the yard was leaning on the old supplier for",
+       crit.get("gives_up"))
+    ok(crit["tasks"] and crit["tasks"][0]["id"] == "t003"
+       and crit["tasks"][0]["critical"],
+       "and which dated task is affected", crit["tasks"])
+    ok(crit["to"] == "near_good",
+       "and it moves to the top of the board, not merely somewhere better",
+       f"{crit['from']} -> {crit['to']}")
+
+    ok([u["shopping"] for u in found["unranked"]] == ["b04"],
+       "an order pointing at an unassessed supplier is reported, not moved",
+       found["unranked"])
+
+    # And it actually writes.
+    sourcing.apply_moves(SLUG, today=TODAY)
+    after = json.load(open(os.path.join(root, SLUG, "tasks.json")))
+    got = {e["id"]: e["supplier"] for e in after["shopping"]}
+    ok(got["b01"] == "near_good" and got["b03"] == "near_good"
+       and got["b02"] == "drip" and got["b04"] == "unchecked",
+       "applying the moves rewrites exactly those assignments",
+       got)
+    ok(after["suppliers"]["drip"]["distance_mi"] == 4.0,
+       "and the hand-typed distances are replaced by the geocoded ones",
+       after["suppliers"]["drip"])
+    ok(after["suppliers"]["mediocre"]["rank"]["tier"] == "acceptable",
+       "and every supplier row carries the tier it was ranked at",
+       after["suppliers"]["mediocre"].get("rank"))
+
+    ok(not sourcing.moves(SLUG, today=TODAY)["moves"],
+       "and running it again proposes nothing, because it has settled")
+
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(TASKS, f, indent=2)
+
+
 def check_agreement(sourcing, bom):
     """The two modules keep one list of pot sizes between them."""
     ok(set(bom.PLANT_PRICES) == set(sourcing.POT_SIZES),
@@ -541,6 +636,8 @@ def main():
         check_ladder(sourcing, bom)
         print("\n the bill")
         check_bill(bom, sourcing)
+        print("\n the moves")
+        check_moves(sourcing, root)
         print("\n the evidence check")
         check_evidence(sourcing)
         print("\n drift")

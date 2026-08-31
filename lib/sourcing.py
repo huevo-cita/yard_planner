@@ -475,6 +475,130 @@ def best_for(slug, category=None, reach=("local", "regional"), today=None):
     return None
 
 
+# ------------------------------------------------- moving a yard onto the board
+
+def moves(slug, today=None):
+    """Where the ranking disagrees with who this yard is currently buying from.
+
+    A reassignment is proposed when a better-ranked supplier shares a category
+    with the incumbent — the category test is what stops a plant order being
+    moved to an irrigation trade counter because the counter reviews well.
+
+    Ranked by risk rather than by size, because the dangerous move is not the
+    expensive one. It is the one under a task that cannot slip. `gives_up` names
+    what the yard was leaning on the old supplier for, which is the sentence
+    somebody has to actually read: a shorter drive is a poor trade for a policy
+    of holding paid orders for a week when the purchase has a three-day window.
+    """
+    tasks = yards.load(slug, "tasks.json") or {}
+    board = rank(slug, today=today)
+    ladder = board["ranked"] + board["mail"]
+    pos = {a["id"]: i for i, a in enumerate(ladder)}
+    by_id = {a["id"]: a for a in ladder}
+
+    # Which dated tasks each shopping entry is holding up.
+    needs = {}
+    for t in tasks.get("tasks", []):
+        for b in t.get("buy") or []:
+            needs.setdefault(b, []).append(t)
+
+    out, unranked = [], []
+    for entry in tasks.get("shopping", []):
+        sid = entry.get("supplier")
+        if not sid:
+            continue
+        old = by_id.get(sid)
+        if old is None:
+            unranked.append({"shopping": entry.get("id"),
+                             "item": entry.get("item"), "supplier": sid,
+                             "why": "not on the board — unassessed, excluded, "
+                                    "or absent from sourcing.json"})
+            continue
+        cats = set(old["categories"])
+        better = [a for a in ladder
+                  if pos[a["id"]] < pos[sid] and cats & set(a["categories"])]
+        if not better:
+            continue
+        new = better[0]
+
+        affected = needs.get(entry.get("id"), [])
+        critical = [t for t in affected if t.get("critical")]
+        gated = [t for t in affected if t.get("gate")]
+        risk = (2 if critical else 0) + (1 if gated else 0)
+        why_risk = []
+        if critical:
+            why_risk.append(f"{len(critical)} task"
+                            f"{'s' if len(critical) > 1 else ''} marked critical")
+        if gated:
+            why_risk.append(f"{len(gated)} gated on a condition")
+        if not affected:
+            why_risk.append("no dated task depends on it")
+
+        out.append({
+            "shopping": entry.get("id"), "item": entry.get("item"),
+            "from": sid, "from_name": old["name"],
+            "to": new["id"], "to_name": new["name"],
+            "risk": risk, "risk_why": "; ".join(why_risk),
+            "why": (f"{new['name']} is {new['tier']} at "
+                    f"{_dist(new)}, {old['name']} is {old['tier']} at "
+                    f"{_dist(old)}"),
+            "access": new.get("access") or [],
+            "gives_up": (tasks.get("suppliers", {}).get(sid) or {}).get("note"),
+            "tasks": [{"id": t["id"], "title": t.get("title"),
+                       "date": t.get("date"), "critical": bool(t.get("critical")),
+                       "gate": bool(t.get("gate"))} for t in affected],
+        })
+
+    out.sort(key=lambda m: (-m["risk"], -len(m["tasks"]), m["shopping"] or ""))
+    return {"yard": slug, "moves": out, "unranked": unranked}
+
+
+def _dist(a):
+    d = a.get("distance_mi")
+    return f"{d:g} mi" if d is not None else "mail order"
+
+
+def apply_moves(slug, today=None, write=True):
+    """Refresh the yard's supplier table from the record and act on the moves.
+
+    Two things, because they are the same edit: the hand-typed distances in
+    `tasks.json` are replaced by geocoded ones, and every shopping entry the
+    ranking wants to move, moves."""
+    data = load(slug)
+    tasks = yards.load(slug, "tasks.json") or {}
+    found = moves(slug, today)
+    board = rank(slug, today=today)
+    assessed = {a["id"]: a for a in board["ranked"] + board["mail"]}
+
+    table = tasks.setdefault("suppliers", {})
+    for sup in data["suppliers"]:
+        sid = sup.get("id")
+        row = table.setdefault(sid, {})
+        row["name"] = sup.get("name") or row.get("name")
+        for key in ("address", "phone", "hours"):
+            if sup.get(key):
+                row[key] = sup[key]
+        if sup.get("distance_mi") is not None:
+            row["distance_mi"] = sup["distance_mi"]
+        elif assessed.get(sid, {}).get("reach") == "mail":
+            row.pop("distance_mi", None)
+        a = assessed.get(sid)
+        row["rank"] = ({"tier": a["tier"], "reach": a["reach"],
+                        "score": a["score"], "access": a["access"]} if a else
+                       {"tier": None, "reach": "unassessed"})
+        if sup.get("note"):
+            row["note"] = sup["note"]
+
+    by_shopping = {m["shopping"]: m for m in found["moves"]}
+    for entry in tasks.get("shopping", []):
+        m = by_shopping.get(entry.get("id"))
+        if m:
+            entry["supplier"] = m["to"]
+    if write:
+        yards.save(slug, "tasks.json", tasks)
+    return found
+
+
 # ----------------------------------------------------------- the price ladder
 
 def _norm(item):
@@ -827,6 +951,43 @@ def report(slug, category=None, today=None):
     return board
 
 
+def moves_report(found):
+    """The moves, worst risk first. Printed as its own thing rather than left to
+    be found among thirty otherwise routine changelog entries."""
+    ms, un = found["moves"], found["unranked"]
+    if not ms and not un:
+        print(f"{found['yard']}: the ranking agrees with every supplier already "
+              f"chosen")
+        return
+    if ms:
+        risky = sum(1 for m in ms if m["risk"])
+        print(f"{found['yard']} — {len(ms)} reassignment"
+              f"{'s' if len(ms) > 1 else ''}, {risky} touching a task that "
+              f"cannot slip. Read from the top.\n")
+    for m in ms:
+        mark = "!!" if m["risk"] >= 2 else ("! " if m["risk"] else "  ")
+        print(f"{mark}  {m['shopping']}  {str(m['item'])[:48]:48s}")
+        print(f"        {m['from_name']} -> {m['to_name']}")
+        print(f"        {m['why']}")
+        for r in m["access"]:
+            print(f"        the new one also has: {r}")
+        print(f"        risk: {m['risk_why']}")
+        for t in m["tasks"]:
+            flags = ", ".join([f for f, on in
+                               (("critical", t["critical"]), ("gated", t["gate"]))
+                               if on]) or "routine"
+            print(f"          {t['id']} {t['date']} {str(t['title'])[:44]:44s} "
+                  f"({flags})")
+        if m["gives_up"]:
+            print(f"        giving up: {m['gives_up']}")
+        print()
+    if un:
+        print(f"  {len(un)} supplier assignment"
+              f"{'s' if len(un) > 1 else ''} the board cannot speak to\n")
+        for u in un:
+            print(f"    {u['shopping']}  {u['supplier']}: {u['why']}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -839,6 +1000,12 @@ def main():
                     help="re-geocode even where a coordinate already exists")
     ap.add_argument("--check", action="store_true",
                     help="what the evidence is missing")
+    ap.add_argument("--moves", action="store_true",
+                    help="where the ranking disagrees with tasks.json, "
+                         "worst risk first")
+    ap.add_argument("--apply-moves", action="store_true",
+                    help="act on them, and refresh the supplier table with real "
+                         "distances")
     ap.add_argument("--price", metavar="ITEM",
                     help="what this costs, and which rung it came off")
     ap.add_argument("--unit", default="each", help="the unit for --price")
@@ -863,6 +1030,18 @@ def main():
         for f in findings:
             print(f"  {f}")
         raise SystemExit(1)
+
+    if args.moves or args.apply_moves:
+        found = (apply_moves(args.slug) if args.apply_moves
+                 else moves(args.slug))
+        if args.json:
+            print(json.dumps(found, indent=2))
+        else:
+            moves_report(found)
+            if args.apply_moves:
+                print(f"  applied to tasks.json. Every move above needs a "
+                      f"changelog entry: yard changelog {args.slug} --add")
+        return
 
     if args.price:
         from . import bom                       # only for its national ballparks
