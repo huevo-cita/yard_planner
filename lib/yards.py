@@ -34,7 +34,8 @@ REPO_DIRS = {"lib", "maps", "skills", "agents", "bin", "tools", "vault",
 
 # the per-yard files, in the order a yard acquires them
 FILES = ["site.json", "conditions.json", "vision.json", "design.json",
-         "coverage.json", "sun-hours.json", "doubts.json", "all-clear.json"]
+         "coverage.json", "sun-hours.json", "doubts.json", "all-clear.json",
+         "changelog.json"]
 
 PROVENANCE = ["measured", "lidar", "photo", "parcel", "osm", "survey",
               "reported", "derived", "assumed"]
@@ -90,6 +91,15 @@ def save(slug, filename, data):
     with open(p, "w") as fh:
         json.dump(data, fh, indent=2)
         fh.write("\n")
+    return p
+
+
+def write_text(slug, filename, text):
+    """Write a rendered document into the yard, creating the yard if needed."""
+    yard_dir(slug, create=True)
+    p = path(slug, filename)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(text)
     return p
 
 

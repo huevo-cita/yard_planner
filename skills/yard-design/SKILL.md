@@ -215,3 +215,9 @@ Every design gets three sentences that nobody asks for and everybody needs:
 - Pollinator and amphibian gardens rule out several products people believe are
   organic and safe. Say which and why before anyone buys a spray, not after —
   see [reference.md](reference.md#pest-management-for-pollinator-and-amphibian-gardens)
+- When a design changes, change `design.json` and file what moved, rather than
+  writing the substitution's history into the plan. A plant swapped for a real
+  reason is a `change` entry with its `--was` and `--now`; a placement defended at
+  length is a `rationale` entry. Both belong in
+  `python3 -m lib.changelog <slug> --add`, and the rule is in
+  [AGENTS.md](../../AGENTS.md)

@@ -272,10 +272,49 @@ can be made to write a sentence about the fence height before the model runs at
 all. That is a different mechanism aimed at the same waste, and it works on the
 part of the event that *is* observable — the record on disk.
 
+## The other hook here, and why it works where layer 3 did not
+
+`plan-prose.sh` is a `postToolUse` hook that runs `lib.changelog --lint` over a
+plan or schedule document the moment one is written, and returns the findings as
+`additional_context`. It reads prose, which is the thing the section above says
+cannot be done — so the difference is worth being precise about, because it is
+the whole reason this one is not a repeat of layer 3.
+
+Layer 3 tried to read the **conversation**, on an event that cannot see the turn
+in flight, looking for a hedge that might or might not be a doubt. Three
+independent failures: the transcript was not flushed, the target was a judgement
+call, and the trigger phrases scored 17 hits and no real doubts on one turn of
+ordinary technical talk.
+
+This one reads the **file that was just written**, which is on disk by
+definition, and looks for a closed set of phrases that are wrong in a plan
+document whatever else is true — "the previous version", "you were right",
+"moved off Tuesday". Measured the same way layer 3's phrase list was measured,
+against four real documents totalling 27,000 words: **28 findings, and no false
+positives.** That number is why this hook exists and the other one does not.
+
+It returns no `permission` and cannot block a write, which is correct. The write
+is not the mistake; the sentence being in the plan rather than the log is, and
+that is a thing to be told rather than stopped.
+
+`afterFileEdit` is the more obvious event and carries `file_path` directly. It
+was rejected because its documented shape is input only — there is no output
+channel, so a hook on it cannot carry the redirect, and this file's one firm
+conclusion is that a guardrail without a redirect is not a guardrail.
+`postToolUse` returns `additional_context`, so it can say what to do instead.
+
+It runs with no matcher, on every tool call. `postToolUse` matchers filter on
+tool type and the documented list of names does not cover every editing tool, so
+a matcher would have left `StrReplace` — the main editing path — unwatched. Two
+`jq` calls and an exit is cheap enough to pay on every call for complete cover.
+
 ## Turning it off
 
 Each layer detaches on its own:
 
+- **`plan-prose.sh`**: delete its entry in `.cursor/hooks.json`. Nothing depends
+  on it; `lib.changelog --lint` and `lib.buildhtml` still find the same prose,
+  just later.
 - **Layer 2**: delete `.cursor/hooks.json`, or the `doubt-gate.sh` entry in it.
   Keep the two in step — a config pointing at a missing script, with
   `failClosed` set, blocks every gated job.

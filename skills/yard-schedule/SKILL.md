@@ -177,16 +177,64 @@ because autumn planting establishes better in most climates.
 
 ## Step 7 — Deliver it
 
-Write the plan as markdown into the yard's folder. For something printable:
+`PLAN.md` in the yard's folder, and it has a shape. This is a specification, not
+a suggestion, because the alternative was tried: "write the plan as markdown" is
+what the instruction used to say, and one plan reached 9,522 words.
 
-```bash
-python3 -m lib.builddoc plan.md -o plan.docx
+```
+# <address> — the plan to <target date>
+   One short paragraph: what this document is, where the facts live,
+   what lives in another file.
+
+## The next seven days
+   Dated actions with hours. Nothing else.
+## Weekend by weekend to <date>
+   Each item: the action, the date, the duration, the cost, at most one
+   sentence of reason, and a bare [cNN] if there is more to say. Bare —
+   lib.buildhtml makes it a link into CHANGELOG.html when it publishes.
+## The beds
+   A table — bed, size, measured light, planting, state on the target date.
+## What it costs
+   A table — item, quantity, price, source. The cut list underneath.
+## Standing calendars
+   Water, pruning, pests. Tables, not prose.
+## Open decisions
+   From doubts.json. What is owed, and by whom.
 ```
 
-It embeds the maps and produces real tables. Upload with `gdrive.uploadFile` and
-`convertToGoogleFormat: true` for a new doc, or with `fileId` to update an
-existing one in place and keep the link stable. The two options cannot be used
-together.
+**Four things do not go in it.** Any sentence about what the plan used to say. A
+reason longer than one sentence. Second-person argument — "you were right to
+ask", "you asked for butterflies". A heading that asks a question or rebuts one.
+
+All four are change-log entries. File them and the plan gets shorter without
+losing anything:
+
+```bash
+python3 -m lib.changelog <slug> --add "Rose walk moved to Wednesday" \
+  --kind change --subject "rose walk" \
+  --was "Tuesday 1 September" --now "Wednesday 2 September" \
+  --why "the seed tray arrives Tuesday and that sowing is date-bound" \
+  --affects PLAN.md
+python3 -m lib.changelog <slug> --from-doubts   # the settled cards, once each
+python3 -m lib.changelog <slug> --render        # -> CHANGELOG.md
+python3 -m lib.changelog <slug> --lint          # what is still in the wrong file
+```
+
+The full rule, with the phrase list that should trigger it, is in
+[AGENTS.md](../../AGENTS.md). A separate calendar — sowing dates, a rotation — is
+its own document with its own budget, not a section bolted onto the plan.
+
+For something printable:
+
+```bash
+python3 -m lib.builddoc plan.md -o plan.docx     # .docx, with the maps embedded
+python3 -m lib.buildhtml <slug>/PLAN.md --strict # HTML, refusing on lint findings
+```
+
+`builddoc` embeds the maps and produces real tables. Upload with
+`gdrive.uploadFile` and `convertToGoogleFormat: true` for a new doc, or with
+`fileId` to update an existing one in place and keep the link stable. The two
+options cannot be used together.
 
 Then update `conditions.json` with anything that changed — materials bought,
 ground worked, tools acquired. The schedule is disposable; the conditions record
@@ -203,6 +251,9 @@ is not, and next season's plan is only as good as what this one wrote down.
   that no longer fit
 - A task the person has not done before gets the how-to, in the schedule, at the
   weekend it happens. Not a link
+- Never narrate a revision in the plan. Correct the plan to the new fact and file
+  what moved in the change log. A reader on a Wednesday evening should not have
+  to read past the history of the Tuesday it is no longer on
 - Say how long things take honestly. Doubling a first-timer's estimate is closer
   than halving it
 - The heaviest work belongs in the best planting season for that region, which is

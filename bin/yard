@@ -9,6 +9,7 @@
 #   yard                          list the yards
 #   yard <module> [args]          run any lib module: sunmodel, gaps, design ...
 #   yard doubts <slug>            what is still in question, and what it blocks
+#   yard changelog <slug>         what changed, and why the plan reads as it does
 #   yard vault lock <slug>        encrypt a yard so it can travel in the repo
 #   yard scrub                    check nothing personal is about to be published
 #   yard install                  link the skills and agents into ~/.cursor
@@ -31,8 +32,8 @@ PYTHON="${YARD_PYTHON:-python3}"
 cd "$REPO"
 
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
-photomeasure soil climate conditions gaps doubts inputs vision design bom
-schedule builddoc vault"
+photomeasure soil climate conditions gaps doubts inputs changelog vision design
+bom schedule builddoc buildhtml vault"
 
 case "${1:-}" in
   ""|list)

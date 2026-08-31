@@ -4,8 +4,14 @@ The engine is `lib/`, one module per job, each runnable as `python3 -m lib.<name
 or through `./bin/yard <name>`. Per-yard facts live in the yard's own JSON files
 and never in code. Every number carries provenance. `README.md` has the rest.
 
-This file is about one specific failure, because it has happened over and over
-and it costs real money every time.
+This file is about two specific failures, because both have happened over and
+over. The first costs real money every time. The second costs the reader's
+attention, every time the plan is opened, forever.
+
+Both are the same bug: a sentence that should have gone into a file went into
+prose instead, where nothing reads it and nothing acts on it.
+
+# A doubt goes in a file
 
 ## The failure
 
@@ -124,7 +130,7 @@ Everything above catches a doubt that got written down. The failure this file is
 about is the one that did not, and against that failure an empty board is not
 evidence of confidence — it is the signature of the problem.
 
-So the five expensive jobs also want a positive **all-clear**. For each value a
+So the five expensive jobs also want a positive **all-clear**. For each value the
 job reads that came from a guess or from somebody's memory — provenance `assumed`
 or `reported` — the all-clear carries either a doubt card id or a written reason
 for running on it anyway. Nothing filed is a refusal, exactly like an open card.
@@ -222,3 +228,120 @@ say them. Putting them on the board buries the doubts that are actually live.
 Run `python3 -m lib.doubts <slug> --check` if the board starts looking noisy; it
 flags cards that block nothing, choices with no alternatives, anything settled
 without a reason, and an all-clear that has stopped covering what it claims to.
+
+# The plan says what is true now
+
+The second failure this file is about, and it is the same shape as the first: a
+sentence goes into prose where nothing can act on it, and stays there.
+
+## The failure
+
+The plan gets revised. The revision is narrated where it happened, because that
+is where the reason for it is to hand:
+
+> **Wed evening, 30 min — walk both roses with a torch.** *(Moved off Tuesday:
+> the seed tray arrives Tuesday and that sowing is date-bound, this walk is
+> not.)*
+
+Nobody deletes that later, because it is true and it took thought. So it
+accumulates. One `PLAN.md` reached 9,522 words this way, and the person reading it
+on a Wednesday evening has to get past the history of the Tuesday it is not on
+before finding out what to do.
+
+The argument does the same at greater length. A decision that needed real
+reasoning gets the reasoning written beside it — `### What dropping the yaupon
+actually cost`, `### Are the violas enough for g03? No.` — and the conclusion ends
+up in the middle of eight hundred words defending it.
+
+Neither is worthless. That is exactly why they survive. They are in the wrong
+file.
+
+## The rule
+
+**A plan document states what is true now. The history and the argument go to
+`changelog.json`, and the plan carries the current fact, one sentence of reason,
+and a reference.**
+
+The documents this covers: `PLAN.md`, `SCHEDULE.md`, `SOWING-CALENDAR.md`,
+`SOURCING.md`, `SITE-WALK.md`, `CALENDAR.md`. Reference material — the
+`research-*.md` files — is exempt, because it is long for a good reason.
+
+The phrases that mean a log entry is being written into a plan:
+
+- "previously", "originally", "used to be", "the earlier draft", "the previous
+  version", "changed from", "two things changed"
+- "you were right", "you asked", "you said", "you thought", "you chose"
+- "was wrong", "with one correction", "nobody had flagged", "I checked the
+  reasoning", "I had assumed"
+- "rewritten on", "revised against", "this replaces", "superseded", "moved off
+  Tuesday", "no longer applies"
+
+When one of those is about to go into an action document:
+
+```bash
+python3 -m lib.changelog <slug> --add "Rose walk moved to Wednesday" \
+  --kind change --subject "rose walk" \
+  --was "Tuesday 1 September" --now "Wednesday 2 September" \
+  --why "the seed tray arrives Tuesday and that sowing is date-bound; the walk is not" \
+  --affects PLAN.md
+```
+
+Then write the plan line as the instruction alone, with a bare `[c7]` after it if
+the reason is worth finding. **Bare, not a markdown link** — `lib.buildhtml` makes
+the link into `CHANGELOG.html` at publish time, so the plan source keeps reading
+like a plan. Run `--render` after adding entries, or the anchor has nothing to
+land on.
+
+## Three kinds, and the one distinction that matters
+
+    change      the plan said X and now says Y. Needs --was, --now, --why
+    correction  the record was wrong and is now right. Needs --why and --source
+    rationale   no prior state: why the plan is the way it is. Needs --why
+
+`change` and `correction` are not interchangeable. "The walk moved to Wednesday"
+is a change — both days were defensible. "The plan said g02 was bare in December
+and it is not" is a correction, and someone deciding whether to trust the document
+needs to be able to find those on their own. A correction without a `--source`
+is refused: it is only worth more than the error if it says what settled it.
+
+`rationale` is where the argument goes, and it is where most of the words go.
+
+## The reference is the point
+
+A log nobody can navigate is a bin. So every entry carries a `--subject` — the
+bed, the task, the plant — and `--subject g03` reads that thread on its own.
+Reference entries from the plan as `[c14]`, and check them:
+
+```bash
+python3 -m lib.changelog <slug> --lint
+```
+
+It reports the retrospective prose, the argument-shaped headings, any `[cNN]`
+pointing at an entry that does not exist, and any action document over a
+4,000-word budget. The budget counts **prose only** — tables and fenced blocks
+are excluded, because a table is scanned rather than read straight through, and a
+check that fires on a document full of dense well-formed tables is the one that
+gets switched off. `.cursor/hooks/plan-prose.sh` runs the lint the moment a plan
+document is written and hands the findings back; `lib.buildhtml` runs it on the
+way to publishing, and `--strict` makes it refuse.
+
+The budget is advisory and reported apart from the prose findings, so "long but
+clean" stays distinguishable from "short and narrating its own history." The
+second is the failure this is for.
+
+Import the settled doubt cards rather than retyping them — a settled card is
+already a rationale entry carrying better provenance than a retyped one:
+
+```bash
+python3 -m lib.changelog <slug> --from-doubts
+```
+
+## What this is not for
+
+Not a version-control substitute. The log holds what a reader of the plan would
+otherwise ask about — why this plant, why this date, what this replaced. It does
+not hold every edit. "Fixed a typo" and "reworded the intro" belong nowhere, and
+filling the log with them buries the entries someone came to find.
+
+And it is not a place to put a decision that has not been made. That is a `choice`
+card on the doubt board, and it stays there until somebody chooses.
