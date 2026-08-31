@@ -151,8 +151,17 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         kind = (h.get("kind") or h.get("item") or h.get("name") or "").lower()
         qty, unit = h.get("quantity"), h.get("unit")
         if kind:
-            add(kind, float(qty or 1), unit or "each",
+            n = float(qty or 1)
+            add(kind, n, unit or "each",
                 h.get("why") or h.get("note") or "hardscape")
+            # `cost_usd` is what the design costed the whole line at, and it is
+            # the only figure that knows two toad abodes are broken pots off the
+            # spoil heap rather than two of whatever else the yard buys singly.
+            if h.get("cost_usd") is not None and n:
+                try:
+                    need[kind]["design_usd"] = float(h["cost_usd"]) / n
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
         if h.get("fill_cu_ft"):
             add(h.get("fill_material", "garden soil"), float(h["fill_cu_ft"]),
                 "cu ft", f"filling {h.get('name', kind)}")
@@ -392,7 +401,8 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
                         "low": best["usd"] * (1 - spread),
                         "high": best["usd"] * (1 + spread)}, 1.0)
         else:
-            got = _price_each(item, unit, overlay, prices, src, index, order)
+            got = _price_each(item, unit, overlay, prices, src, index, order,
+                              design_usd=e.get("design_usd"))
             ln = line(item, qty, unit, qty * got["usd"], why, have=saved_qty)
             ln["unit_usd"] = got["usd"]
             ln["kind"] = "material"

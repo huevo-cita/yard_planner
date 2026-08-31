@@ -113,6 +113,10 @@ DESIGN = {"yard": SLUG,
               # used to fall out of the bill entirely.
               {"kind": "raised bed", "quantity": 1, "unit": "each",
                "fill_cu_ft": 20, "fill_material": "moon dust"},
+              # Free, and the design says so. A zero here has to survive being
+              # read as "no figure given".
+              {"kind": "toad abodes", "quantity": 2, "unit": "each",
+               "cost_usd": 0},
           ],
           # an `each` item nothing anywhere knows about. Also used to vanish.
           "extra_materials": {"unobtanium": 4}}
@@ -540,6 +544,12 @@ def check_bill(bom, sourcing):
     ok(garlic.get("estimated"),
        "and that figure is still an estimate, because nobody quoted it",
        garlic.get("pricing"))
+
+    toads = by_item.get("toad abodes") or {}
+    ok(toads.get("usd") == 0 and toads.get("high_usd") == 0,
+       "a hardscape line the design costs at nothing costs nothing",
+       f"${toads.get('usd')} up to ${toads.get('high_usd')}: "
+       f"{toads.get('pricing', {}).get('basis')}")
 
     gaps = quiet(bom.price_gaps, SLUG, bom=bill)
     ok(gaps["gaps"] and gaps["gaps"] == sorted(
