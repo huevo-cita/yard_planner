@@ -34,6 +34,15 @@
 .cursor/hooks/.debug
 .cursor/hooks/payload.log
 
+# And any probe file, in advance rather than after the fact. The hook-timing
+# investigation that wrote these is finished and its files are deleted, with the
+# conclusions kept in VALIDATOR.md. The guard stays because the rule above is a
+# whitelist and `.cursor/**` is added back by name, so the next probe.log would
+# be tracked by default -- and that is the file that recorded the assistant's
+# own prose and thinking verbatim.
+.cursor/hooks/probe.log
+.cursor/hooks/probe-*
+
 !lib/
 !lib/**
 !skills/
