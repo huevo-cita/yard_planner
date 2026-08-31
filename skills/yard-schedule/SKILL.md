@@ -293,7 +293,8 @@ For something printable:
 
 ```bash
 python3 -m lib.builddoc plan.md -o plan.docx     # .docx, with the maps embedded
-python3 -m lib.buildhtml <slug>/PLAN.md --strict # HTML, refusing on lint findings
+python3 -m lib.buildhtml <slug>/PLAN.md --strict # HTML, refusing on narration
+                                                 # add --budget to refuse on length too
 ```
 
 `builddoc` embeds the maps and produces real tables. Upload with

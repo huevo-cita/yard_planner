@@ -237,9 +237,14 @@ TASKS = {
         {"id": "t001", "date": "2026-10-01", "title": "Top up the beds",
          "gate": {"kind": "soil_temp", "below_f": 85}, "buy": ["b01"]},
         {"id": "t002", "date": "2026-09-20", "title": "Run the drip line",
-         "buy": ["b02"]},
+         "where": {"supplier": "drip"}, "buy": ["b02"]},
         {"id": "t003", "date": "2026-09-19", "title": "Plant the broccoli",
-         "critical": True, "buy": ["b03"]},
+         "critical": True, "where": {"supplier": "mediocre"}, "buy": ["b03"]},
+        # Buys a line that moves, but is not a trip to the shop it moves off:
+        # a call to the one supplier that publishes a part number, about one
+        # item inside somebody else's order. It must be left alone.
+        {"id": "t004", "date": "2026-09-18", "title": "Phone about the part number",
+         "where": {"supplier": "drip"}, "buy": ["b03"]},
     ],
 }
 
@@ -637,6 +642,18 @@ def check_moves(sourcing, root):
        and got["b02"] == "drip" and got["b04"] == "unchecked",
        "applying the moves rewrites exactly those assignments",
        got)
+    # The order and the trip have to move together. A shopping entry reassigned
+    # while the dated task still names the old shop sends somebody to the wrong
+    # side of town on the right day.
+    where = {t["id"]: (t.get("where") or {}).get("supplier") for t in after["tasks"]}
+    ok(where.get("t003") == "near_good",
+       "and the task that buys it is redirected to the same shop", where)
+    ok(where.get("t002") == "drip",
+       "while a task nobody moved keeps the shop it had", where)
+    ok(where.get("t004") == "drip",
+       "and a task that buys the moved line somewhere else on purpose is left "
+       "where it is", where)
+
     ok(after["suppliers"]["drip"]["distance_mi"] == 4.0,
        "and the hand-typed distances are replaced by the geocoded ones",
        after["suppliers"]["drip"])

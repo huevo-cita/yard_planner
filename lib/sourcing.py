@@ -679,6 +679,18 @@ def apply_moves(slug, today=None, write=True):
         m = by_shopping.get(entry.get("id"))
         if m:
             entry["supplier"] = m["to"]
+
+    # And the same move on the day it happens. A task carries its own
+    # `where.supplier` — it is the address the calendar prints and the shop
+    # somebody drives to on a Saturday. Moving only the shopping entry leaves
+    # the order at one shop and the trip at another, which is worse than not
+    # moving it. Only a task still pointing at the shop being left is touched.
+    for task in tasks.get("tasks", []):
+        where = task.get("where") or {}
+        for b in task.get("buy") or []:
+            m = by_shopping.get(b)
+            if m and where.get("supplier") == m["from"]:
+                where["supplier"] = m["to"]
     if write:
         yards.save(slug, "tasks.json", tasks)
     return found
