@@ -17,8 +17,11 @@ taste ──────────> vision.json ──────────
                      │
                      ├──> coverage.json: what is still unknown, ranked by what it costs
                      │
-                     └──> doubts.json: what is in question — and a gate that stops
-                          the expensive stages until it is settled
+                     ├──> doubts.json: what is in question — and a gate that stops
+                     │    the expensive stages until it is settled
+                     │
+                     └──> changelog.json: what changed and why the plan reads as it
+                          does, so the plan itself can just say what to do
 ```
 
 ## What it actually does
@@ -61,6 +64,28 @@ is thrown away. A doubt gets written to `doubts.json` instead, where something
 reads it. Most are settled automatically by re-running the model across the
 plausible range and discovering the answer barely moves; the rest come back as a
 decision with its options priced. See [AGENTS.md](AGENTS.md).
+
+**And refuses to run on silence.** An empty doubt board used to mean permission,
+which reads the absence of a written doubt as confidence — when absence is
+exactly what the failure above produces. So the same five stages want a positive
+**all-clear** first: for every value the job reads whose provenance is `assumed`
+or `reported` rather than measured, either a doubt card id or a written reason
+for proceeding. `python3 -m lib.doubts <slug> --inputs sunmodel` prints that list
+and the command that files it. Each clearance is bound to a digest of the values
+it covers, so editing `site.json` under it makes it stale, and stale blocks like
+missing. Nothing prevents a lazy blanket clearance; what it buys is that the
+omission becomes a dated artifact making specific claims instead of a silence.
+
+**Says what to do, not what it used to say.** A plan is read to find out what to
+do this weekend, and every sentence about how the plan used to be different is a
+sentence in the way of that answer. They accumulate anyway, because a revision is
+easiest to narrate where it happened: one `PLAN.md` reached nine and a half
+thousand words that way, with a Wednesday-evening instruction sitting behind a
+parenthesis explaining why it was no longer Tuesday. So the history and the
+argument go to `changelog.json`, dated and keyed, and the plan carries the current
+fact, one line of reason and a `[c14]` reference. `yard changelog <slug> --lint`
+finds the prose that has drifted back in; on the four documents it was built
+against it found 28 lines and nothing that was not one.
 
 **Costs and schedules it.** The bill of materials is netted against what the
 inventory says is already in the garage. The schedule back-plans in weekends
@@ -108,6 +133,8 @@ yard sunmodel <slug>              # sun hours per zone per month, and the maps
 yard gaps     <slug>              # what is missing, worst first, with the cost
 yard doubts   <slug>              # what is in question, and what it blocks
 yard doubts   <slug> --price      # probe them, and settle the ones that do not matter
+yard changelog <slug>             # what changed, and why the plan reads as it does
+yard changelog <slug> --lint      # prose in the plan that belongs in the log
 yard design   <slug>              # check a design against the measured site
 yard bom      <slug>              # bill of materials, netted against what is here
 yard schedule <slug>              # the weekend plan, back-planned from the date
@@ -205,8 +232,9 @@ agents/       the subagents, symlinked into ~/.cursor/agents
 bin/yard      one entry point, runnable from any directory
 tools/        install, doctor, and the PII scrubber
 vault/        encrypted yard bundles, committed
-.cursor/      the doubt gate: a hook that denies the expensive jobs while a
-              doubt is open. See .cursor/hooks/VALIDATOR.md
+.cursor/      the doubt gate, which denies the expensive jobs while a doubt is
+              open, and the plan-prose check, which reads a plan document as it
+              is written. See .cursor/hooks/VALIDATOR.md
 AGENTS.md     how to work in here, and the doubt rule in full
 <slug>/       one directory per yard. Never committed.
 ```
@@ -214,8 +242,13 @@ AGENTS.md     how to work in here, and the doubt rule in full
 Each yard holds `site.json` (geometry and the 3D obstruction model),
 `conditions.json` (soil, inventory, the person), `vision.json` (taste, with a
 strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
-`doubts.json` (what is in question, and what it blocks), a prose `profile.md`,
-and `maps/`, `photos/` and `design/`.
+`doubts.json` (what is in question, and what it blocks), `changelog.json` (what
+changed and why it reads as it does), a prose `profile.md`, and `maps/`,
+`photos/` and `design/`.
+
+The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
+`SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true
+now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else.
 
 `site.json`, `conditions.json` and `vision.json` are the sources of truth.
 Correct one and re-run, and every drawing, figure and cost regenerates.
@@ -235,6 +268,13 @@ those are different questions. Nothing gets settled silently: a waived doubt
 carries its reason, an automatically settled one carries the measured spread that
 justified it, and anything produced by forcing past an open doubt is stamped
 provisional and says why.
+
+A change goes in the log, not into the plan. Correct the plan to the new fact and
+file what moved and why, because those are read at different times and by people
+asking different questions — one wants to know what to do on Saturday, the other
+wants to know whether to trust the answer. An entry without its `why` is refused,
+since a line saying only that something changed costs the same to read as the
+sentence it replaced and answers less.
 
 Python 3.9 with numpy and matplotlib, `urllib` over `requests`, and no
 dependency added without a reason that survives being written down.
