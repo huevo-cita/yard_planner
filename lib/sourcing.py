@@ -93,6 +93,10 @@ PRIOR_MEAN_FALLBACK = 4.0
 RATING_SD = 1.2
 CONFIDENCE_Z = 1.0
 
+# The shortest pin anybody could disagree with, borrowed from the all-clear
+# reasons in `lib.doubts` for the same reason they have one.
+MIN_PIN = 12
+
 # Forum evidence can lift a shop nobody rates on Google. It cannot overturn a
 # thousand reviews, so it saturates.
 COMMUNITY_CAP = 0.3
@@ -540,6 +544,15 @@ def moves(slug, today=None):
     what the yard was leaning on the old supplier for, which is the sentence
     somebody has to actually read: a shorter drive is a poor trade for a policy
     of holding paid orders for a week when the purchase has a three-day window.
+
+    A shopping entry carrying `pin` is never moved. Reputation and distance are
+    the only things this module can measure, and they are not the only things
+    that pick a supplier: one nursery holds a paid order for a week, one grows
+    the true species rather than the trade substitute, one is simply the
+    cheapest by the cubic foot. Those reasons were being written into prose
+    notes, where the ranking could not read them and so overrode them every
+    time. A pin puts the reason where the ranking reads it, and the reason is
+    required — a pin nobody can disagree with is just a freeze.
     """
     tasks = yards.load(slug, "tasks.json") or {}
     board = rank(slug, today=today)
@@ -553,10 +566,24 @@ def moves(slug, today=None):
         for b in t.get("buy") or []:
             needs.setdefault(b, []).append(t)
 
-    out, unranked = [], []
+    out, unranked, held = [], [], []
+    mute = [e.get("id") for e in tasks.get("shopping", [])
+            if "pin" in e and len(str(e.get("pin") or "").strip()) < MIN_PIN]
+    if mute:
+        raise SystemExit(
+            f"{slug}: pinned with no reason worth the name: {', '.join(mute)}\n"
+            f"  A pin overrides the ranking, so it has to say what it knows "
+            f"that the ranking does not, in at least {MIN_PIN} characters.")
+
     for entry in tasks.get("shopping", []):
         sid = entry.get("supplier")
         if not sid:
+            continue
+        if entry.get("pin"):
+            held.append({"shopping": entry.get("id"), "item": entry.get("item"),
+                         "supplier": sid,
+                         "supplier_name": (by_id.get(sid) or {}).get("name", sid),
+                         "pin": entry["pin"]})
             continue
         old = by_id.get(sid)
         if old is None:
@@ -565,9 +592,16 @@ def moves(slug, today=None):
                              "why": "not on the board — unassessed, excluded, "
                                     "or absent from sourcing.json"})
             continue
-        cats = set(old["categories"])
-        better = [a for a in ladder
-                  if pos[a["id"]] < pos[sid] and cats & set(a["categories"])]
+        # What this line needs carried, and the new supplier has to cover all of
+        # it. Any-overlap is not good enough: two shops both tagged `bagged`
+        # have that much in common and one of them still does not sell a soil
+        # thermometer. Absent a declaration the line inherits the incumbent's
+        # whole tag list, which is deliberately hard to match — an untagged line
+        # mostly stays put, and tagging it is what unlocks the move.
+        want = entry.get("category") or old["categories"]
+        need = {want} if isinstance(want, str) else set(want)
+        better = [a for a in ladder if pos[a["id"]] < pos[sid]
+                  and need <= set(a["categories"])]
         if not better:
             continue
         new = better[0]
@@ -601,7 +635,7 @@ def moves(slug, today=None):
         })
 
     out.sort(key=lambda m: (-m["risk"], -len(m["tasks"]), m["shopping"] or ""))
-    return {"yard": slug, "moves": out, "unranked": unranked}
+    return {"yard": slug, "moves": out, "unranked": unranked, "held": held}
 
 
 def _dist(a):
@@ -1078,7 +1112,8 @@ def moves_report(found):
     """The moves, worst risk first. Printed as its own thing rather than left to
     be found among thirty otherwise routine changelog entries."""
     ms, un = found["moves"], found["unranked"]
-    if not ms and not un:
+    pinned = found.get("held") or []
+    if not ms and not un and not pinned:
         print(f"{found['yard']}: the ranking agrees with every supplier already "
               f"chosen")
         return
@@ -1103,6 +1138,13 @@ def moves_report(found):
                   f"({flags})")
         if m["gives_up"]:
             print(f"        giving up: {m['gives_up']}")
+        print()
+    if pinned:
+        print(f"  {len(pinned)} held against the ranking, on the record\n")
+        for h in pinned:
+            print(f"    {h['shopping']}  {str(h['item'])[:44]:44s} "
+                  f"stays at {h['supplier_name']}")
+            print(f"          {h['pin']}")
         print()
     if un:
         print(f"  {len(un)} supplier assignment"

@@ -166,8 +166,18 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         # used. `4 in` and `4in` priced as two classes is how twelve violas came
         # to be worth $456.
         size = sourcing.normalize_size(p.get("pot_size")) or DEFAULT_POT
-        add(f"plant: {p['name']} ({size})", n, "each",
-            f"{n} in {p.get('zone', 'the yard')}")
+        key = f"plant: {p['name']} ({size})"
+        add(key, n, "each", f"{n} in {p.get('zone', 'the yard')}")
+        # The design's own figure for this planting, where it gave one. It is
+        # the only thing on file that knows a garlic clove is not a shrub and
+        # that a direct-sown carrot is a seed, and without it every entry with
+        # no `pot_size` was costed as a one-gallon pot: $31.50 of carrots,
+        # $105 of garlic.
+        if p.get("unit_price") is not None:
+            try:
+                need[key]["design_usd"] = float(p["unit_price"])
+            except (TypeError, ValueError):
+                pass
 
     for item, qty in (design.get("extra_materials") or {}).items():
         # A `note` sitting among the quantities is normal in these files and
@@ -256,7 +266,7 @@ def crossover(item, prices=None):
                    f"${fee:.0f} delivery. Below that, buy bags"}
 
 
-def _price_each(item, unit, overlay, merged, src, index, order):
+def _price_each(item, unit, overlay, merged, src, index, order, design_usd=None):
     """One unit of this, and where the figure came from.
 
     The sourcing record is asked first, because a quote there carries a supplier,
@@ -276,13 +286,28 @@ def _price_each(item, unit, overlay, merged, src, index, order):
                 "supplier": None, "supplier_name": None,
                 "as_of": None, "url": None,
                 "basis": "local price file"}
+    # The design's figure beats anything derived from a pot size, because the
+    # design is the only record that knows what form the plant is bought in. It
+    # is still an estimate: nobody quoted it and it carries no date.
+    if design_usd is not None:
+        return {"usd": design_usd, "low": design_usd * 0.75,
+                "high": design_usd * 1.5, "rung": "design", "firm": False,
+                "n": 1, "supplier": None, "supplier_name": None,
+                "as_of": None, "url": None,
+                "basis": "the design's own figure for this planting, which is "
+                         "not a quote"}
     return got
 
 
 def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
         force=False):
     """The requirement, minus what is on site, priced."""
-    overlay = dict(prices or {})
+    # A yard that has been sourced has a price file, and it is the best evidence
+    # about that yard there is. Waiting to be handed it with `--prices` meant the
+    # default run quietly costed Austin against national ballparks while a file
+    # of real Austin prices sat unread in the same directory.
+    overlay = dict(prices if prices is not None
+                   else (yards.load(slug, "local-prices.json") or {}))
     local = bool(overlay)
     # A total is the most actionable thing this repo produces — someone reads it
     # and drives to a yard. An open doubt about a bed's size prices the soil, the
@@ -305,7 +330,8 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
         why = "; ".join(e["why"])
 
         if item.startswith("plant: "):
-            got = _price_each(item, "each", overlay, prices, src, index, order)
+            got = _price_each(item, "each", overlay, prices, src, index, order,
+                              design_usd=e.get("design_usd"))
             ln = line(item[7:], qty, "plants", qty * got["usd"], why)
             ln["unit_usd"] = got["usd"]
             ln["kind"] = "plant"

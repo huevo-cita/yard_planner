@@ -101,6 +101,10 @@ DESIGN = {"yard": SLUG,
               # nothing local carries it at all; mail order does
               {"name": "Yucca pallida", "zone": "bed a", "count": 2,
                "pot_size": "1gal"},
+              # No pot size, because it is not sold in a pot. Left to the pot
+              # ladder it becomes a one-gallon shrub at ten times the money.
+              {"name": "Softneck garlic (cloves)", "zone": "bed a",
+               "count": 10, "unit_price": 1.2},
           ],
           "hardscape": [
               # quoted outright -> published, firm
@@ -217,6 +221,13 @@ TASKS = {
         {"id": "b02", "item": "Drip emitters", "supplier": "drip"},
         {"id": "b03", "item": "Broccoli transplants", "supplier": "mediocre"},
         {"id": "b04", "item": "A pot", "supplier": "unchecked"},
+        {"id": "b05", "item": "Seed potatoes", "supplier": "mediocre",
+         "pin": "the only shop in the county that sells certified seed stock"},
+        # Two categories, one of which the better shop carries. Declaring only
+        # `edibles` would leave an any-overlap test passing by luck, since it
+        # does not overlap `nursery` either.
+        {"id": "b06", "item": "Chard seedlings", "supplier": "mediocre",
+         "category": ["nursery", "edibles"]},
     ],
     "tasks": [
         {"id": "t001", "date": "2026-10-01", "title": "Top up the beds",
@@ -520,6 +531,16 @@ def check_bill(bom, sourcing):
        and by_item["Fall aster (1gal)"].get("estimated"),
        "a quoted line is firm and a derived one is marked estimated")
 
+    # A clove is not a shrub. The design is the only file that knows which of
+    # its plants arrive in pots, and it says so with a price rather than a size.
+    garlic = by_item.get("Softneck garlic (cloves) (1gal)") or {}
+    ok(garlic.get("unit_usd") == 1.2,
+       "a plant with no pot size is costed at the design's own figure",
+       f"${garlic.get('unit_usd')}: {garlic.get('pricing', {}).get('basis')}")
+    ok(garlic.get("estimated"),
+       "and that figure is still an estimate, because nobody quoted it",
+       garlic.get("pricing"))
+
     gaps = quiet(bom.price_gaps, SLUG, bom=bill)
     ok(gaps["gaps"] and gaps["gaps"] == sorted(
         gaps["gaps"], key=lambda g: -g["at_risk_usd"]),
@@ -533,6 +554,13 @@ def check_moves(sourcing, root):
 
     ok("b02" not in ids,
        "an irrigation order is not reassigned to a better-reviewed nursery",
+       f"proposed moves: {ids}")
+
+    # `mediocre` and `near_good` are both tagged `nursery`, so an any-overlap
+    # test hands the chard to a shop with no evidence of ever selling a
+    # vegetable. What the line needs has to be carried in full.
+    ok("b06" not in ids,
+       "a line whose category the better shop does not carry stays where it is",
        f"proposed moves: {ids}")
     ok(set(ids) == {"b01", "b03"},
        "the two nursery orders at the worst-ranked shop both move",
@@ -562,6 +590,34 @@ def check_moves(sourcing, root):
     ok([u["shopping"] for u in found["unranked"]] == ["b04"],
        "an order pointing at an unassessed supplier is reported, not moved",
        found["unranked"])
+
+    # Reputation and distance are the only things this module can measure, and
+    # they are not the only things that pick a supplier. Without this, the shop
+    # that holds a paid order for a week loses the order to a shorter drive
+    # every single time the board is re-run.
+    held = {h["shopping"]: h for h in found["held"]}
+    ok("b05" in held and "b05" not in ids,
+       "a pinned order is held against the ranking rather than moved",
+       f"held {list(held)}, moved {ids}")
+    ok("certified seed stock" in (held.get("b05", {}).get("pin") or ""),
+       "and the report carries the reason it was held", held.get("b05"))
+
+    mute = json.loads(json.dumps(TASKS))
+    for e in mute["shopping"]:
+        if e["id"] == "b05":
+            e["pin"] = "no"
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(mute, f, indent=2)
+    try:
+        sourcing.moves(SLUG, today=TODAY)
+        refused = None
+    except SystemExit as exc:
+        refused = str(exc)
+    ok(refused and "b05" in refused,
+       "a pin with nothing worth disagreeing with is refused, and named",
+       refused)
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(TASKS, f, indent=2)
 
     # And it actually writes.
     sourcing.apply_moves(SLUG, today=TODAY)
