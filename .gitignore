@@ -28,6 +28,12 @@
 !.cursor/
 !.cursor/**
 
+# Except the hook's debug trace. The payload carries a user email, a transcript
+# path and every command the hook has judged, which is exactly the kind of thing
+# a whitelist is supposed to keep out of a public remote.
+.cursor/hooks/.debug
+.cursor/hooks/payload.log
+
 !lib/
 !lib/**
 !skills/

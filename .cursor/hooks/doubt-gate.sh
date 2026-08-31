@@ -54,6 +54,53 @@ command -v jq >/dev/null 2>&1 || allow
 command -v "$PYTHON" >/dev/null 2>&1 || allow
 
 INPUT="$(cat)"
+
+# Proof that Cursor invokes this at all, and a record of what it hands over.
+# Both are otherwise unobservable: a hook that is never called and a hook that
+# allows everything look identical from outside.
+#
+# Switched by the presence of a file rather than an env var, because this runs as
+# a child of the editor and never sees a shell's exports — the same blindness
+# that stops it finding a yard when GARDEN_ROOT points elsewhere.
+if [ -f "$REPO/.cursor/hooks/.debug" ]; then
+  { printf '=== %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '%s\n' "$INPUT"
+    "$PYTHON" - "$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')" <<'PROBE'
+import json, sys
+p = sys.argv[1] if len(sys.argv) > 1 else ""
+if not p:
+    print("  transcript_path: ABSENT"); sys.exit()
+try:
+    rows = [json.loads(l) for l in open(p) if l.strip()]
+except Exception as e:
+    print(f"  transcript unreadable: {e}"); sys.exit()
+
+def text(r):
+    m = r.get("message")
+    if isinstance(m, str): return m
+    if isinstance(m, dict):
+        c = m.get("content")
+        if isinstance(c, str): return c
+        if isinstance(c, list):
+            return " ".join(b.get("text","") for b in c if isinstance(b, dict))
+    return ""
+
+print(f"  records: {len(rows)}")
+tail = [r for r in rows if text(r).strip()][-1:]
+for r in tail:
+    print(f"  last non-empty [{r.get('type')}/{r.get('role')}]: {text(r)[:150]!r}")
+# Did anything from the turn now in flight reach the file before this fired?
+try:
+    last_turn_end = max(i for i, r in enumerate(rows)
+                        if r.get("type") == "turn_ended")
+except ValueError:
+    last_turn_end = -1
+after = [r.get("role") for r in rows[last_turn_end + 1:]]
+print(f"  records after last turn_ended: {len(after)} {after}")
+PROBE
+  } >> "$REPO/.cursor/hooks/payload.log" 2>/dev/null
+fi
+
 CMD="$(printf '%s' "$INPUT" | jq -r '.command // empty' 2>/dev/null)"
 [ -n "$CMD" ] || allow
 

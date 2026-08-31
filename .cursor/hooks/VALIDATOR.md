@@ -1,8 +1,13 @@
 # The doubt gate
 
-Three layers stop an expensive job from running on an assumption nobody believes.
-They are listed here worst-case-first, because each one covers a case the one
-above it cannot see.
+Two layers stop an expensive job from running on an assumption nobody believes.
+They are listed here worst-case-first, because each covers a case the one above it
+cannot see.
+
+There was a third, and it was removed after being measured rather than reasoned
+about. [What cannot be enforced](#what-cannot-be-enforced) is the write-up, and it
+is the most useful section in this file: it marks the edge of what any guardrail
+here can reach, so the next person does not spend a day rebuilding it.
 
 Borrowed shamelessly from [SwissArmyHammer](https://github.com/swissarmyhammer/swissarmyhammer)
 and its Agent Validator Protocol, whose useful conclusion was that a guardrail
@@ -41,6 +46,28 @@ away from the checkout and the editor was not launched with it set, the hook
 cannot find the yard and waves the command through. Layer 1 still holds in that
 case. `python3 tools/doctor.py` reports this.
 
+That one is fixable and currently unfixed: the payload carries `workspace_roots`,
+so the hook could resolve the checkout without depending on an inherited
+environment. Logging the payload is how to see it — `touch .cursor/hooks/.debug`
+and read `payload.log`, which is gitignored because it records a user email and
+every command the hook has judged.
+
+**One unexplained miss, recorded rather than tidied away.** While removing layer 3,
+the first gated command run afterwards did not invoke the hook at all — no log
+line, no denial. Every other invocation in the same session did fire (six observed,
+one missed). It did not reproduce: not by rewriting `hooks.json` byte-identically,
+not by changing a value in it, and not by re-running the same command, which fired
+normally.
+
+So there is no mechanism to name here, only a measurement: **this layer is not
+provably continuous.** Something occasionally does not reach it, and editing
+`hooks.json` is the current suspect without being an established cause. Two
+practical consequences. After changing hook configuration, re-arm the debug log and
+confirm the hook still fires rather than assuming it. And do not treat this layer
+as the thing standing between a doubt and an expensive run — that is layer 1, which
+is in-process, has no registration to lose, and is why a miss here is survivable
+rather than serious.
+
 **The empty-board note.** No check here can read prose, but it can read the shape
 that an unfiled doubt leaves behind: a record built mostly on `assumed` and
 `reported` values, an expensive job about to run on it, and not one card ever
@@ -52,29 +79,64 @@ The matcher and `JOBS` in `lib/doubts.py` have to agree. Drift is silent and
 total: a job added to `JOBS` but not to the matcher is simply never denied at this
 layer. `tools/doctor.py` checks the two against each other.
 
-## Layer 3 — the unfiled-doubt validator, a prompt hook
+## What cannot be enforced
 
-The prompt lives in `.cursor/hooks.json` as a `type: prompt` entry on the same
-event, and the rule it enforces is this file. A sub-agent reads the hook input and
-decides whether the conversation contains a specific unresolved hedge about this
-job's inputs that was never filed.
+There was a Layer 3: a `type: prompt` entry on the same event, handing the
+situation to a sub-agent and asking whether the conversation contained a hedge
+that was never filed. It was meant to catch a doubt while it is still only prose,
+which is the failure the whole mechanism exists for.
 
-This is the only layer that can catch a doubt while it is still only prose, which
-is the failure the whole mechanism exists for.
+It was deleted, because that turns out to be impossible here. The reasoning was
+not from the documentation; it was measured.
 
-**Where it is blind.** A `beforeShellExecution` prompt hook is handed the command
-and its context, and it is not guaranteed to see the conversation. The prompt is
-written to allow whenever it has no evidence, so in the worst case this layer is
-inert rather than wrong. Treat it as an extra chance, not as the mechanism.
+**The experiment.** The hook was made to log the payload it receives
+(`touch .cursor/hooks/.debug`). The payload does not contain the conversation, but
+it does carry `transcript_path`, pointing at the session's JSONL — which looked
+like it made prose-reading deterministic rather than a matter of judgement. So a
+caveat carrying a nonce was written into the assistant's visible output —
 
-It is also the only layer that costs a model call on every gated command, which
-is why its matcher is scoped to the five jobs rather than to all shell commands.
+> One caveat: I've assumed the west fence is solid board. SENTINEL-7F3A.
+
+— and a gated command was run immediately afterwards, in the same turn, with the
+hook dumping what it could see at the moment it fired.
+
+**The result.** 214 records, unchanged from before that turn began. The most
+recent entry was the *user's* message that opened the turn. The sentinel was
+absent.
+
+The transcript is flushed at turn boundaries. A hook firing mid-turn therefore
+sees the conversation only up to the end of the *previous* turn. The caveat written
+in the same turn as the run — the canonical failure, the one `AGENTS.md` is about —
+is invisible, and it is invisible to any layer on this event, whether that layer is
+a prompt or a script. This is not a limitation of the prompt hook. It is the shape
+of the event.
+
+**And the consolation prize does not survive either.** Previous-turn prose *is*
+readable, so the obvious fallback is to scan it for the trigger phrases
+`AGENTS.md` lists. Tried against one real turn of the conversation that built this:
+17 hits, and essentially no real doubts. Mostly "should be" in ordinary technical
+discussion, plus "one caveat" and "worth noting" matching because the trigger list
+itself was being discussed. As an automated detector that denies every gated
+command forever, which is the failure this file warns about twice.
+
+So the trigger phrases work as instructions to something that reasons, and
+collapse as a pattern to match. That is a real result and it is the reason
+`AGENTS.md` is written as a rule addressed to the assistant rather than as a
+regex: **the within-turn case is not externally enforceable, and the honest
+mechanism for it is discipline, not a gate.**
+
+What remains is layer 1, which is deterministic and in-process and always holds;
+layer 2, which is deterministic but not provably continuous, as above; and the
+empty-board note as the one trace an unfiled doubt reliably leaves.
+
+If you are considering rebuilding this: re-run the sentinel experiment first. If a
+nonce written in the same turn still cannot be seen, nothing built on this event
+will work.
 
 ## Turning it off
 
 Each layer detaches on its own:
 
-- **Layer 3**: delete the `type: prompt` entry from `.cursor/hooks.json`.
 - **Layer 2**: delete `.cursor/hooks.json`, or the `doubt-gate.sh` entry in it.
   Keep the two in step — a config pointing at a missing script, with
   `failClosed` set, blocks every gated job.
