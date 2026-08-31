@@ -174,6 +174,7 @@ and their answer is better than a grid cell.
 python3 -m lib.siteschema <slug>       # validate, and list every assumption
 python3 -m lib.drawsite <slug>         # plan, context map, elevation, section
 python3 -m lib.gaps <slug>             # what is still missing, worst first
+python3 -m lib.doubts <slug> --price   # settle the doubts a model can settle
 ```
 
 Look at the drawings. A number that is wrong by a factor of ten is invisible in
@@ -202,13 +203,45 @@ settle it. "20 ft crown base assumed; if the leafy crown starts high, low wester
 sun passes under it through bare trunks" is a note that tells the next reader why
 to care. "assumed" alone is not.
 
+### An assumption you actively distrust is a doubt, not a note
+
+Provenance says where a number came from. It does not say whether you believe it.
+Those come apart constantly during a survey: leaf-off lidar cannot tell an
+evergreen from a bare oak, a street photo predates a rebuild, a parcel polygon
+disagrees with the fence line by six feet. In each case a value goes into the
+record *and* you know it might be wrong in a way that matters.
+
+Record both. The value with its provenance, and a card:
+
+```bash
+python3 -m lib.doubts <slug> --add "Is t3 an evergreen or a bare oak?" \
+    --kind fact --blocks sunmodel,design \
+    --detail "the 3DEP flight was leaf-off, which cannot distinguish them" \
+    --how "photograph a leaf, the bark and a twig" --effort "one photo"
+```
+
+The distinction that matters: an assumption is something nobody has checked, and
+it belongs in `provenance` and in the gap report. A doubt is something *you have
+checked and do not trust*, and it stops the sun model until it is settled. Species
+on a leaf-off survey is the standard example — that single unknown decides the
+winter light in half a yard, and it is the one most often mentioned in passing and
+then modelled straight past.
+
+Where the unknown is a number in `site.json`, give the card a `probe` so it can be
+priced without anyone going outside. `python3 -m lib.doubts <slug> --price` then
+settles the ones that turn out not to matter and leaves the rest for the walk.
+
 ## Rules
 
 - No invented precision. A tape gives inches, lidar gives a foot, OSM gives what
   the city uploaded, and a satellite estimate gives whatever you were willing to
   believe. Carry the difference through
 - An assumption stays labelled an assumption until something measures it
+- An assumption you actively distrust goes on the doubt board as well as into
+  `provenance`. Mentioning it in the handoff paragraph is what lets the sun model
+  run straight past it
 - Where two sources disagree, report both and say which is better and why. Never
-  average them
+  average them. Where the disagreement would change a decision, file it as a
+  doubt so it stops something rather than sitting in a note
 - The person often knows things no dataset does: which tree came down, where it
   floods, what the neighbour is planning. Ask, and record it as `reported`

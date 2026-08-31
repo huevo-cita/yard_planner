@@ -45,7 +45,7 @@ import datetime
 import json
 import re
 
-from . import solar, vision as vision_mod, yards
+from . import doubts, solar, vision as vision_mod, yards
 
 # Hours of direct sun each nursery label actually needs, and what it looks like
 # when it is short. These are the thresholds sunmodel reports against.
@@ -500,7 +500,7 @@ def check_grouping(design):
     return out
 
 
-def check(slug):
+def check(slug, force=False):
     design = yards.load(slug, "design.json") or {}
     site = yards.load(slug, "site.json") or {}
     cond = yards.load_conditions(slug)
@@ -508,6 +508,19 @@ def check(slug):
     sun = yards.load(slug, "sun-hours.json")
 
     out = []
+    # An objection list computed on doubtful geometry is the most misleading
+    # artifact this module can produce: it reads as a verdict, and a `blocking`
+    # objection that evaporates once a fence turns out to be open rail has cost
+    # someone a replanning session for nothing.
+    if doubts.gate(slug, "design", force=force):
+        open_now = doubts.open_cards(slug, job="design")
+        out.append(_obj("note", "doubts",
+                        f"these objections were computed with "
+                        f"{len(open_now)} open doubt"
+                        f"{'s' if len(open_now) > 1 else ''} on the board — "
+                        + "; ".join(c["question"] for c in open_now)
+                        + ". Treat every verdict below as provisional",
+                        f"python3 -m lib.doubts {slug} --open"))
     if not sun:
         out.append(_obj("blocking", "light",
                         "no sun-hours.json, so no plant's light requirement can "
@@ -528,7 +541,7 @@ def check(slug):
     return out
 
 
-def report(slug):
+def report(slug, force=False):
     design = yards.load(slug, "design.json")
     if not design:
         print(f"{slug} has no design.json yet")
@@ -542,7 +555,7 @@ def report(slug):
         print(f"    {z:20s} {sum(p.get('count', 1) for p in inz):3d} plants, "
               f"{len(inz)} kinds")
 
-    objs = check(slug)
+    objs = check(slug, force=force)
     if not objs:
         print("\n  nothing to object to. The site supports this")
         return
@@ -566,6 +579,9 @@ def main():
     ap.add_argument("slug")
     ap.add_argument("--init", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="check against a board with open doubts; the "
+                         "objections come back flagged provisional")
     args = ap.parse_args()
 
     if args.init:
@@ -575,9 +591,9 @@ def main():
         print(f"wrote {yards.save(args.slug, 'design.json', blank(args.slug))}")
         return
     if args.json:
-        print(json.dumps(check(args.slug), indent=2))
+        print(json.dumps(check(args.slug, force=args.force), indent=2))
         return
-    report(args.slug)
+    report(args.slug, force=args.force)
 
 
 if __name__ == "__main__":

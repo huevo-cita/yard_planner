@@ -42,7 +42,7 @@ import argparse
 import json
 import math
 
-from . import conditions as cond_mod, vision as vision_mod, yards
+from . import conditions as cond_mod, doubts, vision as vision_mod, yards
 
 CU_FT_PER_YARD = 27.0
 SETTLE = 1.15                     # loose material settles about this much
@@ -226,9 +226,14 @@ def crossover(item, prices=None):
                    f"${fee:.0f} delivery. Below that, buy bags"}
 
 
-def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0):
+def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
+        force=False):
     """The requirement, minus what is on site, priced."""
     local = bool(prices)
+    # A total is the most actionable thing this repo produces — someone reads it
+    # and drives to a yard. An open doubt about a bed's size prices the soil, the
+    # compost, the mulch and the plant count all wrong at once.
+    provisional = doubts.gate(slug, "bom", force=force)
     prices = {**PRICES, **(prices or {})}
     cond = yards.load_conditions(slug)
     need = requirements(slug, mulch_depth_in, compost_depth_in)
@@ -296,9 +301,12 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0):
         if saved_qty:
             saved += saved_qty * _rough_unit_cost(item, unit, prices)
 
-    return {"yard": slug, "lines": lines, "total_usd": round(total, 2),
-            "saved_by_using_what_is_here_usd": round(saved, 2),
-            "prices": "local" if local else "national ballpark"}
+    out = {"yard": slug, "lines": lines, "total_usd": round(total, 2),
+           "saved_by_using_what_is_here_usd": round(saved, 2),
+           "prices": "local" if local else "national ballpark"}
+    if provisional:
+        out["provenance"] = doubts.PROVISIONAL
+    return out
 
 
 def _rough_unit_cost(item, unit, prices):
@@ -310,14 +318,14 @@ def _rough_unit_cost(item, unit, prices):
 
 # ------------------------------------------------------------------ the budget
 
-def cut_list(slug, bom=None, ceiling=None):
+def cut_list(slug, bom=None, ceiling=None, force=False):
     """What to drop to fit, worst value first.
 
     Order comes from the vision, not from price. The cheapest line is often the
     edging, and dropping the edging is what makes the whole planting look
     unfinished — so the ranking is by how much the person said each thing
     mattered, and structural items are protected."""
-    bom = bom or net(slug)
+    bom = bom or net(slug, force=force)
     cond = yards.load_conditions(slug)
     vis = yards.load_vision(slug)
     ceiling = ceiling or (cond.get("budget") or {}).get("ceiling_usd")
@@ -405,8 +413,8 @@ def _substitute(ln):
 
 # ------------------------------------------------------------------ reporting
 
-def report(slug, prices=None):
-    bom = net(slug, prices)
+def report(slug, prices=None, force=False):
+    bom = net(slug, prices, force=force)
     print(f"{slug} — bill of materials\n")
     if not bom["lines"]:
         print("  nothing in design.json to price yet")
@@ -440,6 +448,9 @@ def report(slug, prices=None):
     if bom["prices"] != "local":
         print("  prices are national ballpark figures, not quotes. Run the "
               "sourcing-scout subagent for real local numbers")
+    if bom.get("provenance"):
+        print(f"  {bom['provenance']}: quantities above rest on assumptions "
+              f"still in question")
 
     for ln in bom["lines"]:
         if ln["unit"] != "cu ft" or ln["usd"] <= 0:
@@ -468,6 +479,9 @@ def main():
     ap.add_argument("--crossover", action="store_true",
                     help="bags-versus-bulk crossover for every bulk material")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="price a yard whose board still has open doubts; the "
+                         "result is stamped provisional")
     args = ap.parse_args()
 
     prices = None
@@ -482,12 +496,12 @@ def main():
                       else f"  {item}: {x['say']}")
         return
     if args.json:
-        print(json.dumps(net(args.slug, prices), indent=2))
+        print(json.dumps(net(args.slug, prices, force=args.force), indent=2))
         return
     if args.cut:
-        print(json.dumps(cut_list(args.slug), indent=2))
+        print(json.dumps(cut_list(args.slug, force=args.force), indent=2))
         return
-    report(args.slug, prices)
+    report(args.slug, prices, force=args.force)
 
 
 if __name__ == "__main__":

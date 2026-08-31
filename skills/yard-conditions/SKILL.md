@@ -223,6 +223,31 @@ merely listed:
 python3 -m lib.gaps <slug>
 ```
 
+A `map only` or `none` confidence is a fact about the record and belongs in the
+gap report, which already prices it. It is not a doubt card. The board is for
+things you have looked at and do not believe, and a soil you have never tested is
+simply untested.
+
+What does belong on the board, because the schedule and the bill of materials both
+refuse to run while it is open:
+
+- **A quantity you were given and do not trust.** "Four bags of compost, I think"
+  becomes a card, not a number. `bom` nets against it and buys twice if it is
+  wrong
+- **Ground you were told is done and have not seen.** A bed reported as edged and
+  amended changes the whole first month of the schedule. If the report is
+  second-hand, file it
+- **An experience level you are unsure you read correctly.** The task gates turn
+  on it, and getting it wrong either patronises someone or hands them a retaining
+  wall
+
+```bash
+python3 -m lib.doubts <slug> --add "Is the back bed already amended, or just dug?" \
+    --kind fact --blocks schedule,bom --usd 220 \
+    --detail "reported second-hand, and it decides two weekends of prep" \
+    --how "look at it, or ask what went in" --effort "one question"
+```
+
 ## What not to do
 
 - Do not present a USDA "Urban land" result as if it described this yard's soil.
@@ -232,3 +257,8 @@ python3 -m lib.gaps <slug>
   or leave it off.
 - Do not record a quantity as "some." The whole point is netting against a bill
   of materials, and "some compost" nets to nothing.
+- Do not put a never-tested thing on the doubt board. That is a gap, the gap
+  report already prices it, and padding the board is how a board stops being read.
+- Do not record a quantity or a state you do not believe without filing the doubt
+  alongside it. A number you distrust in `conditions.json` reads as measured to
+  every tool downstream.

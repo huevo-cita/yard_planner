@@ -16,12 +16,13 @@ ever hard-code a location, a dimension, or a plant.
     soil          USDA soil survey lookup
     climate       hardiness zone, frost dates, monthly normals
     gaps          what is missing, ranked by how much it changes the answer
+    doubts        the doubts that would change the answer, and the gate on them
     bom           bill of materials, netted against what is already on site
     builddoc      markdown to docx for anything that needs printing
 """
 
 __all__ = [
     "yards", "solar", "siteschema", "sunmodel", "drawsite", "drawbeds",
-    "parcel", "lidar", "photomeasure", "soil", "climate", "gaps", "bom",
-    "builddoc",
+    "parcel", "lidar", "photomeasure", "soil", "climate", "gaps", "doubts",
+    "bom", "builddoc",
 ]

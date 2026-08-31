@@ -108,6 +108,23 @@ not in the same bed — the sun model says the west side is your vegetable light
 and the north strip is your shade garden" is a design move. "You can't have that"
 is not, and it is usually wrong anyway.
 
+**A contradiction they did not resolve in the conversation goes on the board.**
+This is the one that costs most when it is skipped: a contradiction found here and
+left as a paragraph gets rediscovered by the designer, who then picks one side
+quietly. Filed as a `choice` card it blocks the design until they have actually
+chosen, with the trade written down in the terms they will be living with.
+
+```bash
+python3 -m lib.doubts <slug> --add "Cottage planting, or the tidy edge?" \
+    --kind choice --blocks design --decisions 4 \
+    --option "cottage|the look they described|reads untidy by August, wants weekly deadheading" \
+    --option "tidy|holds its line all season|a more formal look than the images they sent"
+```
+
+Two musts that cannot both hold is the clearest case. Do not soften it into a
+`strong` on one side to make the file consistent — that is resolving it silently
+with extra steps.
+
 ## Step 6 — Write it, and say what you heard
 
 Record it, then play it back in three or four sentences in their own words. Use
@@ -120,7 +137,8 @@ one they cannot.
 - Their words over your categories, every time
 - No preference gets recorded without a strength
 - Never resolve a contradiction silently by picking the one that is easier to
-  design. Name it and let them choose
+  design. Name it, and if they do not settle it in the conversation, file it as a
+  `choice` card so the design has to stop for it rather than guess
 - An inspiration photograph is the best two weeks of a five-year-old garden shot
   by someone who waited for the light. Say what year one looks like before
   anyone commits to it

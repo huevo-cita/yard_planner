@@ -34,7 +34,7 @@ REPO_DIRS = {"lib", "maps", "skills", "agents", "bin", "tools", "vault",
 
 # the per-yard files, in the order a yard acquires them
 FILES = ["site.json", "conditions.json", "vision.json", "design.json",
-         "coverage.json", "sun-hours.json"]
+         "coverage.json", "sun-hours.json", "doubts.json"]
 
 PROVENANCE = ["measured", "lidar", "photo", "parcel", "osm", "survey",
               "reported", "derived", "assumed"]

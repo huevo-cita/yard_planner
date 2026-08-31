@@ -21,9 +21,45 @@ geometry, so read the gap report before believing a number to a tenth of an hour
 
 ```bash
 cd ~/personal/garden
+python3 -m lib.doubts <slug> --open        # what is still in question
 python3 -m lib.sunmodel <slug> --quick     # coarse, a few seconds, for iterating
 python3 -m lib.sunmodel <slug>             # the real run and every drawing
 ```
+
+**The full run refuses to start while a doubt that blocks it is open.** That is
+deliberate, and it is aimed at one specific waste: a geometry doubt voiced in
+prose, the model run anyway, the doubt then settled, and the whole run thrown
+away. `--quick` is deliberately exempt, because probing across a range is how a
+geometry doubt gets settled in the first place.
+
+So when the geometry is in question, the order is: file the doubt, price it,
+settle what matters, then run.
+
+```bash
+python3 -m lib.doubts <slug> --add "Is the west fence 6 ft board or 3 ft rail?" \
+    --kind fact --blocks sunmodel,design \
+    --detail "the street photo predates the rebuild" \
+    --how "stand at the west line and look" --effort "two minutes"
+python3 -m lib.doubts <slug> --price
+```
+
+A `probe` on the card is what makes `--price` able to answer it without anyone
+going outside — the path into `site.json`, the plausible values, and the zone the
+thing actually rules:
+
+```json
+"probe": {"path": "obstructions.fences.0.height",
+          "values": [36.0, 72.0, 96.0], "zone": "West bed"}
+```
+
+Scope it with `zone` where the unknown governs one bed. An awning over a
+four-foot bed averages away to nothing over the whole yard and completely decides
+the ground underneath it.
+
+A doubt that moves the answer less than about a tenth of an hour a day, and does
+not straddle a light-category threshold, settles itself as `probed-immaterial`
+with the spread recorded. One that spans 5.7 to 7.5 hours does not, because it
+crosses the full-sun line and therefore decides half a plant list.
 
 It writes to the yard's `maps/`:
 
@@ -127,7 +163,7 @@ say which direction the assumption cuts.
 ## When the answer is uncertain
 
 ```bash
-python3 -m lib.gaps <slug>
+python3 -m lib.gaps <slug>       # gaps and open doubts, one ranked list
 ```
 
 Geometry gaps are priced in hours of light a day by re-running the model across
@@ -147,6 +183,11 @@ someone before they buy anything.
 
 - Never quote a sun-hour figure without saying whether the geometry behind it was
   measured or assumed
+- A geometry doubt goes on the board before the full run, not into a caveat
+  alongside its results. If the doubt is worth voicing it is worth blocking on,
+  and if it is not worth blocking on, probe it and say it settled
+- A run forced past an open doubt stamps `sun-hours.json` provisional. Never
+  quote a provisional figure without the word
 - Quote hours to one decimal at most. The model steps in five-minute intervals on
   one representative day a month; a second decimal is invented
 - Say "geometric direct-beam hours under a clear sky" the first time a number is

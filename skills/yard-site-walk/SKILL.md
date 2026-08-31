@@ -29,6 +29,7 @@ cd ~/personal/garden
 python3 -m lib.yards <slug>                    # what this yard has
 python3 -m lib.siteschema <slug> --assumed     # every assumption, with its note
 python3 -m lib.gaps <slug>                     # ranked, priced, worst first
+python3 -m lib.doubts <slug> --open            # what somebody already questioned
 python3 -m lib.drawsite <slug>                 # look at the plan
 ```
 
@@ -39,6 +40,18 @@ carelessness.
 `--assumed` is the single best input, because each assumption already carries a
 note saying what it was based on and what would settle it. Those notes become
 checklist items nearly verbatim.
+
+**Open `fact` doubts belong at the top of the checklist.** A doubt card is an
+assumption somebody has already looked at, decided they do not believe, and
+priced — often by re-running the model across its plausible range. That makes it
+better checklist material than anything else in the record: the question is
+already in plain language, `how_to_settle` is already written, and the card can
+say what the answer is worth. A card reading "1.8 h/day of light, two minutes,
+stand at the west line and look" is the highest-value item a walk can carry.
+
+It also closes the loop that motivates this whole skill. A `fact` doubt exists
+precisely because nobody could settle it from the desk, and a walk is how it gets
+settled rather than waived.
 
 Also read the **dates**. A lidar flight date and a city mapping vintage are what
 justify asking someone to re-count their own trees, and stating the date is what
@@ -212,10 +225,21 @@ When the measurements come back:
   assumption and **deleting its note** rather than leaving a stale one behind
 - Where a measurement contradicts a source, record what it contradicted. That is
   how the next yard learns which sources to distrust
+- **Settle every doubt the walk answered**, with the reading as the answer:
+
+```bash
+python3 -m lib.doubts <slug> --settle d3 \
+    --answer "solid cedar board, 6 ft, taped" --by measured
+```
+
+  A card left open after the walk that answered it blocks the sun model for no
+  reason, and the next person to hit the gate has no way to know it is stale.
+
 - Re-run `python3 -m lib.siteschema <slug>` and `python3 -m lib.drawsite <slug>`
   and look at the plan again
 - Re-run the sun model, because real tree species and real fence heights are
-  usually the two largest corrections it will ever get
+  usually the two largest corrections it will ever get. This is the run the gate
+  was holding open for
 - Clear `pending_site_walk` and re-run `python3 -m lib.gaps <slug>` to show what
   the walk actually bought
 
@@ -233,3 +257,6 @@ earned a straight answer about what it moved.
 - Do not average two disagreeing sources instead of letting a measurement settle it
 - Do not leave the returned readings sitting in the conversation. They go into
   `site.json` with provenance, or the walk did not happen
+- Do not leave a doubt open that the walk settled. The reading goes into the card
+  as well as into `site.json`, or the gate goes on blocking a run nobody needed
+  to block

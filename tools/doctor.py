@@ -9,7 +9,9 @@ on with your afternoon.
 """
 
 import importlib
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +34,8 @@ BINARIES = [
     ("openssl", True, "the vault. Without it, yard data cannot be encrypted "
                       "and so cannot travel in the repo."),
     ("git", True, "version control, and the pre-commit PII guard."),
+    ("jq", False, "the doubt gate hook. Without it the hook fails open and "
+                  "only the in-process Python gate holds."),
 ]
 
 
@@ -104,6 +108,65 @@ def check_data():
     return True
 
 
+def check_gate():
+    """The doubt gate, at both layers, and where the outer one is blind."""
+    from lib import doubts
+
+    ok = True
+    conf = os.path.join(ROOT, ".cursor", "hooks.json")
+    script = os.path.join(ROOT, ".cursor", "hooks", "doubt-gate.sh")
+
+    print("  ok    lib.doubts gate is in-process and always holds")
+
+    if not os.path.exists(conf):
+        print("  warn  no .cursor/hooks.json, so nothing denies the shell "
+              "command itself. The Python gate still refuses.")
+        return True
+    if not os.path.exists(script):
+        print("  FAIL  .cursor/hooks.json points at a doubt-gate.sh that is "
+              "not there. With failClosed set, every gated job is blocked.")
+        return False
+    if not os.access(script, os.X_OK):
+        print("  FAIL  .cursor/hooks/doubt-gate.sh is not executable, so it "
+              "exits 126 and failClosed blocks every gated job. "
+              "`chmod +x .cursor/hooks/doubt-gate.sh`")
+        return False
+    print("  ok    doubt-gate.sh is present and executable")
+
+    # Drift between the matcher and the job list is silent and total: a job
+    # added to JOBS but not to the matcher is never gated by the hook, and
+    # nothing anywhere says so.
+    try:
+        with open(conf) as fh:
+            entries = json.load(fh)["hooks"]["beforeShellExecution"]
+        matcher = next((e.get("matcher") for e in entries
+                        if "doubt-gate.sh" in e.get("command", "")), None)
+    except Exception as exc:
+        print(f"  FAIL  .cursor/hooks.json will not parse: {exc}")
+        return False
+
+    if matcher:
+        missed = [j for j in doubts.JOBS if f"lib\\.{j}" not in matcher
+                  and j not in re.findall(r"[a-z]+", matcher)]
+        if missed:
+            print(f"  warn  the hook matcher does not mention "
+                  f"{', '.join(missed)}, so the shell command for "
+                  f"{'those jobs is' if len(missed) > 1 else 'that job is'} "
+                  f"never denied. Only the Python gate covers "
+                  f"{'them' if len(missed) > 1 else 'it'}.")
+        else:
+            print(f"  ok    matcher covers all {len(doubts.JOBS)} gated jobs")
+
+    from lib import yards
+    if yards.GARDEN_ROOT != yards.REPO_ROOT:
+        print("  warn  GARDEN_ROOT is set away from the checkout. The hook is a "
+              "child of the editor, not of your shell, so it only finds those "
+              "yards if the editor itself was launched with GARDEN_ROOT set. "
+              "Where it cannot find a yard it fails open, by design — the "
+              "Python gate is what holds in that case.")
+    return ok
+
+
 def check_git():
     r = subprocess.run(["git", "-C", ROOT, "check-ignore", "-q", "example-yard"],
                        check=False)
@@ -127,10 +190,12 @@ def main():
     d = check_layout()
     print("\n privacy")
     e = check_git()
+    print("\n doubt gate")
+    f = check_gate()
     print("\n data")
     check_data()
 
-    ok = all([a, b, c, d, e])
+    ok = all([a, b, c, d, e, f])
     print("\n" + ("ready." if ok else
                   "not ready. The FAIL lines above have to be fixed first."))
     print("Optional packages only limit what can be measured automatically; "

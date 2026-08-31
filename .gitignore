@@ -19,8 +19,14 @@
 !.gitignore
 !.gitattributes
 !README.md
+!AGENTS.md
 !LICENSE
 !requirements.txt
+
+# The doubt gate. Checked in on purpose: a guardrail that lives only on one
+# machine is not a guardrail, and this one has to survive a fresh clone.
+!.cursor/
+!.cursor/**
 
 !lib/
 !lib/**
