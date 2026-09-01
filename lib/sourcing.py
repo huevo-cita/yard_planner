@@ -770,6 +770,30 @@ def quotes_index(data, reaches=("local", "regional", "mail")):
     return out
 
 
+def _conditions(quotes):
+    """What has to be true for these prices to be the prices you pay.
+
+    A members-only sale price and a shelf price are not the same claim, and
+    averaging them into a median that says neither is how a budget comes to
+    quietly assume a $60 membership and a trip on one particular Friday. A
+    quote may carry `conditional`, a short phrase naming the condition; it
+    rides along into the basis so the line that rests on it says so."""
+    seen = []
+    for q in quotes:
+        c = (q.get("conditional") or "").strip()
+        if c and c not in seen:
+            seen.append(c)
+    return seen
+
+
+def _with_conditions(out, quotes):
+    conds = _conditions(quotes)
+    if conds:
+        out["conditional"] = conds
+        out["basis"] += " — conditional on " + "; ".join(conds)
+    return out
+
+
 def _from_quotes(hits, order):
     """One or more real quotes for the exact item.
 
@@ -786,14 +810,14 @@ def _from_quotes(hits, order):
     if len(usds) == 1:
         out.update({"usd": round(usds[0], 2), "rung": "published",
                     "basis": f"quoted by {sup.get('name')}"})
-        return out
+        return _with_conditions(out, [q])
     out.update({"usd": round(statistics.median(usds), 2),
                 "rung": "local median",
                 "supplier_usd": round(float(q["usd"]), 2),
                 "basis": (f"median of {len(usds)} local quotes, "
                           f"${usds[0]:,.2f}–${usds[-1]:,.2f}; "
                           f"{sup.get('name')} wants ${float(q['usd']):,.2f}")})
-    return out
+    return _with_conditions(out, [h[1] for h in hits])
 
 
 def _quote_class(q, unit):
@@ -814,19 +838,21 @@ def _from_class(item, unit, index):
         for _sup, q, reach in hits:
             if _quote_class(q, unit) != want:
                 continue
-            anywhere.append(float(q["usd"]))
+            anywhere.append((float(q["usd"]), q))
             if reach in ("local", "regional"):
-                near.append(float(q["usd"]))
-    vals, where = (near, "local") if len(near) >= 2 else (anywhere, "mail-order")
-    if len(vals) < 2:
+                near.append((float(q["usd"]), q))
+    pairs, where = (near, "local") if len(near) >= 2 else (anywhere, "mail-order")
+    if len(pairs) < 2:
         return None
-    vals.sort()
-    return {"usd": round(statistics.median(vals), 2),
-            "low": round(vals[0], 2), "high": round(vals[-1], 2),
-            "rung": "class median", "firm": False, "n": len(vals),
-            "supplier": None, "supplier_name": None, "as_of": None, "url": None,
-            "basis": (f"no quote for this item; median of {len(vals)} {where} "
-                      f"'{want}' prices, ${vals[0]:,.2f}–${vals[-1]:,.2f}")}
+    pairs.sort(key=lambda p: p[0])
+    vals = [v for v, _q in pairs]
+    out = {"usd": round(statistics.median(vals), 2),
+           "low": round(vals[0], 2), "high": round(vals[-1], 2),
+           "rung": "class median", "firm": False, "n": len(vals),
+           "supplier": None, "supplier_name": None, "as_of": None, "url": None,
+           "basis": (f"no quote for this item; median of {len(vals)} {where} "
+                     f"'{want}' prices, ${vals[0]:,.2f}–${vals[-1]:,.2f}")}
+    return _with_conditions(out, [q for _v, q in pairs])
 
 
 def _entries(defaults):

@@ -144,8 +144,12 @@ SUPPLIERS = {
          "reviews": [{"platform": "google", "rating": 4.8, "count": 900,
                       "as_of": "2026-08-01", "url": "u", "via": "web search"}],
          "verified_open": {"as_of": "2026-08-01", "how": "site"},
+         # A members-only sale price, not a shelf price. It is a real number
+         # and belongs in the median, but anything resting on it has to say
+         # what has to be true first.
          "quotes": [{"item": "plant: Big muhly (1gal)", "usd": 16.0,
-                     "as_of": "2026-08-01"}]},
+                     "as_of": "2026-08-01",
+                     "conditional": "the $60 membership and a sale Friday"}]},
         # Five stars, eight people, two miles away. Must not reach the top tier.
         {"id": "tiny", "name": "Tiny Five Star", "categories": ["nursery"],
          "address": "tiny", "lat": 30.29, "lon": -97.72, "distance_mi": 2.0,
@@ -460,6 +464,18 @@ def check_ladder(sourcing, bom):
        cls["basis"])
     ok(cls["n"] >= 2 and "1gal" in cls["basis"],
        "and the estimate says how many comparables it rests on", cls["basis"])
+
+    # A sale price averaged into a median silently makes the whole budget
+    # assume the sale. It may still be the best evidence there is - it just has
+    # to arrive carrying its condition.
+    ok("membership" in two["basis"] and two.get("conditional"),
+       "a median resting on a members-only price says so in its basis",
+       two["basis"])
+    ok("membership" in cls["basis"] and cls.get("conditional"),
+       "and so does a class median resting on one", cls["basis"])
+    ok(not one.get("conditional") and "conditional" not in one["basis"],
+       "while an ordinary shelf price is not made to look conditional",
+       one["basis"])
 
     # The class median has to be local. A basket of mail-order prices is a
     # different claim, and 13.99 from mailco is not evidence about Austin.
