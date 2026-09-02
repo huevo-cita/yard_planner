@@ -209,6 +209,8 @@ yard week     <slug>              # what to do this week, on one screen
 yard week     <slug> --calendar   # every week to the target date -> CALENDAR.md
 yard week     <slug> --shop 3     # the next three weeks of buying, by supplier
 yard week     <slug> --check      # has the plan drifted from the dated actions
+yard sandbox  new <slug>          # a working copy, to try something on
+yard sandbox  diff <slug>         # what a rehearsal changed
 yard --help                       # every module
 ```
 
