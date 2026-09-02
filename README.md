@@ -11,9 +11,10 @@ plant the light cannot support.
 
 ```
 address ──> site.json ──> sun-hours.json ──┐
-                                            ├──> design.json ──> schedule + costed list
-current state ──> conditions.json ──────────┤
-taste ──────────> vision.json ──────────────┘
+                                           ├──> niches.json ──> a person picks
+current state ──> conditions.json ─────────┤                        │
+taste ──────────> vision.json ─────────────┘                        v
+                     │                        design.json ──> schedule + costed list
                      │
                      ├──> coverage.json: what is still unknown, ranked by what it costs
                      │
@@ -57,6 +58,17 @@ to the bottom on its own.
 **Objects.** The design stage checks every plant against the measured light,
 water and soil and against what was actually asked for, and raises blocking
 objections rather than quietly substituting something easier.
+
+**Leaves the choice to a person, where it is genuinely theirs.** Measurement can
+say which plants will live in a patch of ground. It cannot say which of them
+anybody wants to look at, and there are always several that fit. So the ground
+is grouped into niches, each is given a slate of candidates that have *already*
+passed every check the design stage applies, and the choice goes to a phone with
+photographs. Deferring is a first-class answer — one command takes every
+recommendation — and it is recorded as a deferral rather than a decision, so
+which of these anybody actually looked at stays answerable a year later. Every
+pick is reversible, and reopening one warns if the plant is already in the
+ground or the planting window has shut, rather than refusing.
 
 **Refuses to run on a doubt.** The expensive stages — the shade model, the
 design, the bed maps, the bill of materials, the schedule — stop while there is
@@ -198,6 +210,12 @@ yard doubts   <slug> --clear bom --renew   # re-file, keeping the reasons that s
 yard inputs                       # which part of site.json each gated job reads
 yard changelog <slug>             # what changed, and why the plan reads as it does
 yard changelog <slug> --lint      # prose in the plan that belongs in the log
+yard niches   <slug> --derive     # the ground grouped by what will grow in it
+yard niches   <slug> --ask        # the choice cards, one per planting slot
+yard niches   <slug> --ballot     # choose from photographs, on a phone
+yard niches   <slug> --recommend-all   # or take every recommendation, in one
+yard niches   <slug> --review     # every pick, its reason, what was not taken
+yard niches   <slug> --reopen SLOT --reason "..."   # change your mind, later
 yard design   <slug>              # check a design against the measured site
 yard sourcing <slug>              # where to buy it, best tier first, nearest within a tier
 yard sourcing <slug> --geocode    # real distances, from the suppliers' addresses
@@ -223,7 +241,7 @@ yard --help                       # every module
 | `yard-conditions` | Soil, existing ground work, materials and tools on hand, and the person's hours, skill and budget |
 | `yard-vision` | What they want, with a strength on each preference, and the contradictions between them |
 | `yard-sun-model` | Runs the shade model and prices proposed changes in hours of light |
-| `yard-design` | Joins taste to measured fact and rejects what the site cannot support |
+| `yard-design` | Joins taste to measured fact, offers the fitting plants to a person to choose between, and rejects what the site cannot support |
 | `yard-schedule` | Bill of materials, local sourcing, weekend plan, budget and cut list |
 | `raised-bed-rotation` | The seasonal edible turnover, with a planting log driving crop rotation |
 
@@ -318,7 +336,9 @@ AGENTS.md     how to work in here, and all three rules in full
 
 Each yard holds `site.json` (geometry and the 3D obstruction model),
 `conditions.json` (soil, inventory, the person), `vision.json` (taste, with a
-strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
+strength on each want), `niches.json` (the ground grouped by what will grow in
+it, every candidate considered, and who chose), `design.json`, `sun-hours.json`,
+`coverage.json`,
 `doubts.json` (what is in question, and what it blocks), `all-clear.json` (what
 was assumed and run on anyway, and why), `changelog.json` (what changed and why
 it reads as it does), `tasks.json` (every action with a day on it, and a digest

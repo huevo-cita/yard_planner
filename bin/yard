@@ -36,8 +36,8 @@ PYTHON="${YARD_PYTHON:-python3}"
 cd "$REPO"
 
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
-photomeasure soil climate conditions gaps doubts inputs changelog vision design
-sourcing bom schedule week builddoc buildhtml vault"
+photomeasure soil climate conditions gaps doubts inputs changelog vision niches
+design sourcing bom schedule week builddoc buildhtml vault"
 
 case "${1:-}" in
   ""|list)
