@@ -103,9 +103,14 @@ COMMUNITY_CAP = 0.3
 SENTIMENT = {"positive": 1.0, "mixed": 0.0, "negative": -1.0}
 
 # Access is deliberately worth a lot: a members-only preview at a sale that sells
-# out in hours is the difference between getting the plants and not.
+# out in hours is the difference between getting the plants and not. An owner
+# who has an account at a nearer shop and will not drive twelve miles for
+# ordinary errands is the same shape of fact — the ranking cannot see it from
+# reviews, and folding it invisibly into a score would make the board
+# unarguable.
 ACCESS_MEMBERSHIP = 0.4
 ACCESS_SALE = 0.4
+ACCESS_PREFERRED = 0.4
 ACCESS_CAP = 0.8
 
 # Absolute bands, not quantiles. A band that moves when a bad supplier is added
@@ -382,6 +387,15 @@ def access_bonus(sup, start, end):
     is the failure mode of every score anybody has ever ignored."""
     a = sup.get("access") or {}
     bonus, reasons = 0.0, []
+
+    pref = a.get("preferred")
+    if pref:
+        if isinstance(pref, str):
+            why = pref
+        else:
+            why = (pref.get("why") or "").strip() or "owner prefers this shop"
+        bonus += ACCESS_PREFERRED
+        reasons.append(why)
 
     mem = a.get("membership")
     if mem:

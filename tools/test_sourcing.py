@@ -156,6 +156,16 @@ SUPPLIERS = {
          "reviews": [{"platform": "google", "rating": 5.0, "count": 8,
                       "as_of": "2026-08-01", "url": "u", "via": "web search"}],
          "verified_open": {"as_of": "2026-08-01", "how": "site"}},
+        # Good, not excellent, until the owner says this is the shop they
+        # actually drive to. Same bump as a membership, named, not silent.
+        {"id": "preferred_shop", "name": "Preferred Independent",
+         "categories": ["nursery"], "address": "pref",
+         "lat": 30.34, "lon": -97.78, "distance_mi": 8.0,
+         "reviews": [{"platform": "google", "rating": 4.3, "count": 300,
+                      "as_of": "2026-08-01", "url": "u", "via": "web search"}],
+         "access": {"preferred": {
+             "why": "owner has an account and this is the independent they drive to"}},
+         "verified_open": {"as_of": "2026-08-01", "how": "site"}},
         # Good, not excellent, until the membership and the sale are counted.
         {"id": "sale_place", "name": "Botanic Garden",
          "categories": ["nursery"], "address": "garden",
@@ -424,6 +434,13 @@ def check_access(sourcing):
        reasons)
     ok(sale.get("ranked_up") and "access" in sale["ranked_up"],
        "and the promotion itself is stated", sale.get("ranked_up"))
+
+    pref = find(board, "ranked", "preferred_shop")
+    ok(pref["quality_tier"] == "good" and pref["tier"] == "excellent",
+       "an owner-preferred shop is ranked up, and the reason is named",
+       f"{pref['quality_tier']} -> {pref['tier']}: {pref['access']}")
+    ok(any("account" in r or "drive to" in r for r in pref["access"]),
+       "the preferred bump quotes the owner's reason", pref["access"])
 
     # A sale outside the planning window is not a reason to drive anywhere.
     data = sourcing.load(SLUG)
