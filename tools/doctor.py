@@ -218,6 +218,38 @@ def check_calendar():
     return ok
 
 
+def check_sourcing():
+    """Per yard: is the supplier evidence dated, placed and still current.
+
+    A warning rather than a failure. Thin evidence does not break anything — it
+    means suppliers go unranked and prices come off a lower rung, both of which
+    the output already says out loud. What it is worth catching here is evidence
+    that has quietly gone stale since it was gathered, because nothing else looks
+    at it between one sourcing run and the next."""
+    from lib import sourcing, yards
+
+    slugs = [s for s in yards.list_yards()
+             if os.path.exists(os.path.join(yards.yard_dir(s), "sourcing.json"))]
+    if not slugs:
+        print("  ok    no yard has a sourcing record yet")
+        return True
+
+    for slug in slugs:
+        data = sourcing.load(slug)
+        n = len(data.get("suppliers", []))
+        findings = sourcing.check(slug)
+        if not findings:
+            board = sourcing.rank(slug)
+            print(f"  ok    {slug}: {n} suppliers, "
+                  f"{len(board['ranked'])} ranked, {len(board['mail'])} mail "
+                  f"order, all evidence dated and current")
+            continue
+        print(f"  warn  {slug}: {n} suppliers, {len(findings)} thing"
+              f"{'s' if len(findings) != 1 else ''} the evidence is missing. "
+              f"`yard sourcing {slug} --check` lists them")
+    return True
+
+
 def check_git():
     r = subprocess.run(["git", "-C", ROOT, "check-ignore", "-q", "example-yard"],
                        check=False)
@@ -245,6 +277,8 @@ def main():
     f = check_gate()
     print("\n dated tasks")
     g = check_calendar()
+    print("\n sourcing")
+    check_sourcing()
     print("\n data")
     check_data()
 
