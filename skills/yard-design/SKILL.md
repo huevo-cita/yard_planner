@@ -107,6 +107,61 @@ The four that get broken most:
 - **Evergreen bones.** Most perennials look like nothing from November to March.
   A bed with no structure reads as abandoned rather than dormant
 
+## Step 2.5 — Offer the choice to a person
+
+The yard knows which plants *can* live in a patch of ground. It has no way to
+know which of them anyone would be glad to look at, and there are always
+several that fit. Somebody dislikes a smell, or the way something looks in
+February, or has an association with a plant that no measurement will reveal.
+
+So before writing `design.json`, group the ground into niches, work out how
+much room each has, and put the choice in front of them with photographs.
+
+```bash
+python3 -m lib.niches <slug> --derive        # niches + capacity, in one
+python3 -m lib.niches <slug> --compositions  # only where the size warrants it
+python3 -m lib.niches <slug> --slate FILE    # your Step 1 research, per slot
+python3 -m lib.niches <slug> --rank          # a recommendation, with its reason
+python3 -m lib.niches <slug> --photos        # iNaturalist, open licences only
+python3 -m lib.niches <slug> --ask           # the fork and the per-slot cards
+```
+
+**Open with the fork, and mean it.** The first question is whether they want to
+choose at all. Plenty of people — new to it, or working on a space that is not
+personal to them — would rather not make fourteen decisions, and for a bed
+nobody looks at they are right. Taking the recommendations is one command,
+`--recommend-all`, and it prints what it decided rather than doing it quietly.
+A deferral is recorded as `deferred` rather than `decided`, so *which of these
+did anybody actually look at* stays answerable later.
+
+**The turn ends at the ballot URL.** `--ask` files choice cards that block
+`design` and `bom`. Filing them and then running `lib.design` in the same turn
+is precisely the file-and-run failure `AGENTS.md` exists to prevent, and this is
+the one place where a person is unambiguously the point. Print the URL, say what
+is waiting, and stop.
+
+```bash
+python3 -m lib.niches <slug> --ballot        # a phone, on the wifi
+python3 -m lib.niches <slug> --sync FILE     # fold the picks back in
+python3 -m lib.niches <slug> --export        # -> design.json plants[]
+```
+
+Then Step 3 below has most of `plants[]` already written, and `check_space` and
+`check_grouping` pass by construction rather than by luck — the slot budgets
+come from the same band those checks enforce.
+
+Two things worth knowing before relying on it:
+
+- **Every candidate is checked before it reaches the ballot**, against the same
+  light, depth, area, pH and drainage rules `lib.design` applies, using the same
+  months. That is the whole promise: nobody should choose a plant and be told
+  afterwards it was never possible. A candidate the slot cannot hold is refused
+  at `--slate`, and the refusal says which rule.
+- **Nothing is ever final.** `--review` shows every pick, its reason and what
+  was not taken. `--reopen` puts a slot back in play with a required reason, and
+  warns — never refuses — if the plant is already in the ground, already bought,
+  or the planting window has shut, always saying when the next one opens.
+
 ## Step 3 — Write it down as data
 
 ```bash
