@@ -53,8 +53,9 @@ lands either side of the 4.0 h that separates part sun from part shade in
 
 WHICH SERIES the light figure comes from is not a detail, and this module states
 it rather than leaving it to be inferred, because the answer changes the split.
-It uses the growing-season mean of `effective` hours from `sun-hours.json` — the
-same series `design.zone_hours` averages — for one reason that overrides every
+It uses the growing-season mean of `effective` hours from `sun-hours.json` over
+`solar.GROWING_SEASON` — the same constant and the same series
+`design.zone_hours` averages — for one reason that overrides every
 other consideration: a slot budgeted against one series and linted against
 another can offer a candidate the linter will then reject, and a slate that
 does that is worse than no slate. The other readings are printed alongside so
@@ -81,13 +82,31 @@ import json
 import os
 import re
 
-from . import design, doubts, yards
+from . import design, doubts, solar, yards
 
-# The months a perennial is actually growing here, and therefore the months a
-# light figure has to describe. Winter is reported separately rather than
-# averaged in, because a bed that is bright in December and dark in July is a
-# different proposition from the reverse and the mean hides both.
-GROWING = ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+# The months a light figure here describes, and it is `solar.GROWING_SEASON`
+# rather than a window of this module's own.
+#
+# It used to be Mar-Oct, on the argument that March is when a perennial starts
+# growing in Austin - which is a defensible claim about phenology, and it is
+# not the claim this number is used for. Every hour figure in this file is
+# spent asking whether a candidate would clear `design.LIGHT_NEED`, and that
+# threshold is a NURSERY TAG: "6-8 hours" on a label describes the season the
+# plant is in leaf as the label's writer meant it, not this yard's first flush.
+# So the module docstring above already states the rule that decides it - a
+# slot budgeted against one series and linted against another can offer a
+# candidate the linter then rejects - and a window one month wider than
+# `design.zone_hours` uses is exactly that, quietly, in the direction of
+# offering candidates for light the bed does not have in the months the
+# threshold is about.
+#
+# Where a genuinely different claim about the calendar belongs is WINTER, below,
+# and that one stays. It is reported ALONGSIDE the growing-season figure rather
+# than averaged into it, because a bed that is bright in December and dark in
+# July is a different proposition from the reverse and one mean hides both.
+# That is the distinction worth keeping; two spellings of "the growing season"
+# was not one.
+GROWING = list(solar.GROWING_SEASON)
 WINTER = ["Dec", "Jan"]
 
 # Size classes, by mature spread. The boundaries are where the practical
@@ -129,10 +148,12 @@ def series_note():
     return {
         "light": "growing-season mean of `effective` hours, sun-hours.json",
         "months": GROWING,
+        "months_from": "solar.GROWING_SEASON",
         "why": "the same series design.zone_hours averages, so a slot budgeted "
                "here is judged by check_light on the same number. A slate built "
                "against a different series can offer a candidate the linter "
-               "then rejects.",
+               "then rejects. This module used to spell the window out itself, "
+               "one month wider, which made that sentence untrue.",
         "winter_reported_separately": WINTER,
     }
 

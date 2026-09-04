@@ -52,6 +52,20 @@ MONTHS = list(MONTH_DOY)
 # stretch in which planting is safe - and are not a substitute for this.
 GROWING_SEASON = ("Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct")
 
+# Three months spread across `GROWING_SEASON`, for the jobs that step the sun
+# every five minutes and cannot afford to do it seven times. This is a SAMPLE
+# and not a window, and the distinction is the whole reason it has its own
+# name: it is honest for a difference - how far an answer moves when an unknown
+# is varied, which is what `lib.gaps` measures - and it is not the figure to
+# publish as a bed's growing-season light, because it omits the two shoulder
+# months that pull a mean down. On cloverleaf-austin the sample reads 6.46 h
+# whole-yard against 6.18 h over the full window, which is 0.28 h of flattery.
+#
+# It was previously written out twice, in `lib.gaps` and in
+# `sunmodel.zone_timing`, and the copy in `lib.gaps` carried a comment calling
+# itself "the growing season" - which is how a sample gets quoted as a window.
+SEASON_SAMPLE = ("Apr", "Jun", "Aug")
+
 
 # ------------------------------------------------------------------ astronomy
 

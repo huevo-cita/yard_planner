@@ -40,12 +40,13 @@ Runs entirely on dicts in memory. No yard is read or written.
 """
 import argparse
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from lib import design, solar  # noqa: E402  (after sys.path)
+from lib import design, gaps, niches, solar, sunmodel  # noqa: E402
 
 PASS = FAIL = 0
 verbose = False
@@ -132,6 +133,73 @@ def blocked(objs):
 def mean(hours, months):
     idx = [solar.MONTHS.index(m) for m in months]
     return round(sum(hours[i] for i in idx) / len(idx), 2)
+
+
+# ------------------------------------------------- the yard the summary lies about
+
+# A yard shaped so that April-September and April-October give DIFFERENT nursery
+# labels, because a yard clearing 6 h on either window cannot tell the two
+# implementations apart. October is the pivot: the bed holds 6 h through
+# September and then the sun drops behind something to the south-west, which is
+# the ordinary shape of an autumn in a built-up lot and is exactly what the real
+# raised bed on cloverleaf-austin does, less steeply — 5.81 h in September
+# against 4.76 h in October.
+#
+#   Apr-Sep   6.45 h   full sun     <- what the old headline published
+#   Apr-Oct   5.97 h   part sun     <- what design.check_light judges against
+#   the year  5.14 h   part sun
+#
+# The annual mean lands on the same LABEL as the correct answer and on a
+# different NUMBER, so the assertions below check both. An implementation that
+# quietly fell back to twelve months would otherwise pass on the category alone.
+OCTOBER_CLIFF = [4.0, 4.4, 5.0, 6.1, 6.6, 6.9, 6.8, 6.3, 6.0, 3.1, 2.9, 3.6]
+
+
+def yard_table(hours):
+    return {"Whole yard": {m: {"effective": h, "clear": h, "best_cell": h + 0.5}
+                           for m, h in zip(solar.MONTHS, hours)}}
+
+
+# ---------------------------------------------- a season written out somewhere else
+
+_MONTH_LITERAL = re.compile(
+    r"""['"](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)['"]""")
+_JOIN = re.compile(r",\s*")
+
+
+def season_literals(path):
+    """Runs of five to eleven consecutive months written out in a source file.
+
+    This is the shape of the bug rather than any one instance of it. Twelve
+    months in a row is the calendar and means one thing to everybody; four
+    scattered months is a figure's caption. A run of five to eleven CONSECUTIVE
+    months is somebody spelling out a season, and the only file entitled to do
+    that is `solar.py`.
+
+    Written as a scan of the source rather than as a list of the four constants
+    that were wrong, because naming them catches the four that have already been
+    found and this catches the fifth.
+    """
+    src = open(path).read()
+    toks = [(m.start(), m.end(), m.group(1))
+            for m in _MONTH_LITERAL.finditer(src)]
+    runs, run = [], []
+    for t in toks:
+        if run and _JOIN.fullmatch(src[run[-1][1]:t[0]]):
+            run.append(t)
+        else:
+            runs.append(run)
+            run = [t]
+    runs.append(run)
+    out = []
+    for r in runs:
+        names = [x[2] for x in r]
+        if not 5 <= len(names) <= 11:
+            continue
+        i = solar.MONTHS.index(names[0])
+        if names == [solar.MONTHS[(i + k) % 12] for k in range(len(names))]:
+            out.append((src[:r[0][0]].count("\n") + 1, names))
+    return out
 
 
 def run():
@@ -221,6 +289,84 @@ def run():
        design.zone_hours(SUN, SITE, "deciduous_bed", list(solar.MONTHS))
        == mean(DECIDUOUS_BED, solar.MONTHS),
        "a figure whose window nobody stated is how this went wrong")
+
+    head("the fixture disagrees with itself, or the summary proves nothing")
+    ok("Apr-Sep calls the October-cliff yard full sun",
+       sunmodel.light_category(
+           mean(OCTOBER_CLIFF, ["Apr", "May", "Jun", "Jul", "Aug", "Sep"]))
+       == "full sun",
+       mean(OCTOBER_CLIFF, ["Apr", "May", "Jun", "Jul", "Aug", "Sep"]))
+    ok("and Apr-Oct calls the same yard part sun",
+       sunmodel.light_category(mean(OCTOBER_CLIFF, solar.GROWING_SEASON))
+       == "part sun",
+       mean(OCTOBER_CLIFF, solar.GROWING_SEASON))
+
+    head("sunmodel publishes the window design judges on, not one of its own")
+    s = sunmodel.summary(yard_table(OCTOBER_CLIFF))
+    ok("the headline category is the Apr-Oct one",
+       s["light_category"] == "part sun",
+       f"{s['light_category']} at {s['growing_season_mean_hours']} h")
+    ok("and the headline figure is the Apr-Oct mean, to the hundredth",
+       s["growing_season_mean_hours"]
+       == mean(OCTOBER_CLIFF, solar.GROWING_SEASON),
+       f"got {s['growing_season_mean_hours']}, "
+       f"Apr-Sep is {mean(OCTOBER_CLIFF, ['Apr','May','Jun','Jul','Aug','Sep'])}"
+       f", the year is {mean(OCTOBER_CLIFF, solar.MONTHS)}")
+    ok("which is not the annual mean wearing the right label",
+       s["growing_season_mean_hours"] != mean(OCTOBER_CLIFF, solar.MONTHS),
+       "the year lands on 'part sun' too, so the category alone proves nothing")
+    ok("the figure carries the months it averaged, so nothing has to guess",
+       s["growing_season_months"] == list(solar.GROWING_SEASON),
+       s.get("growing_season_months"))
+    ok("and sunmodel and design agree to the hundredth on the same table",
+       s["growing_season_mean_hours"]
+       == design.zone_hours({"by_zone_and_month": yard_table(OCTOBER_CLIFF)},
+                            {"zones": {}}, "Whole yard"),
+       "two published growing-season figures for one yard is the whole bug")
+
+    head("the three-month probe is a sample, and says so")
+    ok("gaps probes over solar.SEASON_SAMPLE, not a copy of it",
+       gaps.PROBE_MONTHS is solar.SEASON_SAMPLE,
+       f"{gaps.PROBE_MONTHS!r} vs {solar.SEASON_SAMPLE!r}")
+    ok("and zone_timing samples the same three months",
+       sunmodel.zone_timing.__defaults__[0] is solar.SEASON_SAMPLE,
+       f"{sunmodel.zone_timing.__defaults__[0]!r}")
+    ok("the sample is drawn from the window",
+       set(solar.SEASON_SAMPLE) < set(solar.GROWING_SEASON),
+       "a sample of months the window excludes is not a sample of it")
+    ok("but it is not the window, and a test that let it become one is no test",
+       len(solar.SEASON_SAMPLE) < len(solar.GROWING_SEASON),
+       "these are different objects on purpose: one is for spreads, one for "
+       "levels, and they differ by 0.28 h on the real yard")
+
+    head("niches budgets slots against the series the linter judges them on")
+    ok("niches.GROWING is solar.GROWING_SEASON, spelt as a list",
+       niches.GROWING == list(solar.GROWING_SEASON),
+       f"{niches.GROWING!r}")
+    ok("so a niche's hours ARE what zone_hours answers with no months given",
+       design.zone_hours(SUN, SITE, "deciduous_bed", niches.GROWING)
+       == design.zone_hours(SUN, SITE, "deciduous_bed"),
+       "a slot budgeted on one window and linted on another offers candidates "
+       "the linter then rejects — which is what the module's own docstring "
+       "says it must not do")
+    ok("and winter stays a separate claim rather than being averaged in",
+       not set(niches.WINTER) & set(niches.GROWING),
+       f"{niches.WINTER!r} overlaps {niches.GROWING!r}")
+
+    head("nowhere else in the engine spells a season out")
+    libdir = os.path.join(ROOT, "lib")
+    found = []
+    for fn in sorted(os.listdir(libdir)):
+        if fn.endswith(".py"):
+            found += [(fn, n, ms)
+                      for n, ms in season_literals(os.path.join(libdir, fn))]
+    ok("exactly one five-to-eleven-month run of consecutive months in lib/",
+       len(found) == 1,
+       "\n".join(f"{fn}:{n} {ms}" for fn, n, ms in found) or "(none at all)")
+    ok("and it is solar.GROWING_SEASON itself",
+       found and found[0][0] == "solar.py"
+       and found[0][2] == list(solar.GROWING_SEASON),
+       f"{found!r}")
 
 
 def main():

@@ -610,6 +610,35 @@ def check_coverage(design, site, cond, sun):
                         "`unplantable_sqft` for any gravel or stone inside the "
                         "bed), or `containers` where the bed is pots"))
 
+    # --- light, and which season it was judged over
+    #
+    # Not a missing input, which is what the rest of this function reports, but
+    # the same silence: a plant carrying neither `months` nor `bloom` is judged
+    # over `DEFAULT_LIGHT_MONTHS`, and the objection list gives no sign of it.
+    # On the yard this was written against, thirteen autumn-sown vegetables were
+    # measured over the seven months not one of them was in the ground - 6.46 h
+    # against 5.41 h for their own season - and it took someone reading three
+    # confident objections about spinach scorching in July to notice.
+    #
+    # A default is the right behaviour and this does not change it. What it
+    # changes is that the default stops being invisible.
+    defaulted = [p["name"] for p in plants
+                 if p.get("zone") and (p.get("light") or "").lower() in LIGHT_NEED
+                 and not p.get("months") and not p.get("bloom")]
+    if defaulted:
+        out.append(_obj("note", "light",
+                        f"{len(defaulted)} plants name neither their growing "
+                        f"months nor a bloom season, so their light was judged "
+                        f"over {window_label(None)} — "
+                        f"{', '.join(sorted(defaulted)[:6])}"
+                        + (" and others" if len(defaulted) > 6 else "")
+                        + ". For anything whose season is winter that is the "
+                          "wrong half of the year, and it reads as a verdict "
+                          "either way",
+                        "set `months` on each from whatever document owns its "
+                        "dates, listing the months one by one so a season that "
+                        "crosses New Year does not come out empty"))
+
     # --- soil
     soil = (cond or {}).get("soil") or {}
     fussy = [p for p in plants if p.get("ph_range")]

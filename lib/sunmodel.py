@@ -1129,7 +1129,7 @@ def zone_table(m):
     return table
 
 
-def zone_timing(m, months=("Apr", "Jun", "Aug")):
+def zone_timing(m, months=solar.SEASON_SAMPLE):
     """When each zone's sun arrives, not just how much of it there is.
 
     Two beds can both read four hours a day and be entirely different places to
@@ -1139,6 +1139,14 @@ def zone_timing(m, months=("Apr", "Jun", "Aug")):
     share of each zone's direct sun that falls after solar noon and after one
     o'clock, plus the clock time it starts and stops, so a design check can see
     the difference.
+
+    The default months are `solar.SEASON_SAMPLE`, three points across the
+    growing season rather than the whole of it, because every month here costs a
+    five-minute march from sunrise to sunset over every cell. A share is a ratio
+    of one zone's own sun to itself, which is what makes the sample defensible
+    where publishing its mean as a bed's light would not be. The months used are
+    written into the output beside the shares, so nothing downstream has to
+    assume which ones they were.
     """
     out = {}
     for z in m.zone_order():
@@ -1190,6 +1198,37 @@ def light_category(hours):
     return "deep shade"
 
 
+def zone_mean(table, zone, months):
+    """Mean effective hours for one zone over named months."""
+    return float(np.mean([table[zone][mon]["effective"] for mon in months]))
+
+
+def summary(table, zone="Whole yard"):
+    """The headline figures, and the window each is a mean of.
+
+    A free function rather than eight lines inside `run` because it is the one
+    number in this file anybody quotes, and until it was lifted out the only
+    way to check which months it averaged was to run the whole model for three
+    minutes and read the answer. It had been averaging April to September, spelt
+    out here and again in `print_markdown`, while `design.check_light` compared
+    the same 6.0 h threshold against April to October - so a yard had two
+    published growing-season figures and no way to tell them apart. They were
+    6.41 h and 6.18 h on cloverleaf-austin, both landing on "full sun", which is
+    why nobody noticed.
+
+    `growing_season_months` goes out with the figure so that a reader of
+    sun-hours.json never has to know which module wrote it.
+    """
+    return {
+        "annual_mean_hours": round(zone_mean(table, zone, solar.MONTHS), 2),
+        "growing_season_months": list(solar.GROWING_SEASON),
+        "growing_season_mean_hours": round(
+            zone_mean(table, zone, solar.GROWING_SEASON), 2),
+        "light_category": light_category(
+            zone_mean(table, zone, solar.GROWING_SEASON)),
+    }
+
+
 def print_markdown(m, table, clocks):
     months = solar.MONTHS
     print("\n### Effective direct sun, hours per day\n")
@@ -1212,11 +1251,11 @@ def print_markdown(m, table, clocks):
     for k, v in clocks.items():
         print(f"| {k} | {v['yard_mean_sun_hours']:.1f} h | "
               f"{v['first_sun_clock']} | {v['last_sun_clock']} |")
-    whole = np.mean([table["Whole yard"][mon]["effective"] for mon in months])
-    growing = np.mean([table["Whole yard"][mon]["effective"]
-                       for mon in ("Apr", "May", "Jun", "Jul", "Aug", "Sep")])
-    print(f"\n**{whole:.1f} h a day annual mean, {growing:.1f} h in the growing "
-          f"season — {light_category(growing)}.**")
+    s = summary(table)
+    print(f"\n**{s['annual_mean_hours']:.1f} h a day annual mean, "
+          f"{s['growing_season_mean_hours']:.1f} h over the growing season, "
+          f"{s['growing_season_months'][0]}-{s['growing_season_months'][-1]} "
+          f"— {s['light_category']}.**")
 
 
 PROVISIONAL = "PROVISIONAL - run against an unwalked record"
@@ -1312,19 +1351,13 @@ def run(slug, cell=6.0, outdir=None, quick=False, force=False):
         result["barrier_scenarios"] = barrier_scenarios(m, outdir)
 
     months = solar.MONTHS
-    whole = [table["Whole yard"][mon]["effective"] for mon in months]
-    growing = [table["Whole yard"][mon]["effective"]
-               for mon in ("Apr", "May", "Jun", "Jul", "Aug", "Sep")]
-    result["summary"] = {
-        "annual_mean_hours": round(float(np.mean(whole)), 2),
-        "growing_season_mean_hours": round(float(np.mean(growing)), 2),
-        "light_category": light_category(float(np.mean(growing))),
+    result["summary"] = dict(summary(table), **{
         "sunniest_zone": max(
             (z for z in table if z != "Whole yard"),
-            key=lambda z: np.mean([table[z][mon]["effective"] for mon in months])),
+            key=lambda z: zone_mean(table, z, months)),
         "best_cell_hours": round(max(table["Whole yard"][mon]["best_cell"]
                                      for mon in months), 2),
-    }
+    })
     if provisional:
         result["provenance"] = "; ".join(provisional)
     yards.save(slug, "sun-hours.json", result)

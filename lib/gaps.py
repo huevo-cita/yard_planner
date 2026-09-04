@@ -42,7 +42,21 @@ from . import conditions, doubts, siteschema, solar, sunmodel, yards
 WEIGHTS = {"hours_per_day": 10.0, "usd": 0.04, "decisions": 2.5}
 
 PROBE_CELL = 12.0                       # coarse grid; this is a sensitivity, not a map
-PROBE_MONTHS = ("Apr", "Jun", "Aug")    # the growing season, where light is worth most
+
+# Three months sampled across the growing season, NOT the growing season. The
+# comment here used to call it "the growing season", which is a sample being
+# passed off as a window, and the two are 0.28 h apart on cloverleaf-austin -
+# enough to move a bed across a `LIGHT_NEED` boundary if anybody ever quoted
+# this figure as a bed's light.
+#
+# Nobody should. Everything this module publishes from it is a DIFFERENCE: the
+# spread between the brightest and darkest plausible value of an unknown, which
+# is what prices a gap. A constant bias cancels out of a spread and does not
+# cancel out of a level, so the sample is honest for what it is used for and
+# wrong for what its old comment implied. `solar.GROWING_SEASON` is the window;
+# this is a sample of it, and `solar.SEASON_SAMPLE` is where that is written
+# down.
+PROBE_MONTHS = solar.SEASON_SAMPLE
 
 
 # ------------------------------------------------------------------ the probe
