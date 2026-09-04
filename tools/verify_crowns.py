@@ -52,9 +52,44 @@ TIMES = [("Jun 21", 6), ("Jun 21", 12), ("Jun 21", 16),
 RETIRED_FRONT_BED = (400.0, 180.0)
 
 
-def inside(point, centre, radii):
-    q = (np.asarray(point, float) - centre) / radii
-    return float((q * q).sum()) <= 1.0
+def radius_toward(tree, xb, dx, dy):
+    """The crown's plan radius on the bearing of (dx, dy), by angle arithmetic.
+
+    Deliberately unlike the model, which cuts each wedge out with a pair of
+    half-planes and never computes an angle at all. Here the bearing is taken
+    with `atan2`, converted to true degrees, and matched against each declared
+    arc's own centre and width. The two share no algebra, which is the only
+    reason agreement between them is worth anything.
+    """
+    r = float(tree["crown_radius"])
+    arcs = (tree.get("crown_plan") or {}).get("arcs") or []
+    if not arcs or (dx == 0.0 and dy == 0.0):
+        return r
+    bearing = (xb + math.degrees(math.atan2(dy, dx))) % 360.0
+    for a in arcs:
+        off = (bearing - float(a["true_bearing"]) + 180.0) % 360.0 - 180.0
+        if abs(off) <= float(a["width_deg"]) / 2.0:
+            return float(a["radius"]) if a.get("radius") is not None else r
+    return r
+
+
+def inside(point, centre, radii, tree=None, xb=None):
+    """Is the sample inside the crown? `radii` is the BOUNDING ellipsoid.
+
+    For a circular crown that is the crown. For one carrying a `crown_plan` the
+    horizontal radius depends on which way the sample lies from the trunk, so
+    the bounding test is only a first pass and the bearing decides.
+    """
+    p = np.asarray(point, float)
+    q = (p - centre) / radii
+    if float((q * q).sum()) > 1.0:
+        return False
+    if not (tree or {}).get("crown_plan"):
+        return True
+    r = radius_toward(tree, xb, p[0] - centre[0], p[1] - centre[1])
+    dz = (p[2] - centre[2]) / radii[2]
+    return ((p[0] - centre[0]) ** 2 + (p[1] - centre[1]) ** 2) / (r * r) \
+        + dz * dz <= 1.0
 
 
 def doy_of(label):
@@ -107,12 +142,48 @@ def probe_cells(site):
         short = spec.get("label_short") or spec.get("label") or key
         cells.append((f"{short} centre (zones.{key})", (cx, cy)))
     cells.append(("retired front_bed centre (fixed)", RETIRED_FRONT_BED))
+    cells.extend(plan_probes(site))
     for label, (cx, cy) in cells:
         assert_outdoors(site, label, cx, cy)
     return cells
 
 
-def marched_block(m, point, d):
+def plan_probes(site):
+    """Ground under each declared crown arc, and under the bulk opposite it.
+
+    A crown carrying a `crown_plan` is the one piece of geometry the zone
+    centres cannot be relied on to exercise: an arc twelve degrees wide is a
+    finger, and whether any bed centre happens to lie under it is an accident of
+    where the beds are. So each arc contributes a probe of its own, at the
+    midpoint between the bulk drip line and the arc's own reach — ground the
+    crown covers if and only if the arc is being read.
+
+    Its pair is the same distance out on the opposite bearing, where the bulk
+    rules. Those two together are the claim worth auditing: not that the crown
+    reaches 22 ft, but that it reaches 22 ft THERE and 17 ft everywhere else.
+    """
+    xb = float(site["frame"]["true_bearing_of_plus_x"])
+    out = []
+    for t in siteschema.trees(site):
+        bulk = t.get("crown_radius")
+        for i, arc in enumerate(
+                (t.get("crown_plan") or {}).get("arcs") or []):
+            r = float(arc.get("radius") or bulk)
+            if bulk is None or abs(r - bulk) < 1e-9:
+                continue
+            mid = (float(bulk) + r) / 2.0
+            for sign, what in ((1.0, "along"), (-1.0, "opposite")):
+                th = math.radians(float(arc["true_bearing"]) - xb)
+                x = t["crown_center_x"] + sign * mid * math.cos(th)
+                y = t["crown_center_y"] + sign * mid * math.sin(th)
+                out.append(
+                    (f"{t.get('id','?')} {mid / 12:.1f} ft {what} "
+                     f"{arc.get('id', f'arc {i}')} "
+                     f"(features.trees.*.crown_plan)", (x, y)))
+    return out
+
+
+def marched_block(m, point, d, xb):
     """Any sample along the ray inside any crown. The independent answer."""
     p = np.asarray(point, float)
     for t in np.arange(STEP_IN, REACH_IN, STEP_IN):
@@ -120,7 +191,7 @@ def marched_block(m, point, d):
         if s[2] > 80 * 12:
             break
         for centre, radii, tree in m.crowns:
-            if inside(s, centre, radii):
+            if inside(s, centre, radii, tree, xb):
                 return True, tree.get("id", "?")
     return False, None
 
@@ -147,12 +218,22 @@ def main():
 
     # -- 2. the trees, as modelled
     print("2. crowns as modelled")
-    for centre, radii, t in m.crowns:
+    profiled = set()
+    for crown in m.crowns:
+        centre, radii, t = crown
         prov = "assumed" if t.get("crown_base_height") is None else ""
         print(f"   {t.get('id','?'):<6} centre ({centre[0]:6.1f},"
               f"{centre[1]:6.1f},{centre[2]:6.1f}) in   "
               f"radii ({radii[0]:5.1f},{radii[1]:5.1f},{radii[2]:5.1f})   "
               f"h {t.get('height')} base {t.get('crown_base_height')} {prov}")
+        for arc in (t.get("crown_plan") or {}).get("arcs") or []:
+            profiled.add(t.get("id"))
+            print(f"          arc {arc.get('id', '?')}: "
+                  f"{arc['width_deg']:.0f} deg wide on true bearing "
+                  f"{arc['true_bearing']:.1f}, out to "
+                  f"{float(arc['radius']) / 12:.1f} ft against a "
+                  f"{float(t['crown_radius']) / 12:.1f} ft bulk "
+                  f"({len(crown.wedges or [])} wedges)")
     print()
 
     # -- 3. analytic vs marched, over cells and sun positions that matter
@@ -163,6 +244,7 @@ def main():
           f"peak altitude tested {max(sun_at(m, doy_of(w), h)[0] for w, h in TIMES):.1f} deg")
     disagreements = 0
     total = 0
+    on_profiled = 0
     below = []
     for label, (cx, cy) in cells:
         print(f"\n   {label}  at ({cx:.0f}, {cy:.0f}) in")
@@ -177,8 +259,10 @@ def main():
                 continue
             d = sunmodel.sun_vector(alt, az, xb)
             a = m.crown_blocks_point(point, d)
-            b, who = marched_block(m, point, d)
+            b, who = marched_block(m, point, d, xb)
             total += 1
+            if who in profiled:
+                on_profiled += 1
             flag = "" if a == b else "   <-- DISAGREE"
             if a != b:
                 disagreements += 1
@@ -188,6 +272,13 @@ def main():
                   f"{' by ' + who if who else ''}{flag}")
 
     print(f"\n   {total} ray tests, {disagreements} disagreements")
+    if profiled:
+        # A count, not a claim. An audit that reports agreement while never
+        # once firing a ray at the geometry in question is the failure the
+        # stale hard-coded probes already caused here in another form.
+        print(f"   {on_profiled} of them came back blocked by a crown carrying "
+              f"a plan profile ({', '.join(sorted(profiled))}), so the "
+              f"asymmetric geometry was actually exercised")
     if below:
         seen = sorted(set(below))
         print(f"   {len(below)} row{'s' if len(below) != 1 else ''} skipped, "

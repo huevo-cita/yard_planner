@@ -45,6 +45,7 @@ Anything `assumed`, and anything with no entry at all, is a candidate for the ga
 list. That is the whole point of tracking it.
 """
 import json
+import math
 import os
 import sys
 
@@ -67,6 +68,7 @@ TREE_DEFAULTS = {
     "crown_base_height": None,
     "crown_center_x": None,
     "crown_center_y": None,
+    "crown_plan": None,
 }
 
 
@@ -204,6 +206,121 @@ def _md_to_doy(md):
         return 105
 
 
+# --------------------------------------------------------------- crown plan
+
+TWO_PI = 2.0 * math.pi
+
+# A wedge is cut out of the circle by two half-planes through the trunk, and a
+# pair of half-planes cannot describe an arc wider than a semicircle. Anything
+# wider is split into equal parts before it reaches the ray test.
+MAX_WEDGE_DEG = 180.0
+
+
+def crown_wedges(tree, x_axis_bearing, radius=None):
+    """A crown's plan shape as angular wedges, or None if it is a circle.
+
+    `crown_radius` is a scalar, so a crown is a circle in plan, and most are
+    close enough. cloverleaf-austin's t11 is not: taped from the trunk base it
+    reads 17 ft along the property line, 14 ft toward the house's south-east
+    corner, 14-17 ft for the bulk, and 22 ft on one bearing where a single limb
+    runs out perpendicular to the line. No ellipse fits that — an ellipse is
+    convex and reaches furthest on its own major axis, and this crown reaches
+    furthest on a bearing where the bulk is at its narrowest.
+
+    So a tree may carry a `crown_plan`, which says where the crown departs from
+    `crown_radius` and nothing else:
+
+        "crown_plan": {
+          "note": "why this crown is not a circle",
+          "arcs": [{"id": "west-limb", "true_bearing": 297.8, "width_deg": 12.0,
+                    "radius": 264.0, "note": "the one limb, 22 ft"}]}
+
+    Bearings are TRUE degrees, because that is what somebody standing at the
+    trunk with a tape and a compass can actually produce, and because a true
+    bearing survives the yard frame being re-derived. They are converted here
+    against `frame.true_bearing_of_plus_x`.
+
+    Everything outside the declared arcs keeps `crown_radius`, which is what
+    makes the whole thing opt-in: a tree with no `crown_plan` returns None and
+    is modelled by exactly the code that has always modelled it. It also keeps
+    the scalar honest — it goes on meaning the bulk drip line, the number a
+    person would give if asked for one radius, rather than becoming an average
+    of the profile that nothing can be checked against.
+
+    Returns (lo, hi, radius) in YARD-FRAME radians, measured from +x toward +y,
+    covering the full circle exactly once with no overlaps, each span no wider
+    than `MAX_WEDGE_DEG`. Overlapping arcs raise, because two radii claiming
+    the same bearing is a record that does not describe a shape.
+    """
+    arcs = (tree.get("crown_plan") or {}).get("arcs") or []
+    if not arcs:
+        return None
+    tid = tree.get("id", "?")
+    bulk = tree.get("crown_radius") if radius is None else radius
+    if bulk is None:
+        raise ValueError(f"{tid} carries a crown_plan but no crown_radius; the "
+                         f"arcs say where the crown leaves the bulk, so there "
+                         f"has to be a bulk for them to leave")
+    bulk = float(bulk)
+
+    spans = []
+    for i, arc in enumerate(arcs):
+        where = f"{tid} crown_plan.arcs.{i}"
+        if arc.get("true_bearing") is None:
+            raise ValueError(f"{where} has no true_bearing")
+        width = float(arc.get("width_deg") or 0.0)
+        if not 0.0 < width < 360.0:
+            raise ValueError(
+                f"{where} has width_deg {width:g}. An arc has to span some "
+                f"ground and less than the whole circle — a crown that is one "
+                f"radius all round is a circle, and the scalar already says so")
+        r = float(arc["radius"]) if arc.get("radius") is not None else bulk
+        if r <= 0.0:
+            raise ValueError(f"{where} has radius {r:g}")
+        theta = math.radians(float(arc["true_bearing"]) - x_axis_bearing)
+        w = math.radians(width)
+        spans.append(((theta - w / 2.0) % TWO_PI, w, r, i))
+    spans.sort()
+
+    n = len(spans)
+    for i, (lo, w, _, idx) in enumerate(spans):
+        nxt = spans[(i + 1) % n][0] + (TWO_PI if i == n - 1 else 0.0)
+        if lo + w > nxt + 1e-9:
+            raise ValueError(
+                f"{tid} crown_plan arcs {idx} and {spans[(i + 1) % n][3]} "
+                f"overlap. Two radii claiming the same bearing do not describe "
+                f"a shape; widen one, narrow the other, or merge them")
+
+    out = []
+    for i, (lo, w, r, _) in enumerate(spans):
+        out.append((lo, lo + w, r))
+        gap_hi = spans[(i + 1) % n][0] + (TWO_PI if i == n - 1 else 0.0)
+        if gap_hi - (lo + w) > 1e-9:
+            out.append((lo + w, gap_hi, bulk))
+    return [w for lo, hi, r in out for w in _split_wedge(lo, hi, r)]
+
+
+def _split_wedge(lo, hi, r, limit=math.radians(MAX_WEDGE_DEG)):
+    parts = max(int(math.ceil((hi - lo) / limit - 1e-12)), 1)
+    step = (hi - lo) / parts
+    return [(lo + k * step, lo + (k + 1) * step, r) for k in range(parts)]
+
+
+def crown_reach(tree):
+    """The furthest the crown reaches in plan, arcs included.
+
+    The bounding circle, so anything that wants one number off a crown — a
+    drawing, a distance check, a bounding test — gets a figure that is too
+    generous rather than one that quietly misses the limb.
+    """
+    r = tree.get("crown_radius")
+    arcs = (tree.get("crown_plan") or {}).get("arcs") or []
+    radii = [float(a["radius"]) for a in arcs if a.get("radius") is not None]
+    if r is not None:
+        radii.append(float(r))
+    return max(radii) if radii else None
+
+
 # ------------------------------------------------------------------ migration
 
 def migrate(site):
@@ -297,6 +414,7 @@ def validate(site):
         warns.append("boundary.north_fence_slope missing, assuming a square yard")
 
     f = site.get("frame", {})
+    xb = f.get("true_bearing_of_plus_x")
     if f.get("true_bearing_of_plus_x") is None:
         errs.append("frame.true_bearing_of_plus_x missing — the yard has no "
                     "orientation, so sun angles cannot be resolved")
@@ -312,6 +430,16 @@ def validate(site):
         if t.get("crown_radius") is None:
             warns.append(f"features.trees.{i}.crown_radius missing — the single "
                          "most consequential unknown in most yards")
+        try:
+            wedges = crown_wedges(t, xb) if xb is not None else None
+        except ValueError as exc:
+            errs.append(f"features.trees.{i}.crown_plan: {exc}")
+            wedges = None
+        if wedges is not None and len({round(r, 9) for _, _, r in wedges}) == 1:
+            warns.append(
+                f"features.trees.{i}.crown_plan describes one radius all "
+                f"round, which is the circle crown_radius already draws. "
+                f"Either the arcs are wrong or the plan is not needed.")
 
     for p in site.get("provenance", {}):
         if site["provenance"][p].get("source") not in SOURCES:

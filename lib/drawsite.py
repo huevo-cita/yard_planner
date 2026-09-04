@@ -615,6 +615,8 @@ def draw_plan(site, path):
                                 t["crown_radius"], fc=CANOPY, ec="#5c7a4b",
                                 lw=1.1, ls=(0, (6, 4)), alpha=0.24, zorder=7,
                                 clip_on=True))
+            draw_crown_arcs(ax, t, site["frame"]["true_bearing_of_plus_x"],
+                            CANOPY, "#5c7a4b", alpha=0.24, zorder=7)
     for n, t in enumerate(g.trees, 1):
         ax.add_patch(Circle((t["trunk_x"], -t["trunk_y"]), 7.5, fc="#6b4f34",
                             ec="white", lw=1.2, zorder=11, clip_on=True))
@@ -1349,9 +1351,43 @@ def _height_overlap(ta, tb):
     return min(sa[1], sb[1]) - max(sa[0], sb[0])
 
 
+def draw_crown_arcs(ax, tree, x_bearing, fc, ec, alpha=0.34, zorder=8):
+    """The part of a crown that reaches past its own drip line.
+
+    A crown carrying a `crown_plan` is not the circle `crown_radius` draws, and
+    a map that draws the circle anyway disagrees with the model that was run
+    against it — silently, in the direction of less shade, on exactly the ground
+    somebody is about to plant. So each arc is drawn as the annulus segment
+    between the bulk and its own reach.
+
+    Both maps flip y to put north up, so a yard angle runs clockwise on the
+    page and the wedge's start and end swap with it.
+    """
+    bulk = tree.get("crown_radius")
+    if bulk is None:
+        return
+    cx, cy = tree["crown_center_x"], -tree["crown_center_y"]
+    for arc in (tree.get("crown_plan") or {}).get("arcs") or []:
+        r = float(arc["radius"]) if arc.get("radius") is not None else bulk
+        if r <= bulk:
+            continue
+        mid = float(arc["true_bearing"]) - x_bearing
+        half = float(arc["width_deg"]) / 2.0
+        ax.add_patch(Wedge((cx, cy), r, -mid - half, -mid + half,
+                           width=r - bulk, fc=fc, ec=ec, lw=1.1,
+                           alpha=alpha, zorder=zorder, clip_on=True))
+
+
 def _reaches(tree, z, scale=1.0):
-    """Does the crown, at `scale`, stand over any part of this zone?"""
-    r = (tree.get("crown_radius") or 0.0) * scale
+    """Does the crown, at `scale`, stand over any part of this zone?
+
+    Measured to the crown's furthest reach rather than its bulk, so a tree that
+    only touches a bed with one limb is still reported as touching it. This
+    ranking is a prompt to go and measure, and over-stating which beds a tree
+    stands over sends somebody to look at ground the crown might cover; the
+    other error sends nobody.
+    """
+    r = (siteschema.crown_reach(tree) or 0.0) * scale
     x0, x1 = z["x"]
     y0, y1 = z["y"]
     dx = max(x0 - tree["crown_center_x"], 0.0, tree["crown_center_x"] - x1)
@@ -1560,6 +1596,8 @@ def draw_tree_map(site, path, slug=None):
                             hatch=None if decid else "xxx",
                             alpha=0.34 if r["tier"] != "skip" else 0.5,
                             zorder=8))
+        draw_crown_arcs(ax, t, site["frame"]["true_bearing_of_plus_x"],
+                        fill, edge, alpha=0.34 if r["tier"] != "skip" else 0.5)
         if r["tier"] == "measure":
             # The falsifiable claim. If the canopy reaches this ring, the
             # record is wrong by the margin that flips a bed's light category.

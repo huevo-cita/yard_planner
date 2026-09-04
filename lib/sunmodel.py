@@ -122,6 +122,108 @@ def sun_vector(alt, az, x_axis_bearing):
                      math.sin(math.radians(alt))])
 
 
+RAY_EPS = 1e-12
+
+
+def _quadratic(origin, d, centre, radii):
+    """The ray-ellipsoid quadratic, elementwise over however many origins.
+
+    `origin` may be (M, 3) for a grid of cells or (3,) for one point, and every
+    return has the leading shape of `origin`. The arithmetic is exactly what
+    `crown_hits` and `crown_blocks_point` have always done, kept in one place so
+    the wedge test below cannot drift from the circular test beside it.
+    """
+    q = (origin - centre) / radii
+    e = d / radii
+    a = float((e * e).sum())
+    bq = 2.0 * (q * e).sum(axis=-1)
+    c = (q * q).sum(axis=-1) - 1.0
+    return a, bq, c, bq * bq - 4.0 * a * c
+
+
+class Crown:
+    """One tree's crown volume, and whether a ray reaches it.
+
+    An ellipsoid, as it has always been — or, where the tree carries a
+    `crown_plan`, a set of ellipsoid wedges sharing one vertical axis and one
+    height band, each with its own horizontal radius. The wedges tile the circle
+    exactly once, so a crown is still one object: it holds one entry in
+    `Model.crowns`, contributes one transmissivity to `canopy`, and belongs to
+    one `features.canopy_groups` entry. A fused pair stays a fused pair whether
+    or not either of them is round.
+
+    Testing a wedge is the ellipsoid test plus two half-planes through the
+    trunk. The ray's ellipsoid interval [t0, t1] is clipped by each half-plane —
+    both are linear in t — and the wedge is hit if what survives is non-empty.
+    No angle is ever computed, which is the property `tools/verify_crowns.py`
+    leans on: it answers the same question by marching the ray and taking an
+    `atan2` bearing at each sample, so the two implementations share no algebra.
+
+    Unpacks as `(centre, radii, tree)` so that everything reading crowns for a
+    caption, a drawing or a distance goes on working. `radii` is the BOUNDING
+    ellipsoid, the largest radius on any bearing, so a caller that ignores the
+    wedges over-states the crown rather than losing the limb.
+    """
+
+    __slots__ = ("centre", "radii", "tree", "wedges", "_parts")
+
+    def __init__(self, centre, radii, tree, wedges=None):
+        self.centre = np.asarray(centre, float)
+        self.radii = np.asarray(radii, float)
+        self.tree = tree
+        self.wedges = wedges
+        self._parts = None
+        if wedges:
+            self._parts = [
+                (np.array([r, r, self.radii[2]], float),
+                 ((-math.sin(lo), math.cos(lo)),
+                  (math.sin(hi), -math.cos(hi))))
+                for lo, hi, r in wedges]
+
+    def __iter__(self):
+        return iter((self.centre, self.radii, self.tree))
+
+    def __getitem__(self, i):
+        return (self.centre, self.radii, self.tree)[i]
+
+    def __len__(self):
+        return 3
+
+    def hits(self, origin, d):
+        """Whether the ray from each origin toward `d` meets this crown.
+
+        The circular case is the three conditions the model has always applied:
+        the discriminant positive, the origin outside the ellipsoid, and the
+        beam pointing at it rather than away.
+        """
+        if self._parts is None:
+            _, bq, c, disc = _quadratic(origin, d, self.centre, self.radii)
+            return (disc > 0.0) & (bq < 0.0) & (c > 0.0)
+
+        rel_x = origin[..., 0] - self.centre[0]
+        rel_y = origin[..., 1] - self.centre[1]
+        out = None
+        for radii, normals in self._parts:
+            a, bq, c, disc = _quadratic(origin, d, self.centre, radii)
+            ok = (disc > 0.0) & (bq < 0.0) & (c > 0.0)
+            root = np.sqrt(np.maximum(disc, 0.0))
+            lo = (-bq - root) / (2.0 * a)
+            hi = (-bq + root) / (2.0 * a)
+            for nx, ny in normals:
+                # the half-plane n . (p - centre) >= 0, along p = origin + t d
+                A = rel_x * nx + rel_y * ny
+                B = float(d[0]) * nx + float(d[1]) * ny
+                if B > RAY_EPS:
+                    lo = np.maximum(lo, -A / B)
+                elif B < -RAY_EPS:
+                    hi = np.minimum(hi, -A / B)
+                else:
+                    ok = ok & (A >= 0.0)
+            hit = ok & (lo < hi)
+            out = hit if out is None else (out | hit)
+        return out
+
+
 class Model:
     """The yard floor, its obstructions, and the light that reaches it."""
 
@@ -293,24 +395,38 @@ class Model:
 
     # ------------------------------------------------------------------ crowns
     def _crowns(self, override=None):
-        """Each crown as (centre, radii, tree). Ray-ellipsoid rather than a
-        horizon entry, because light passes under a crown through bare trunks."""
+        """Each crown as a `Crown`. Ray-ellipsoid rather than a horizon entry,
+        because light passes under a crown through bare trunks.
+
+        A `radius` override collapses every crown to that one circle, so it also
+        drops any `crown_plan`: the two callers of `set_crowns` are the
+        sensitivity sweep, which asks what the yard would look like if every
+        crown were the same size, and the open-sky probe, which shrinks them all
+        to nothing. Keeping a 22 ft limb on a crown the caller has just set to a
+        hundredth of an inch would answer neither question.
+        """
         out = []
         for t in self.trees:
             base = t["crown_base_height"]
             radius = t["crown_radius"]
             cx = t["crown_center_x"]
             cy = t["crown_center_y"]
+            overridden = False
             if override:
                 base = override.get("base", base)
-                radius = override.get("radius", radius)
                 cx = override.get("centre_x", cx)
+                if "radius" in override:
+                    radius = override["radius"]
+                    overridden = radius is not None
             if radius is None or base is None or t.get("height") is None:
                 continue
+            wedges = (None if overridden
+                      else siteschema.crown_wedges(t, self.x_axis_bearing))
             top = t["height"]
             rz = max((top - base) / 2.0, 1e-6)
-            out.append((np.array([cx, cy, (base + top) / 2.0], float),
-                        np.array([radius, radius, rz], float), t))
+            reach = max([radius] + [r for _, _, r in wedges or []])
+            out.append(Crown(np.array([cx, cy, (base + top) / 2.0], float),
+                             np.array([reach, reach, rz], float), t, wedges))
         return out
 
     def set_crowns(self, base=None, radius=None, centre_x=None):
@@ -415,26 +531,12 @@ class Model:
         operator, which raises spurious floating-point flags under Accelerate.
         """
         origin = np.stack([self.px, self.py, np.full(self.M, EYE)], axis=1)
-        hits = []
-        for centre, radii, tree in self.crowns:
-            q = (origin - centre) / radii
-            e = d / radii
-            a = float((e * e).sum())
-            bq = 2.0 * (q * e).sum(axis=1)
-            c = (q * q).sum(axis=1) - 1.0
-            disc = bq * bq - 4.0 * a * c
-            hits.append(((disc > 0.0) & (bq < 0.0) & (c > 0.0), tree))
-        return hits
+        return [(crown.hits(origin, d), crown.tree) for crown in self.crowns]
 
     def crown_blocks_point(self, point, d):
         p = np.asarray(point, float)
-        for centre, radii, _ in self.crowns:
-            q = (p - centre) / radii
-            e = d / radii
-            a = float((e * e).sum())
-            bq = 2.0 * float((q * e).sum())
-            c = float((q * q).sum()) - 1.0
-            if bq * bq - 4.0 * a * c > 0.0 and bq < 0.0 and c > 0.0:
+        for crown in self.crowns:
+            if crown.hits(p, d):
                 return True
         return False
 
