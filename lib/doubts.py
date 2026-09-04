@@ -859,11 +859,17 @@ def gate(slug, job, force=False):
     and the caller should mark its output. Raises SystemExit otherwise, so the
     gate holds for programmatic callers and not only for the command line.
     Deliberately the same contract as `sunmodel.check_walked`.
+
+    It also returns a stamp — without refusing — when the yard is a sandbox.
+    Every one of these five jobs already marks its output when this returns a
+    string, so a rehearsal artifact says what it is by the same path a forced
+    one does, rather than needing the same change made in five places.
     """
     cards = open_cards(slug, job=job)
     clearance = clearance_state(slug, job)
+    sand = yards.sandbox_stamp(slug)
     if not cards and clearance["state"] == "ok":
-        return False
+        return sand or False
 
     what = JOBS.get(job, job)
     summary = " and ".join(_fault(cards, clearance))
@@ -894,6 +900,8 @@ def gate(slug, job, force=False):
                         "!! have been a formality — but it was not filed, "
                         "which is not the same as", "!! looking.", ""]
         stamp = f"{PROVISIONAL} - forced past {summary}"
+        if sand:
+            stamp = f"{sand}, {stamp}"
         say += [f"!! Output stamped {stamp!r}.\n"]
         print("\n".join(say), file=sys.stderr)
         return stamp
