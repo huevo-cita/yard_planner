@@ -9,7 +9,6 @@ Writes, into the yard's maps/ directory:
     site-context.png    the yard's position on the lot, with neighbours
     elevation.png       looking at the primary wall
     section.png         a cut across the yard: what is tall, and how far away
-
 Everything comes from site.json. Nothing is hard-coded here but drawing style.
 
 Where a yard needs a callout that only makes sense for that yard, it goes in
@@ -39,7 +38,7 @@ from matplotlib.patches import Polygon, Circle, Rectangle, Wedge
 from matplotlib.font_manager import FontProperties
 from matplotlib.textpath import TextPath
 
-from . import siteschema, solar, yards
+from . import design, doubts, siteschema, solar, yards
 
 INK = "#2f3437"
 MUTED = "#6b7280"
@@ -140,9 +139,41 @@ def scalebar(ax, x, y, feet=5, label=True):
                 color=MUTED, fontweight="bold")
 
 
+def north_plot_angle(site):
+    """Plot angle of true north, derived rather than taken on trust.
+
+    `frame.yard_north_true_bearing` is a convenience copy of a number the frame
+    already fixes. +x is drawn to the right and plan y is negated, so bearing
+    runs clockwise in the drawing exactly as it does in the world, north sits at
+    `true_bearing_of_plus_x` anticlockwise from the drawn +x axis, and the angle
+    this helper wants is that bearing less 90 degrees.
+
+    Which makes the stored field redundant, and a redundant field nobody
+    recomputes is one that can quietly disagree with the axis it was copied
+    from. On a drawing whose entire purpose is to be carried outside and held up
+    against the ground, a north arrow ninety degrees out is worse than no north
+    arrow: it does not look wrong, it just makes every comparison wrong. So
+    derive it, and fall back to the stored value only when the frame carries no
+    bearing at all.
+
+    Returns the angle and, when the two disagree by more than a degree, the
+    stored value that lost, so a caller can say so on the drawing.
+    """
+    f = site.get("frame", {}) or {}
+    stored = f.get("yard_north_true_bearing")
+    xb = f.get("true_bearing_of_plus_x")
+    if xb is None:
+        return (stored or 0.0), None
+    derived = (float(xb) - 90.0) % 360.0
+    if stored is None:
+        return derived, None
+    off = abs((float(stored) - derived + 180.0) % 360.0 - 180.0)
+    return derived, (None if off <= 1.0 else float(stored))
+
+
 def north_arrows(ax, x, y, site, R=42):
     """True north, plus any second bearing the yard cares about."""
-    yard_north = site.get("frame", {}).get("yard_north_true_bearing", 0.0)
+    yard_north, _ = north_plot_angle(site)
     arrows = [(yard_north, "TRUE\nNORTH", INK, 2.2, 1.0)]
     second = site.get("frame", {}).get("secondary_bearing")
     if second:
