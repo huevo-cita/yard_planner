@@ -28,7 +28,10 @@ point sampling, so a fence six inches away produces no aliasing gaps.
 Tree crowns cannot go in that horizon, because light passes underneath them
 through the bare trunks. They are modelled as ellipsoids and tested with an exact
 ray-ellipsoid intersection at every time step, which is what makes crown base
-height matter in the results rather than being quietly averaged away.
+height matter in the results rather than being quietly averaged away. Trunks
+close enough that their crowns grew together are declared one mass in
+`features.canopy_groups` and attenuate a beam once between them, because the
+record holds two circles where the yard holds one canopy.
 
 Horizontal planes — eaves, awnings, pergolas, carports — cannot go in that
 horizon either, and for the same reason. They are held separately and tested at
@@ -80,6 +83,37 @@ CLOCK_CMAP = LinearSegmentedColormap.from_list(
     "clock", ["#39424f", "#8d9482", "#f2d94e"])
 
 
+def canopy_groups(site):
+    """Tree id -> the id of the fused mass it belongs to, from site.json.
+
+    Two trunks close enough that their crowns grew into each other are one
+    canopy, and a beam crossing the join passes through one mass of leaves, not
+    two. The ray-ellipsoid test cannot know that: it sees two crowns because the
+    record holds two circles, and under `multiply` it charges the beam for both.
+
+    Whether a pair is fused is a fact about the planting, which is why it is
+    declared per yard in `features.canopy_groups` rather than guessed from a
+    distance threshold in here. A threshold would also have to be a 3D one —
+    crowns that overlap in plan can sit at completely different heights and
+    share no volume at all — and it would silently reclassify pairs as the
+    record was corrected. A declaration is auditable and a threshold is not.
+
+        "canopy_groups": [{"id": "front-pecans", "trees": ["t02", "t03"],
+                           "note": "why these are one canopy"}]
+
+    A free function as well as a `Model` attribute because the drawings need the
+    map to caption a crown, and building a grid and an obstruction horizon to
+    read six characters out of a dict is a ten-second answer to a free question.
+    """
+    out = {}
+    for i, g in enumerate((site.get("features", {}) or {}).get(
+            "canopy_groups") or []):
+        gid = g.get("id") or f"group{i}"
+        for tid in g.get("trees") or []:
+            out[tid] = gid
+    return out
+
+
 def sun_vector(alt, az, x_axis_bearing):
     """Unit vector toward the sun, in yard coordinates."""
     th = math.radians(az - x_axis_bearing)
@@ -115,6 +149,7 @@ class Model:
         self.trees = siteschema.trees(site)
         self.stacking = (site.get("features", {}) or {}).get(
             "canopy_stacking", "single")
+        self.canopy_group = self._canopy_groups()
         self.segments = self._base_segments()
         self.horizon = self._horizon(self.segments)
         self.crowns = self._crowns()
@@ -281,6 +316,9 @@ class Model:
     def set_crowns(self, base=None, radius=None, centre_x=None):
         self.crowns = self._crowns({"base": base, "radius": radius,
                                     "centre_x": centre_x})
+
+    def _canopy_groups(self):
+        return canopy_groups(self.S)
 
     # --------------------------------------------------------------- overheads
     def _overheads(self):
@@ -501,17 +539,46 @@ class Model:
             single    the most opaque crown in the way wins. The default, and
                       right for a row of the same species grown together
             multiply  every crown attenuates in turn, for genuinely separate trees
+
+        Most yards are neither, all over. A lot can hold one fused pair and six
+        trees standing apart, and picking one rule for the whole record gets the
+        other case wrong everywhere. So the rule is applied per *group*: the
+        crowns in a `features.canopy_groups` entry are one mass and take the
+        `single` rule between them, and the groups then multiply against each
+        other as separate trees. A tree in no group is its own group, so a
+        record that declares none behaves exactly as `multiply` always did.
+
+        What this still gets wrong, and in which direction. A ray crossing the
+        27 ft where two fused crowns overlap really does pass through more leaf
+        than a ray crossing one crown alone — a fused canopy is denser at the
+        join, just nothing like tau squared. Taking the minimum therefore
+        under-attenuates there, so the model now runs slightly too *bright*
+        under a declared group, where before it ran far too dark. The truth sits
+        between the two and much nearer this end: on cloverleaf-austin the whole
+        span between the treatments is 0.08 h a day annual in the front yard,
+        0.15 h across June to August, and nothing outside the front yard moves.
         """
-        mult = np.ones(self.M)
+        per_group = {}
+        order = []
         any_hit = np.zeros(self.M, dtype=bool)
-        for hit, tree in self.crown_hits(d):
+        for i, (hit, tree) in enumerate(self.crown_hits(d)):
             tau = (tau_override if tau_override is not None
                    else siteschema.tree_transmissivity(tree, doy)[0])
-            if self.stacking == "multiply":
-                mult = np.where(hit, mult * tau, mult)
+            # `single` is one group holding the whole yard. `multiply` puts each
+            # ungrouped tree in a group of its own, keyed by position so that
+            # two trees sharing an id — or carrying none — stay separate.
+            key = ("all" if self.stacking != "multiply"
+                   else self.canopy_group.get(tree.get("id")) or i)
+            if key in per_group:
+                per_group[key] = np.where(hit, np.minimum(per_group[key], tau),
+                                          per_group[key])
             else:
-                mult = np.where(hit, np.minimum(mult, tau), mult)
+                per_group[key] = np.where(hit, tau, 1.0)
+                order.append(key)
             any_hit |= hit
+        mult = np.ones(self.M)
+        for key in order:
+            mult = mult * per_group[key]
         # An awning is not foliage and does not share the stacking rule: it
         # attenuates whatever the leaves already did.
         omult, ohit = self.overhead_mult(d)

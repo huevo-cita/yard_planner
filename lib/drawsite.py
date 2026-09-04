@@ -39,7 +39,7 @@ from matplotlib.patches import Polygon, Circle, Rectangle, Wedge
 from matplotlib.font_manager import FontProperties
 from matplotlib.textpath import TextPath
 
-from . import design, doubts, siteschema, solar, yards
+from . import design, doubts, siteschema, solar, sunmodel, yards
 
 INK = "#2f3437"
 MUTED = "#6b7280"
@@ -1283,7 +1283,7 @@ def crown_field_check(site, slug=None):
                   "band": band}
 
 
-def engulfed_crowns(rows, stacking="single"):
+def engulfed_crowns(rows, stacking="single", groups=None):
     """Pairs where one crown is drawn wholly inside another, and it matters.
 
     Two crowns that overlap are two separate attenuations under
@@ -1296,21 +1296,57 @@ def engulfed_crowns(rows, stacking="single"):
     crown is entirely inside another's is not measurable from the ground as a
     separate canopy, so a field check that asks for its radius is asking for
     something nobody can give.
+
+    Containment has to be tested in three dimensions, not in plan. Crowns are
+    ellipsoids floating clear of the ground, so two that sit one inside the
+    other on a plan view can occupy completely separate bands of height and
+    share no volume at all — cloverleaf-austin's t10 tops out at 14 ft and t11's
+    crown does not begin until 18 ft. No ray passes through both, nothing is
+    attenuated twice, and reporting the pair sends somebody out to check an
+    overlap that is not there. The plan-only version of this test claimed
+    exactly that.
+
+    A pair declared fused in `features.canopy_groups` is left out too, because
+    the model now attenuates such a group once and there is no double count left
+    to report. `groups` is the tree-id-to-group map `sunmodel.Model` builds.
     """
     if stacking != "multiply":
         return []
+    groups = groups or {}
     out = []
     for a in rows:
-        ra = a["tree"].get("crown_radius") or 0.0
+        ta = a["tree"]
+        ra = ta.get("crown_radius") or 0.0
         for b in rows:
-            rb = b["tree"].get("crown_radius") or 0.0
+            tb = b["tree"]
+            rb = tb.get("crown_radius") or 0.0
             if a is b or ra >= rb:
                 continue
-            d = math.hypot(a["tree"]["crown_center_x"] - b["tree"]["crown_center_x"],
-                           a["tree"]["crown_center_y"] - b["tree"]["crown_center_y"])
-            if d + ra <= rb:
-                out.append((a["id"], b["id"]))
+            gid = groups.get(a["id"])
+            if gid is not None and gid == groups.get(b["id"]):
+                continue
+            d = math.hypot(ta["crown_center_x"] - tb["crown_center_x"],
+                           ta["crown_center_y"] - tb["crown_center_y"])
+            if d + ra > rb:
+                continue
+            if _height_overlap(ta, tb) <= 0:
+                continue
+            out.append((a["id"], b["id"]))
     return out
+
+
+def _height_overlap(ta, tb):
+    """Inches of height two crowns share. Zero or less means no shared volume."""
+    def span(t):
+        base, top = t.get("crown_base_height"), t.get("height")
+        if base is None or top is None:
+            return None
+        return float(base), float(top)
+
+    sa, sb = span(ta), span(tb)
+    if sa is None or sb is None:
+        return 0.0
+    return min(sa[1], sb[1]) - max(sa[0], sb[0])
 
 
 def _reaches(tree, z, scale=1.0):
@@ -1561,9 +1597,10 @@ def draw_tree_map(site, path, slug=None):
     gap = 0.018 * (plan[3] - plan[2])
     y = _tree_table(ax, tb_x, plan[3] - gap, tb_w, rows, per_in)
     y = _tree_legend(ax, tb_x, y - gap, tb_w, rows, per_in)
+    feats = site.get("features") or {}
     _tree_honesty(ax, tb_x, y - gap, tb_w, rows, card, meta, per_in,
-                  engulfed_crowns(rows, (site.get("features") or {}).get(
-                      "canopy_stacking", "single")))
+                  engulfed_crowns(rows, feats.get("canopy_stacking", "single"),
+                                  sunmodel.canopy_groups(site)))
 
     # ---- labels, led out where they would collide
     taken = list(zone_labels) + [
@@ -1860,13 +1897,17 @@ def _tree_honesty(ax, x, y, w, rows, card, meta, per_in, engulfed=()):
              f"prints the record, which is the thing to be disagreed with — it "
              f"is not evidence that the record is right.", DECISIVE, False))
     if engulfed:
+        by_id = {r["id"]: r["tree"] for r in rows}
         lines.append(
-            ("OVERLAP", "; ".join(f"{a} sits wholly inside {b}"
-                                  for a, b in engulfed)
-             + ". features.canopy_stacking is 'multiply', so the model "
-               "attenuates the shared ground twice, and neither crown can be "
-               "told from the other standing under them. Do not try to pace "
-               "the inner one.", DECISIVE, False))
+            ("OVERLAP", "; ".join(
+                f"{a} sits wholly inside {b}, sharing "
+                f"{_height_overlap(by_id[a], by_id[b]) / 12.0:.0f} ft of height"
+                for a, b in engulfed)
+             + ". features.canopy_stacking is 'multiply' and neither is "
+               "declared in features.canopy_groups, so the model attenuates the "
+               "shared volume twice. Neither crown can be told from the other "
+               "standing under them either. Do not try to pace the inner one.",
+             DECISIVE, False))
     lines.append(
         ("h/day", f"The last table column: hours a day of crown shade this one "
          f"tree adds or removes as its own radius swings "
