@@ -670,6 +670,24 @@ def check_cross_file(slug, site, dsn, sun):
     return out
 
 
+# Modification times cannot tell an edit that moved a bed from an edit that
+# fixed a typo in a note, so a one-second tolerance reported every derived file
+# as stale whenever site.json was touched after a generation pass — which is
+# what correcting a note does. An hour is about one working session: files
+# written in the same sitting as the edit are the same batch of work, and
+# anything genuinely left behind is left behind by longer than that.
+SAME_SESSION = 3600.0
+
+
+def _ago(seconds):
+    """A gap in the largest unit that does not round to zero."""
+    if seconds >= 86400:
+        return f"{seconds / 86400.0:.1f} days"
+    if seconds >= 3600:
+        return f"{seconds / 3600.0:.1f} hours"
+    return f"{seconds / 60.0:.0f} minutes"
+
+
 def check_staleness(slug, site):
     """Derived files older than what they were derived from, and dead [cNN]."""
     out = []
@@ -686,11 +704,9 @@ def check_staleness(slug, site):
                 ("coverage.json", "the ranked gap report"),
                 ("design.json", "the plant list and the spacing check")):
             t = mtime(name)
-            if t is not None and t < base - 1:
-                days = (base - t) / 86400.0
+            if t is not None and t < base - SAME_SESSION:
                 out.append(_finding(
-                    "staleness", name,
-                    f"{days:.1f} days older than site.json",
+                    "staleness", name, f"{_ago(base - t)} older than site.json",
                     why))
     # One finding for the whole map directory. Eight lines saying the same thing
     # about eight drawings written by one command is eight times the reading for
@@ -698,13 +714,13 @@ def check_staleness(slug, site):
     mapdir = os.path.join(d, "maps")
     if base and os.path.isdir(mapdir):
         stale = [n for n in sorted(os.listdir(mapdir))
-                 if (mtime(os.path.join("maps", n)) or base) < base - 1]
+                 if (mtime(os.path.join("maps", n)) or base) < base - SAME_SESSION]
         if stale:
             oldest = min(mtime(os.path.join("maps", n)) for n in stale)
             out.append(_finding(
                 "staleness", f"maps/ — {len(stale)} of "
                              f"{len(os.listdir(mapdir))} drawings",
-                f"up to {(base - oldest) / 86400.0:.1f} days older than "
+                f"up to {_ago(base - oldest)} older than "
                 f"site.json: {', '.join(stale[:4])}"
                 + (", ..." if len(stale) > 4 else ""),
                 "drawings of geometry that has since changed. One "
