@@ -153,7 +153,46 @@ def test_it_says_what_it_is(root):
           "SANDBOX of" not in read(root, ORIGIN, "REPORT.md"))
     check("the banner does not double on a second write",
           read(root, SAND, "REPORT.md").count("SANDBOX of") == 1)
+
+    # HTML was the gap, and it is the worst one: a page is the artifact that
+    # gets sent to somebody, opened on a phone, and found again next year with
+    # no shell around it to ask which yard it describes. `convert` takes a path
+    # rather than a slug, which is why it never asked.
+    p = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0,'.');"
+         "from lib import buildhtml;"
+         f"buildhtml.convert(r'{os.path.join(root, SAND, 'REPORT.md')}');"
+         f"buildhtml.convert(r'{os.path.join(root, ORIGIN, 'REPORT.md')}')"],
+        cwd=ROOT, env=env, capture_output=True, text=True)
+    check("a published HTML page out of a sandbox is stamped",
+          "SANDBOX of" in read(root, SAND, "REPORT.html"),
+          (p.stderr or "")[-400:])
+    check("and it is in the body, not only the footer a reader skips",
+          'class="sandbox"' in read(root, SAND, "REPORT.html"))
+    check("the real yard's page is not stamped",
+          "SANDBOX of" not in read(root, ORIGIN, "REPORT.html"),
+          (p.stderr or "")[-400:])
     os.remove(os.path.join(root, ORIGIN, "REPORT.md"))
+
+    # The ballot is served, not written, so it goes nowhere near write_text and
+    # was unstamped for exactly that reason. It is also the worst page in the
+    # repo to meet unstamped, because it asks somebody standing in the garden
+    # to decide their real beds.
+    p = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0,'.');"
+         "from lib import niches, yards;"
+         "d={'niches':[]};"
+         f"print(niches.ballot_html(d,'t',stamp=yards.sandbox_stamp('{SAND}')));"
+         "print('-----8<-----');"
+         f"print(niches.ballot_html(d,'t',stamp=yards.sandbox_stamp('{ORIGIN}')))"],
+        cwd=ROOT, env=env, capture_output=True, text=True)
+    sand_page, _, real_page = (p.stdout or "").partition("-----8<-----")
+    check("the served ballot carries the banner too",
+          "SANDBOX of" in sand_page, p.stdout[-400:] + p.stderr)
+    check("and the real yard's ballot does not",
+          "SANDBOX of" not in real_page, p.stderr)
 
 
 def test_the_gate_still_bites(root):

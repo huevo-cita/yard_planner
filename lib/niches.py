@@ -1354,12 +1354,20 @@ def recommend_all(slug, data=None, note=None):
 BALLOT_TITLE = "Choosing plants"
 
 
-def ballot_html(data, token, saved=None):
+def ballot_html(data, token, saved=None, stamp=None):
     P = []
     A = P.append
     A(f"<!doctype html><html><head><meta charset=utf-8>"
       f"<meta name=viewport content='width=device-width,initial-scale=1'>"
       f"<title>{BALLOT_TITLE}</title><style>{_CSS}</style></head><body>")
+    if stamp:
+        # A page is a generated document like any other, and this one is the
+        # single most misleading thing in the repo to meet unstamped: it asks
+        # somebody standing in the garden to decide their real beds. Rehearsing
+        # the ballot is the reason the sandbox exists, so the rehearsal has to
+        # say so where the decision is actually being made.
+        A(f"<p class=stamp>{_esc(stamp)} &mdash; picks made here change the "
+          f"copy, not the garden.</p>")
     A(f"<h1>{BALLOT_TITLE}</h1>")
     A("<p class=lede>Everything offered here already fits the light, the soil "
       "and the depth of the bed it is offered for. The only question is which "
@@ -1460,6 +1468,7 @@ _CSS = """
  h3{font-size:1rem;margin:1.2rem 0 .2rem;text-transform:lowercase;color:#4a5d3a}
  .lede,.cond,.why{color:#5b5b50;font-size:.9rem;margin:.2rem 0}
  .saved{background:#e6efdc;padding:.6rem;border-radius:6px}
+ .stamp{background:#8a3b12;color:#fff;padding:.5rem .7rem;margin:0 0 .8rem;border-radius:6px;font-weight:600;letter-spacing:.02em}
  .grid{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
  .card{display:flex;flex-direction:column;gap:.2rem;border:2px solid #ddd;
        border-radius:10px;padding:.5rem;cursor:pointer;background:#fff}
@@ -1524,7 +1533,8 @@ def serve(slug, port=8730, host="0.0.0.0"):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     token = secrets.token_urlsafe(9)
-    state = {"data": mark_rhythm(load(slug)), "saved": None, "picks": None}
+    state = {"data": mark_rhythm(load(slug)), "saved": None,
+             "picks": None, "stamp": yards.sandbox_stamp(slug)}
 
     class H(BaseHTTPRequestHandler):
         def _send(self, body, code=200, ctype="text/html; charset=utf-8"):
@@ -1538,7 +1548,8 @@ def serve(slug, port=8730, host="0.0.0.0"):
         def do_GET(self):
             if self.path.rstrip("/") != "/" + token:
                 return self._send("Not found", 404, "text/plain")
-            self._send(ballot_html(state["data"], token, state["saved"]))
+            self._send(ballot_html(state["data"], token, state["saved"],
+                               state["stamp"]))
 
         def do_POST(self):
             if self.path != f"/{token}/save":
@@ -1552,7 +1563,8 @@ def serve(slug, port=8730, host="0.0.0.0"):
                               for k, v in form.items() if v and v[0]}
             state["saved"] = len([k for k in state["picks"]
                                   if "__" not in k])
-            self._send(ballot_html(state["data"], token, state["saved"]))
+            self._send(ballot_html(state["data"], token, state["saved"],
+                               state["stamp"]))
 
         def log_message(self, *a):
             pass

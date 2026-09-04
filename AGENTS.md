@@ -234,7 +234,40 @@ compared; `tools/doctor.py` and `tools/test_gate.py` both check they still agree
 The cheap paths are deliberately never gated, because they are how a doubt gets
 settled: `--quick` on the sun model, `lib.gaps`, `lib.inputs`, `lib.doubts`
 itself including `--inputs` and `--clear`, `lib.design --init`,
-`lib.bom --crossover`, the seed-date lookups.
+`lib.bom --crossover`, the seed-date lookups, and the two audit tools below.
+
+## Check the record before you trust it
+
+Two read-only tools, in this order, because the second is worthless if the first
+has not run:
+
+```bash
+python3 tools/influence.py <slug>            # which numbers actually carry weight
+python3 tools/recompute.py <slug>            # re-derive them from source
+```
+
+`influence.py` answers *which numbers are load-bearing* rather than taking
+somebody's word for it, three ways: whether any job's code reads the leaf,
+whether the yard's own documents quote it, and whether perturbing it moves the
+light. The quadrant it prints first is **believed but never computed** — quoted
+by a person, read by no job, so nothing has ever checked it and nothing can.
+That is where `zones.front_bed.note = "sunniest ground on the lot"` sat while it
+drove a planting decision and five hours of imaginary sun. Its
+`--targets` output feeds `recompute.py`, so the audit set is measured rather
+than nominated.
+
+`recompute.py` re-derives every number the yard asserts, **through
+`design.footprint` and `design.zone_areas`** so it cannot drift from the check
+it is auditing, and reports where a document and the data disagree. Its best
+output is not "this number matches nothing" but "this number is what you get by
+adding the annuals to the perennials, and the check takes the larger" — a
+diagnosis rather than an anomaly. A spot-check of four doubt cards found
+arithmetic errors in three, so run it before settling a card on the card's own
+figures.
+
+Both file nothing. They print pairs and stop, because a card's number is often
+load-bearing for a decision already made, and the override happens after a
+person has seen the pair rather than instead of showing them.
 
 **`--force` is not the way past this.** It exists for the case where someone has
 looked at the board and decided to proceed anyway, and it costs a human approval

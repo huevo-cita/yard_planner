@@ -481,6 +481,33 @@ def main():
     slug = sys.argv[1]
     site = yards.load_site(slug)
 
+    if "--assumed" in sys.argv:
+        # Two skills document this flag and it was never implemented, so the
+        # command they tell you to run for a site walk printed the module
+        # docstring. The summary below already lists the assumed paths, but
+        # truncates each note to 70 characters, and the note is the whole
+        # point: it is what says WHY the value was guessed and therefore what
+        # would falsify it.
+        ass = assumed_paths(site)
+        reported = sum(1 for e in (site.get("provenance") or {}).values()
+                       if e.get("source") == "reported")
+        print(f"{slug}: {len(ass)} assumed values, "
+              f"{measured_fraction(site) * 100:.0f}% of the record measured")
+        for p, note, unc in ass:
+            print(f"\n  {p}")
+            if unc:
+                print(f"    uncertainty: {unc}")
+            print(f"    {note or '(no note, which is the worst kind)'}")
+        if reported:
+            # Not assumed, and not measured either. A site walk wants these too,
+            # and it would be misleading to let this flag imply the rest of the
+            # record is solid.
+            print(f"\n  and {reported} more recorded as `reported` — somebody's "
+                  f"statement rather than a guess, but still not a measurement. "
+                  f"`python3 -m lib.gaps {slug}` ranks both kinds by what they "
+                  f"cost.")
+        return
+
     if "--migrate" in sys.argv:
         changed = migrate(site)
         yards.save(slug, "site.json", site)

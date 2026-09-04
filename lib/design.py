@@ -383,9 +383,13 @@ def check_space(design, site, sun):
             out += _check_grid(z, plants, site, key)
             continue
 
-        usable = areas.get(key)
-        if not usable:
+        soil = areas.get(key)
+        if not soil:
             continue                # reported by check_coverage, not passed over
+        # Canopies are judged against the ground a canopy can occupy, roots
+        # against the soil. Where no apron is declared these are the same
+        # number and nothing below changes.
+        usable, allowance = zone_canopy_room(site, key, soil)
 
         # Annuals and perennials in one bed are a succession, not a crowd: the
         # violas come out before the perennials have their summer size. Judging
@@ -402,15 +406,35 @@ def check_space(design, site, sun):
                     f"perennials rather than after them would read "
                     f"{both / usable:.2f}x, and they are a succession.")
 
+        room = ""
+        if allowance:
+            room = (f" The {usable:.0f} sq ft is {soil:.0f} of soil plus the "
+                    f"{allowance:.0f} sq ft of apron this zone's "
+                    f"{z_overhang(site, key):g} ft canopy overhang allows the "
+                    f"tops to lean out over.")
+
         if need > usable * COVER_CEILING:
             over = round(need / usable, 2)
             out.append(_obj("serious", f"zone {z}",
                             f"the plants at mature spread need {need:.0f} sq ft "
                             f"and the zone has {usable:.0f}. That is {over}x "
-                            f"overplanted",
+                            f"overplanted" + room,
                             "cut the count. A first-year bed that looks full is "
                             "overplanted, and the plants that lose are usually "
                             "the expensive slow ones"))
+        elif allowance and need > soil * COVER_CEILING:
+            # Passes only because the tops are allowed out over the apron. True,
+            # and worth saying: the roots are still in the soil figure, and if
+            # the apron is ever planted or paved the bed is overplanted again.
+            out.append(_obj("note", f"zone {z}",
+                            f"the planting fits at {need / usable:.2f}x only "
+                            f"because the tops may lean out over the apron — "
+                            f"against soil alone it is "
+                            f"{need / soil:.2f}x.{room} The roots are all still "
+                            f"in the {soil:.0f} sq ft",
+                            "no change needed, but do not later plant or pave "
+                            "the apron without revisiting the count, and expect "
+                            "the front rank to lean"))
         elif need < usable * COVER_FLOOR:
             out.append(_obj("note", f"zone {z}",
                             f"the planting covers about "
@@ -616,6 +640,43 @@ def zone_areas(site):
                 sq -= float(taken)
         out[name] = max(0.0, sq)
     return out
+
+
+def z_overhang(site, key):
+    """The canopy overhang a zone declares, in feet."""
+    z = (site.get("zones") or {}).get(key) or {}
+    return float(z.get("canopy_overhang_ft") or 0)
+
+
+def zone_canopy_room(site, key, soil):
+    """Square feet a CANOPY may occupy, which is not the same as the soil.
+
+    `zone_areas` nets off the river rock and the gravel, because nothing roots
+    in them. But a plant standing in the soil behind a stone apron leans its
+    top out over that apron perfectly happily, and `check_space` compares a sum
+    of mature SPREADS — canopy footprints — against the soil figure. So a bed
+    with an apron is judged on ground the tops were never going to need, and
+    reads as overplanted on the strength of its own hardscape.
+
+    `canopy_overhang_ft` already declares that this is allowed, and
+    `_check_depth` already honours it on the depth arm. It was never applied to
+    the area arm, so half the constraint used the allowance and half ignored it.
+
+    The allowance is the overhang depth along the bed's run, capped by the
+    unplantable area actually declared: a canopy cannot lean out over a strip
+    that is not there. The run is recovered as soil over usable depth rather
+    than asked for, because it is already implied by two numbers the zone
+    carries and a third would be a third thing to keep in step.
+    """
+    z = (site.get("zones") or {}).get(key) or {}
+    overhang = float(z.get("canopy_overhang_ft") or 0)
+    depth = float(z.get("usable_depth_ft") or 0)
+    strip = sum(float(z.get(k) or 0)
+                for k in ("unplantable_sqft", "rock_band_sqft"))
+    if overhang <= 0 or depth <= 0 or strip <= 0 or soil <= 0:
+        return soil, 0.0
+    run = soil / depth
+    return soil + min(overhang * run, strip), min(overhang * run, strip)
 
 
 def zone_containers(site, key):

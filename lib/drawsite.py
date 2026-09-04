@@ -369,6 +369,24 @@ def draw_context_shapes(ax, items):
 
 # ---------------------------------------------------------------- site plan
 
+def _verify_line(v):
+    """One `verify_on_site` entry as the single line the plan draws it on.
+
+    The schema says these are plain strings, and a dict here used to reach
+    `textwrap` and die on `expandtabs` eight frames down, which says nothing
+    about the record that caused it. Accept the richer form the doubt board
+    uses, since it is the obvious thing to write, and keep the drawing to the
+    one field that belongs on a plan — the rest of it is the card's job.
+    """
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        for key in ("what", "question", "title", "note"):
+            if isinstance(v.get(key), str):
+                return v[key]
+    return str(v)
+
+
 def draw_plan(site, path):
     g = Geom(site)
     W, C, yS = g.W, g.C, g.yS
@@ -556,7 +574,7 @@ def draw_plan(site, path):
     # rather than estimated. A thorough record grows this list, and both a fixed
     # character count and a guessed character width silently ran the longest and
     # most important items off the right edge of the page.
-    items = site.get("verify_on_site", []) or []
+    items = [_verify_line(v) for v in (site.get("verify_on_site", []) or [])]
     lines, v_top, foot_h = [], ext[2] + 0.44 * (ext[3] - ext[2]), 0.0
     if items:
         # Measured off the axes, not the figure: `frame` may rewrite figsize to
