@@ -80,6 +80,18 @@ MONTHS = list(solar.MONTH_DOY.keys()) if hasattr(solar, "MONTH_DOY") else \
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+# The months `LIGHT_NEED` is compared against when a plant names none of its
+# own. Not a second definition — `solar.GROWING_SEASON` is the only one, and
+# `sunmodel` classes the whole yard on the same window — but named here because
+# it is the default this module applies, and a test that asserts the two are
+# the same object is what stops them drifting apart again.
+#
+# The default used to be all twelve months, which docked every bed more than an
+# hour of open sky before an obstruction was counted and withdrew four full-sun
+# plants from a real design on the strength of December light they were never
+# going to be alive in.
+DEFAULT_LIGHT_MONTHS = solar.GROWING_SEASON
+
 
 def blank(slug):
     return {"yard": slug, "created": datetime.date.today().isoformat(),
@@ -156,15 +168,37 @@ def _series(sun, site, zone, months, field):
     if name is None:
         return []
     z = _table(sun).get(name) or {}
-    keys = [m for m in (months or z.keys()) if m in z]
+    keys = [m for m in (months or DEFAULT_LIGHT_MONTHS) if m in z]
     return [z[m].get(field) for m in keys
             if isinstance(z[m], dict) and z[m].get(field) is not None]
 
 
 def zone_hours(sun, site, zone, months=None):
-    """Effective sun hours for a zone, averaged over the months given."""
+    """Effective sun hours for a zone, averaged over the months given.
+
+    With no months, over `DEFAULT_LIGHT_MONTHS`. Callers that want the
+    twelve-month mean have to ask for it by name — `solar.MONTHS` — because a
+    figure whose window nobody stated is how the two windows got confused in
+    the first place.
+    """
     vals = _series(sun, site, zone, months, "effective")
     return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def window_label(months):
+    """Which months a sun figure is a mean of, in words.
+
+    Every objection quoting an hour figure has to say what it averaged, because
+    the reader's next move is to hold it against a nursery tag and the two are
+    only comparable if they cover the same season. The message this replaces
+    said "over the year" whatever it had actually measured.
+    """
+    ms = list(months or DEFAULT_LIGHT_MONTHS)
+    if ms == list(MONTHS):
+        return "the year"
+    if ms == list(DEFAULT_LIGHT_MONTHS):
+        return f"the growing season, {ms[0]}-{ms[-1]}"
+    return ", ".join(ms)
 
 
 def zone_best(sun, site, zone, months=None):
@@ -187,7 +221,7 @@ def check_light(plant, sun, site):
                      "name matches site.json")]
 
     need, symptom = LIGHT_NEED[want]
-    window = "over " + ", ".join(months) if months else "over the year"
+    window = window_label(months)
     if have < need:
         best = zone_best(sun, site, zone, months)
         fix = None
@@ -197,7 +231,7 @@ def check_light(plant, sun, site):
         out.append(_obj("blocking" if have < need - 1.5 else "serious",
                         plant["name"],
                         f"wants {want} ({need}+ h) and zone {zone} averages "
-                        f"{have} h {window}. It {symptom}",
+                        f"{have} h over {window}. It {symptom}",
                         fix or f"move it to a brighter zone, or swap for "
                                f"something rated {_label_for(have)}"))
     if want in ("shade", "part shade") and have > need + SCORCH_MARGIN:
@@ -205,7 +239,8 @@ def check_light(plant, sun, site):
             .get("days_over_95f_per_year")
         if hot and hot > 20:
             out.append(_obj("serious", plant["name"],
-                            f"is a {want} plant in a zone averaging {have} h, in "
+                            f"is a {want} plant in a zone averaging {have} h "
+                            f"over {window}, in "
                             f"a climate with {hot} days over 95 F a year. It will "
                             f"scorch in July whatever the watering",
                             "move it to the shaded end, or give it afternoon "
@@ -251,7 +286,8 @@ def check_sun_timing(design, sun, site):
             "serious", f"zone {zone}",
             f"takes {int(late * 100)} percent of its direct sun after 1 p.m."
             f"{when}, in a climate with {hot} days over 95 F a year. The "
-            f"{have} h figure reads like part sun and behaves like full "
+            f"{have} h figure — a mean over {window_label(None)} — reads like "
+            f"part sun and behaves like full "
             f"afternoon sun, which is the harshest exposure there is. It "
             f"applies to everything here: "
             f"{', '.join(sorted(set(names))[:4])}"

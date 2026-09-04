@@ -90,7 +90,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 from lib import design as design_mod  # noqa: E402
-from lib import siteschema, yards  # noqa: E402
+from lib import siteschema, solar, yards  # noqa: E402
 import influence  # noqa: E402
 
 # Provenance sources that assert somebody observed the thing. An entry making
@@ -219,10 +219,16 @@ def canonical(slug):
         sum(float((zones[k] or {}).get("area_sqft") or 0) for k in orn) or None,
         f"{len(orn)} beds, gross")
 
-    # Sun, per zone, straight out of the model rather than off a note.
+    # Sun, per zone, straight out of the model rather than off a note. Both
+    # windows, and each named: a document quoting 6.5 h for a bed is quoting
+    # one of these two and does not usually say which, and they differ by more
+    # than the tolerance a sweep would forgive.
     for key in sorted(zones):
-        for label, months in (("annual mean", None), ("Jun", ["Jun"]),
-                              ("Dec", ["Dec"])):
+        for label, months in (
+                ("annual mean", list(solar.MONTHS)),
+                ("growing season mean",
+                 list(design_mod.DEFAULT_LIGHT_MONTHS)),
+                ("Jun", ["Jun"]), ("Dec", ["Dec"])):
             h = design_mod.zone_hours(sun, site, key, months)
             put(f"{key} sun h {label}", h,
                 f"design.zone_hours from sun-hours.json, {label}")
@@ -570,14 +576,18 @@ def check_zone_notes(site, sun):
         cat = re.match(r"\s*(full sun|part sun|part shade|full shade|shade|"
                        r"deep shade)\b", note, re.I)
         if cat:
-            annual = design_mod.zone_hours(sun, site, key)
-            if annual is not None:
-                want = design_mod._label_for(annual)
+            # On the same window `design.check_light` judges a plant over, so
+            # the note and the linter cannot disagree about what "full sun"
+            # means for the same bed.
+            hours = design_mod.zone_hours(sun, site, key)
+            if hours is not None:
+                want = design_mod._label_for(hours)
                 if want.lower() != cat.group(1).lower():
                     out.append(_finding(
                         "zone notes", f"zones.{key}.note",
-                        f"opens {cat.group(1)!r} and {annual:.2f} h annual "
-                        f"mean is {want!r} on design.LIGHT_NEED",
+                        f"opens {cat.group(1)!r} and {hours:.2f} h over "
+                        f"{design_mod.window_label(None)} is {want!r} on "
+                        f"design.LIGHT_NEED",
                         "the category is what a plant list gets chosen "
                         "against"))
     return out

@@ -32,6 +32,26 @@ MONTH_DOY = {
 }
 MONTHS = list(MONTH_DOY)
 
+# The months a light figure describes when nothing names its own, and the one
+# place this window is written down. It lives here rather than in the module
+# that reads it because two modules read it, and the first version of this had
+# each of them decide separately: `lib.sunmodel` classed the yard on the
+# growing season while `lib.design` judged every plant against a twelve-month
+# mean, so the same 6.0 h threshold meant two different things depending on
+# which output you were looking at.
+#
+# April to October, because that is what a nursery tag means by "6-8 hours" -
+# the season the plant is in leaf and growing, not a mean taken over a year it
+# spends part of dormant. The gap is not a rounding error: a twelve-month mean
+# includes the shortest days of the year, so it reads well over an hour lower
+# than the summer one on open sky alone, before a single fence or tree is
+# counted against the bed.
+#
+# It is a convention rather than a measurement, and a northern-hemisphere one.
+# A yard's own frost dates describe a different and much longer window - the
+# stretch in which planting is safe - and are not a substitute for this.
+GROWING_SEASON = ("Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct")
+
 
 # ------------------------------------------------------------------ astronomy
 
