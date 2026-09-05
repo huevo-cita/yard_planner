@@ -100,14 +100,26 @@ from . import design, doubts, solar, yards
 # offering candidates for light the bed does not have in the months the
 # threshold is about.
 #
-# Where a genuinely different claim about the calendar belongs is WINTER, below,
-# and that one stays. It is reported ALONGSIDE the growing-season figure rather
-# than averaged into it, because a bed that is bright in December and dark in
-# July is a different proposition from the reverse and one mean hides both.
-# That is the distinction worth keeping; two spellings of "the growing season"
-# was not one.
+# WINTER is still reported ALONGSIDE the growing-season figure rather than
+# averaged into it, because a bed that is bright in December and dark in July
+# is a different proposition from the reverse and one mean hides both. That
+# distinction was always the right one and it stays.
+#
+# What did not survive is this module owning the window. It was Dec-Jan here,
+# on the argument that the solstice is what winter means, and that stopped
+# being a claim of its own the moment `design.check_light` began judging a
+# winter-active plant against a winter figure: a bed described here as "3.0 h
+# in winter" while the linter refuses a plant on 3.66 h is two winter figures
+# for one bed, which is precisely the fault GROWING was merged to fix, one
+# season over. It is also the narrower half of a real gap - Dec-Jan reported
+# nothing at all about February, March or November, and November is the
+# darkest of the five in five of the seven planted zones on the yard this
+# was written against.
+#
+# So both windows now come from `lib.solar`, and between them they cover the
+# calendar exactly once.
 GROWING = list(solar.GROWING_SEASON)
-WINTER = ["Dec", "Jan"]
+WINTER = list(solar.STANDING_SEASON)
 
 # Size classes, by mature spread. The boundaries are where the practical
 # question changes: under a foot a plant is edging and is planted in runs, one
@@ -155,6 +167,12 @@ def series_note():
                "then rejects. This module used to spell the window out itself, "
                "one month wider, which made that sentence untrue.",
         "winter_reported_separately": WINTER,
+        "winter_months_from": "solar.STANDING_SEASON",
+        "winter_why": "the complement of the growing season, and the same "
+                      "window design.check_light judges a winter-active plant "
+                      "against. It used to be Dec-Jan here, which described "
+                      "the solstice rather than the season and left November, "
+                      "February and March reported by nothing.",
     }
 
 
@@ -1411,7 +1429,8 @@ def ballot_html(data, token, saved=None, stamp=None):
         if n.get("usable_depth_ft"):
             A(f", {float(n['usable_depth_ft']):.1f} ft front to back")
         if L.get("winter_hours"):
-            A(f". In December it drops to {L['winter_hours']} hours")
+            A(f". Through {WINTER[0]}-{WINTER[-1]}, when nothing here is "
+              f"growing, it drops to {L['winter_hours']} hours")
         A(".</p>")
         comp = (n.get("compositions") or {}).get("chosen")
         if comp:
@@ -2182,7 +2201,7 @@ def report(slug, data):
         L = n["light"]
         print(f"\n  {n['label']}  [{n['id']}]")
         print(f"    {L['hours']} h {L['category']}, "
-              f"{L['winter_hours'] or '?'} h in winter; "
+              f"{L['winter_hours'] or '?'} h {WINTER[0]}-{WINTER[-1]}; "
               f"{n['area_sqft']} sq ft"
               + (f", {float(n['usable_depth_ft']):.1f} ft deep"
                  if n.get("usable_depth_ft") else "")

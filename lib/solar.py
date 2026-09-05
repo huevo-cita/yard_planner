@@ -66,6 +66,41 @@ GROWING_SEASON = ("Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct")
 # itself "the growing season" - which is how a sample gets quoted as a window.
 SEASON_SAMPLE = ("Apr", "Jun", "Aug")
 
+# The other half of the year: the months a plant is standing in the ground and
+# not growing. Not a second season written out by hand — it is the complement
+# of `GROWING_SEASON`, computed, so that no month can fall in both and no month
+# can fall in neither. A hand-written winter would be the fourth spelling of a
+# season this repo has had, and the reason the other three were merged is that
+# they drifted.
+#
+# November to March on a yard whose growing season is April to October. Two
+# narrower windows were in use before this and both lose:
+#
+#   Nov-Feb   the window d29 measured the four-nerve daisy over. A defensible
+#             "dark months", but it is a fourth independent literal and it has
+#             to answer why March - which grows nothing here either - is out.
+#   Dec-Jan   what `lib.niches` reported a bed's winter light over. Two months
+#             either side of the solstice is the darkest POINT of the year and
+#             not the season, and it misses November entirely, which on
+#             cloverleaf-austin is the darkest of the five in five of the
+#             seven planted zones.
+#
+# The claim this makes is narrow and worth stating, because the constant will
+# be argued with. It is not the frost window, not a hardiness statement, and
+# not "when it is cold". It says only: over these months nothing here is
+# growing, so a light figure averaged across them answers "can this stand the
+# dark half of the year", where the growing-season figure answers "will this
+# grow". A plant that keeps its leaves has to survive both.
+#
+# Rotated to start after the growing season rather than at January, so a window
+# crossing New Year reads in the order somebody lives it, and computed by
+# filtering rather than slicing so a non-contiguous growing season would still
+# come out right.
+STANDING_SEASON = tuple(
+    m for m in (MONTHS[(MONTHS.index(GROWING_SEASON[-1]) + 1 + k) % 12]
+                for k in range(len(MONTHS)))
+    if m not in GROWING_SEASON)
+
 
 # ------------------------------------------------------------------ astronomy
 

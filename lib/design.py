@@ -41,6 +41,20 @@ both of them were a wrong answer on a real bed before they existed:
                counting both at full spread double-books ground that only one
                of them occupies at a time.
 
+A third optional field decides whether the plant is judged on winter light:
+
+    winter_active   true where the plant carries live foliage through the dark
+                    months and is expected to look like something. That is a
+                    different claim from `evergreen`, which says only that the
+                    leaves do not fall, and the two come apart in both
+                    directions — a grass holding dry seed heads all winter
+                    reads beautifully in December and photosynthesises none of
+                    it, and a root-hardy shrub cut to the ground in November is
+                    absent by design rather than failing. It wants a
+                    `winter_active_why` beside it saying what settled it,
+                    because it is a judgement about a plant rather than a
+                    measurement of the yard.
+
 What the objections mean
 ------------------------
     blocking    the plant will not survive, or the design contradicts a `must`.
@@ -91,6 +105,13 @@ MONTHS = list(solar.MONTH_DOY.keys()) if hasattr(solar, "MONTH_DOY") else \
 # plants from a real design on the strength of December light they were never
 # going to be alive in.
 DEFAULT_LIGHT_MONTHS = solar.GROWING_SEASON
+
+# The months a winter-active plant's second light test is measured over, and
+# again not a definition of its own — `solar.STANDING_SEASON` is the only one,
+# and `lib.niches` reports a bed's winter figure over the same constant, so the
+# number a person is shown when choosing for a bed is the number this module
+# then judges the choice on.
+WINTER_LIGHT_MONTHS = solar.STANDING_SEASON
 
 
 def blank(slug):
@@ -198,12 +219,94 @@ def window_label(months):
         return "the year"
     if ms == list(DEFAULT_LIGHT_MONTHS):
         return f"the growing season, {ms[0]}-{ms[-1]}"
+    if ms == list(WINTER_LIGHT_MONTHS):
+        return f"the standing season, {ms[0]}-{ms[-1]}"
     return ", ".join(ms)
 
 
 def zone_best(sun, site, zone, months=None):
     vals = _series(sun, site, zone, months, "best_cell")
     return round(max(vals), 2) if vals else None
+
+
+def winter_active(plant):
+    """Whether this plant is working through the dark months, or just standing.
+
+    `evergreen` is deliberately not the answer, and the temptation to use it is
+    the whole reason this exists. It is a statement about leaves falling off,
+    and the question the winter light check needs answered is whether the plant
+    is photosynthesising and expected to look presentable while everything
+    around it is dormant. On the yard this was written for, the two disagree in
+    both directions at once: inland sea oats holds papery seed heads that are
+    the best thing in the bed on 13 December and is `evergreen: false`, while
+    an autumn sage flagged `evergreen: true` is semi-evergreen at best and gets
+    nipped by a 28 F night.
+
+    The other rejected mechanism was reading the `december` prose each entry
+    carries — "ratty to dormant", "brown, deliberately", "absent by design".
+    That prose is the EVIDENCE for setting this field and must not become the
+    mechanism: it is free text written for a person, its wording will drift the
+    first time somebody rewrites an entry, and a check that turns on the word
+    "ratty" fails silently and in the direction of saying nothing.
+
+    Returns None where nothing has been decided, which is a third answer and
+    not a no — `check_coverage` reports it rather than guessing.
+    """
+    v = plant.get("winter_active")
+    return v if isinstance(v, bool) else None
+
+
+def _winter_light(plant, want, need, sun, site, already_short):
+    """The second light test, for a plant that has to work through winter.
+
+    A plant's own window is `months`, or failing that `bloom`. For anything
+    that dies back that is right, and a dormant crown does not care what
+    December is doing. For a plant still in leaf it is the wrong window, and
+    wrong in a way that hides itself: bloom months are selected for being
+    bright, so winter is not ignored but DILUTED. The four-nerve daisy in g04
+    is judged over a bloom list of Mar-Jun plus Sep-Dec, clears its 4.0 h floor
+    by 0.25 h, and reads 3.66 h across the months it is the only green thing in
+    the bed.
+
+    Two deliberate restraints, because a check that fires twice for one fault
+    is the check somebody switches off.
+
+    It says nothing where the plant is ALREADY refused for want of light on its
+    own window. The rosemary in g03 blooms Nov-Mar, which is the standing
+    season exactly, so its winter figure and its judged figure are the same
+    3.06 h; a second objection would repeat a number and offer no new decision.
+
+    And it offers no sunniest-cell escape. The primary check can honestly say
+    "this may work in one corner", because its window is a season the plant is
+    growing in throughout. Over a window whose entire point is that it contains
+    the dark months, the brightest cell is by construction March's, and on g04
+    that is 5.67 h against a bed reading 3.66 — offering it would be this
+    check's own failure mode reappearing one level down, in the escape hatch.
+
+    The level is `serious` and never `blocking`, which is a judgement and not
+    an oversight. A plant here has already cleared the light it needs to grow;
+    what it is short of is the light to look like something in the months it
+    was planted to carry. That is the module's own definition of `serious` —
+    it will survive and disappoint — and calling it blocking would put a thin
+    winter rosette beside a shrub in soil that will kill it.
+    """
+    if winter_active(plant) is not True:
+        return []
+    zone = plant["zone"]
+    have = zone_hours(sun, site, zone, list(WINTER_LIGHT_MONTHS))
+    if have is None or have >= need or already_short:
+        return []
+    return [_obj("serious", plant["name"],
+                 f"is marked winter-active, so it is in leaf through the dark "
+                 f"months, and zone {zone} averages {have} h over "
+                 f"{window_label(WINTER_LIGHT_MONTHS)} against the {need} h "
+                 f"its {want} rating wants — {round(need - have, 2)} h short. "
+                 f"It passes on its own window because those months are "
+                 f"brighter. This is how it looks in winter rather than "
+                 f"whether it lives",
+                 "accept a thin winter on it and say so, move it to ground "
+                 "that keeps its light past November, or carry this bed's "
+                 "winter structure with something rated lower")]
 
 
 def check_light(plant, sun, site):
@@ -234,6 +337,7 @@ def check_light(plant, sun, site):
                         f"{have} h over {window}. It {symptom}",
                         fix or f"move it to a brighter zone, or swap for "
                                f"something rated {_label_for(have)}"))
+    out += _winter_light(plant, want, need, sun, site, already_short=have < need)
     if want in ("shade", "part shade") and have > need + SCORCH_MARGIN:
         hot = (site.get("climate") or {}).get("heat", {}) \
             .get("days_over_95f_per_year")
@@ -638,6 +742,50 @@ def check_coverage(design, site, cond, sun):
                         "set `months` on each from whatever document owns its "
                         "dates, listing the months one by one so a season that "
                         "crosses New Year does not come out empty"))
+
+    # --- winter, and which plants nobody has decided about
+    #
+    # The same silence one field over. `winter_active` governs whether a plant
+    # is judged on winter light at all, and an entry that has never been asked
+    # the question is indistinguishable in the objection list from one that was
+    # asked and answered no.
+    #
+    # `evergreen: true` is the prompt here and deliberately not the mechanism.
+    # It is where the question ARISES — something that keeps its leaves is
+    # worth deciding about — and using it as the answer is what this whole
+    # field exists to avoid, because it would object about four plants that are
+    # brown, cut to the ground or standing in dry seed heads and do not care
+    # what December is doing.
+    undecided = [p["name"] for p in plants
+                 if p.get("evergreen") and p.get("zone")
+                 and (p.get("light") or "").lower() in LIGHT_NEED
+                 and winter_active(p) is None]
+    if undecided:
+        out.append(_obj("note", "winter",
+                        f"{len(undecided)} plants keep their leaves and none "
+                        f"of them says whether it is actually working through "
+                        f"winter, so the winter light check did not run for "
+                        f"them — {', '.join(sorted(undecided)[:6])}"
+                        + (" and others" if len(undecided) > 6 else "")
+                        + ". Evergreen is not the same claim: a grass holding "
+                          "dry seed heads looks like winter and needs no light "
+                          "for it",
+                        "set `winter_active` on each, with a "
+                        "`winter_active_why` saying what settled it — the "
+                        "entry's own December note is usually the evidence"))
+    unsourced = [p["name"] for p in plants
+                 if winter_active(p) is not None
+                 and not str(p.get("winter_active_why") or "").strip()]
+    if unsourced:
+        out.append(_obj("note", "winter",
+                        f"{len(unsourced)} plants declare `winter_active` with "
+                        f"no reason beside it — "
+                        f"{', '.join(sorted(unsourced)[:6])}"
+                        + (" and others" if len(unsourced) > 6 else "")
+                        + ". It is a judgement about a plant rather than a "
+                          "measurement of the yard, so an undefended one is a "
+                          "verdict nobody can disagree with",
+                        "add `winter_active_why` naming the evidence"))
 
     # --- soil
     soil = (cond or {}).get("soil") or {}
