@@ -1083,6 +1083,16 @@ def publish(slug):
 TICKED = re.compile(r"^[>\s]*[-*]\s*\[[xX]\]\s*(.+?)\s*$")
 UNTICKED = re.compile(r"^[>\s]*[-*]\s*\[\s\]\s*(.+?)\s*$")
 
+# What the publish step above turns "- [x] " into, because a .docx checkbox
+# cannot carry a ticked state through the Docs import: doneness is encoded as
+# text and the box goes out empty. Reading it back therefore has to undo that,
+# and both halves matter. The prefix has to come off before the title is taken
+# or every done task keys on the word DONE and they collide with each other,
+# and the prefix has to count as ticked or a task that is finished comes back
+# through UNTICKED and gets marked undone — which silently erases the record of
+# what was actually done, the one thing this file exists to keep.
+DONE_MARK = re.compile(r"^DONE\s*·\s*")
+
 
 def _title_of(line):
     """The bold title out of a rendered checkbox line, however Docs mangled it.
@@ -1111,7 +1121,11 @@ def sync(slug, exported):
         for rx, value in ((TICKED, True), (UNTICKED, False)):
             m = rx.match(line)
             if m:
-                state[_title_of(m.group(1))] = value
+                body = re.sub(r"\\([-_*\[\]()#.!`~])", r"\1", m.group(1).strip())
+                marked = DONE_MARK.match(body)
+                if marked:
+                    body, value = body[marked.end():], True
+                state[_title_of(body)] = value
                 break
     changed, unmatched = [], []
     seen = set()

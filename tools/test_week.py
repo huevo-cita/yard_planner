@@ -411,6 +411,47 @@ def check_sync(week, yard):
     changed, unmatched, _ = week.sync(SLUG, export)
     ok(sorted(c[0] for c in changed) == ["t004"] and not unmatched,
        "a title the export escaped still matches its task", (changed, unmatched))
+    check_done_prefix(week, yard)
+
+
+def check_done_prefix(week, yard):
+    """A done task publishes as "- [ ] DONE · title" and has to survive the trip.
+
+    The .docx import cannot carry a ticked box, so `publish` encodes doneness in
+    the text and sends the box out empty. Both halves of reading that back can
+    fail, and they fail in opposite directions: take the title without stripping
+    the marker and every done task keys on the word DONE, so they collide and
+    the count comes back short; strip it but read the empty box at face value
+    and every finished task is marked undone, which erases the record.
+    """
+    data = week.load(SLUG)
+    for t, done in zip(data["tasks"], (True, True, False)):
+        t["done"] = done
+    week.save(SLUG, data)
+    titles = [t["title"] for t in data["tasks"][:3]]
+
+    export = os.path.join(yard, "done-export.md")
+    with open(export, "w") as f:
+        f.write(f"> - [ ] DONE · **{titles[0]}** · 10 min · phone\n"
+                f"> - [ ] DONE · **{titles[1]}** · 1 min · indoors\n"
+                f"> - [ ] **{titles[2]}** · 2 h · roses\n")
+    changed, unmatched, seen = week.sync(SLUG, export)
+    ok(seen == 3, f"two DONE lines key separately rather than colliding "
+                  f"(saw {seen} of 3)")
+    ok(not unmatched, "no phantom 'DONE' item is reported as drift", unmatched)
+    ok(not changed, "a task already done stays done through the round trip",
+       changed)
+
+    # And the other direction: the marker is what says done, not the box.
+    data = week.load(SLUG)
+    for t in data["tasks"][:2]:
+        t["done"] = False
+    week.save(SLUG, data)
+    changed, _, _ = week.sync(SLUG, export)
+    ok(sorted(c[0] for c in changed) == ["t001", "t002"]
+       and all(c[2] is True for c in changed),
+       "the DONE marker marks a task done even though its box is empty",
+       changed)
 
 
 def main():
