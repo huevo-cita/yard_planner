@@ -22,8 +22,8 @@ Sections
     budget        the ceiling, and whether it is a lump or a monthly trickle
     constraints   HOA, landlord, pets, children, deer, standing rules, and the
                   three different things a date can mean here: the display
-                  milestone the garden has to look right on, the blackouts when
-                  no work happens, and whether the project ends at all
+                  milestone the garden has to look right on, the blackouts and
+                  what kind of work they bar, and whether the project ends at all
 
 Every section carries `last_verified`. Conditions decay: compost gets used, beds
 get weedy, a borrowed tiller goes home. Anything past its window is re-confirmed
@@ -208,27 +208,96 @@ def display_milestone(cond):
     return (cond.get("constraints") or {}).get("display_milestone")
 
 
-def blackouts(cond):
-    """Periods when no work happens at all, as (from, to) inclusive.
-
-    Distinct from `person.travel_gaps`, which says where somebody is. A blackout
-    says only that the yard gets no hours, whatever the reason, and a week that
-    is spoken for is not the same fact as a week spent away from home.
-    """
+def _spans(cond):
+    """Every blackout as (from, to, record), dropping the ones with no dates."""
     out = []
     for b in (cond.get("constraints") or {}).get("blackouts") or []:
         a, z = _as_date(b.get("from")), _as_date(b.get("to") or b.get("from"))
         if a and z:
-            out.append((a, z))
+            out.append((a, z, b))
     return out
+
+
+def blackouts(cond):
+    """Periods when the yard gets no work, as (from, to) inclusive.
+
+    Distinct from `person.travel_gaps`, which says where somebody is. A blackout
+    says only that a period is spoken for, whatever the reason, and a week that
+    is booked solid at home is not the same fact as a week spent away.
+
+    What kind of work a blackout bars is a second question, and it is
+    `blackout_bars` rather than this. A period being spoken for and every job in
+    it being off are the same sentence in the common case and come apart the
+    moment somebody says "I meant no building, not no watering".
+    """
+    return [(a, z) for a, z, _ in _spans(cond)]
+
+
+def blackout_records(cond):
+    """Every blackout, dates parsed, with whatever it says about its own scope.
+
+    For anything that has to *report* a blackout rather than test a day against
+    one. `blackouts` is the pair of dates and stays that, because most callers
+    only ever ask which days are gone.
+    """
+    return [{"from": a, "to": z, "kind": rec.get("kind"),
+             "scope": rec.get("scope") or None} for a, z, rec in _spans(cond)]
 
 
 def in_blackout(cond, day):
     """Whether a date falls inside a blackout, and which one."""
     day = _as_date(day)
-    for a, z in blackouts(cond):
+    for a, z, rec in _spans(cond):
         if day and a <= day <= z:
-            return {"from": a.isoformat(), "to": z.isoformat()}
+            return {"from": a.isoformat(), "to": z.isoformat(),
+                    "scope": rec.get("scope"), "kind": rec.get("kind")}
+    return None
+
+
+# The three answers `blackout_bars` can give. `UNSCOPED` is the whole reason
+# there are three: a scope that names what it bars and what it allows still says
+# nothing about the work nobody thought of, and folding that case into
+# `PERMITTED` would make the record's silence into its permission — the failure
+# AGENTS.md spends a section on, one level up.
+BARRED, PERMITTED, UNSCOPED = "barred", "permitted", "unscoped"
+
+
+def blackout_bars(cond, day, kind=None):
+    """Whether work of this `kind`, on this `day`, is what a blackout bars.
+
+    None if the day is outside every blackout. Otherwise `BARRED`, `PERMITTED`
+    or `UNSCOPED`.
+
+    A blackout with no `scope` bars everything. That is the reading every
+    blackout carried before scopes existed and it is the right default: a period
+    recorded as spoken for, with nothing said about exceptions, has no exceptions
+    on the record.
+
+    A `scope` narrows it, in the vocabulary the yard's own `tasks.json` uses for
+    `kind`:
+
+        "scope": {"bars": "build work",
+                  "barred_kinds": ["build", "prep", "plant", "sow"],
+                  "permitted_kinds": ["water", "protect", "event"],
+                  "permits": ["keep-alive watering", "party-eve setup"]}
+
+    `barred_kinds` wins a kind listed in both, because a bar is the stronger
+    statement and a record contradicting itself should refuse rather than allow.
+    """
+    day = _as_date(day)
+    if day is None:
+        return None
+    for a, z, rec in _spans(cond):
+        if not a <= day <= z:
+            continue
+        scope = rec.get("scope") or None
+        if not scope:
+            return BARRED
+        if kind in (scope.get("barred_kinds") or []):
+            return BARRED
+        if kind in (scope.get("permitted_kinds") or []):
+            return PERMITTED
+        return UNSCOPED
     return None
 
 
@@ -501,8 +570,12 @@ def report(slug, only_stale=False):
     if mile:
         print(f"\n  display milestone: {mile.get('date')} — "
               f"{mile.get('what') or 'the garden has to look right'}")
-    for a, z in blackouts(cond):
-        print(f"  blackout: {a} to {z}, no work at all")
+    for a, z, rec in _spans(cond):
+        scope = rec.get("scope") or {}
+        print(f"  blackout: {a} to {z}, "
+              f"{'no work at all' if not scope else 'bars ' + scope.get('bars', 'unstated')}")
+        for line in scope.get("permits") or []:
+            print(f"      permitted inside it: {line}")
     end = project_end(cond)
     if end["stated"]:
         print(f"  project end: {end['date'] or 'none — the project is open-ended'}")

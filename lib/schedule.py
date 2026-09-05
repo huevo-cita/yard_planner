@@ -39,8 +39,10 @@ Three things a date can mean, and why they are separate
 -------------------------------------------------------
     display         the garden has to LOOK right on this day. Work may run past
     milestone       it, and the project does not end there
-    blackout        no work happens in this period at all. Read from
-                    `constraints.blackouts` alongside `person.travel_gaps`
+    blackout        the period is spoken for. Read from `constraints.blackouts`
+                    alongside `person.travel_gaps`. A blackout may narrow itself
+                    to a kind of work; every weekend here is emptied either way,
+                    because everything this module places is build work
     project end     when the work stops, if it ever does. Usually it does not
 
 `vision.target_date` is the first of these. Back-planning up to a display date as
@@ -181,13 +183,23 @@ def _saturdays_back(target, count):
 
 
 def _away_ranges(cond):
-    """Every weekend the yard gets no hours, as date ranges.
+    """Every weekend the yard gets no hours, as (from, to, why, scope).
 
     Two sources, because they are two different facts. `person.travel_gaps` says
     where somebody is. `constraints.blackouts` says only that a period is spoken
     for, whatever the reason — and a week that is booked solid at home is not
     travel, so recording it as travel to get it honoured would be the same class
     of error this module was already making with the ground record.
+
+    A blackout may narrow itself to a kind of work — one yard's is "no BUILD
+    work, not no watering". Reading it as total here is still correct, and it is
+    worth saying why rather than leaving it to be rediscovered: every task this
+    module can place on a weekend comes out of `ORDER`, and all seventeen of them
+    are build work. Keep-alive watering leaves `build()` as `establishment_
+    watering`, a decay regime with no dates on it, which emptying a weekend
+    cannot touch. So a narrowed blackout and a total one empty the same weekends
+    here, for the right reason rather than by luck. The scope is carried through
+    only so the note can say what the record permits instead of guessing.
     """
     out = []
     for g in (cond.get("person") or {}).get("travel_gaps", []):
@@ -196,17 +208,42 @@ def _away_ranges(cond):
             b = _date(g.get("to") or g.get("end") or a)
         else:
             a = b = _date(g)
-        out.append((a, b, "away"))
-    return out + [(a, b, "blacked out") for a, b in cond_mod.blackouts(cond)]
+        out.append((a, b, "away", None))
+    return out + [(r["from"], r["to"], "blacked out", r.get("scope"))
+                  for r in cond_mod.blackout_records(cond)]
 
 
 def _is_away(sat, ranges):
-    """Why this weekend is lost, or None. Either of its two days is enough."""
+    """Why this weekend is lost and what it still permits, or None.
+
+    Either of the weekend's two days falling inside is enough.
+    """
     sun = sat + datetime.timedelta(days=1)
-    for a, b, why in ranges:
+    for a, b, why, scope in ranges:
         if any(a <= d <= b for d in (sat, sun)):
-            return why
+            return why, scope
     return None
+
+
+def _away_note(why, scope):
+    """What a lost weekend says for itself.
+
+    A blackout that names what it bars gets that read back to it, because this
+    plan is one of the places somebody audits the week from. Without it the line
+    reads "nothing scheduled" over a week the record permits three kinds of work
+    in, which is how a decision starts looking like an omission.
+    """
+    if scope:
+        permits = "; ".join(scope.get("permits") or []) or "nothing recorded"
+        return (f"{why} — nothing scheduled. This period bars "
+                f"{scope.get('bars', 'work it has not named')}, which is all "
+                f"this module places. It permits {permits} — none of which is "
+                f"planned here, and keeping a planting alive is not work in the "
+                f"sense this weekend is lost for")
+    return (f"{why} — nothing scheduled. Anything already planted still needs "
+            f"water; leave a note for whoever is covering, scoped to keeping "
+            f"things alive. Keeping a planting alive is not work in the sense "
+            f"this weekend is lost for")
 
 
 # ------------------------------------------------------------------ deadlines
@@ -499,13 +536,9 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
             break
         entry = {"weekend_of": sat.isoformat(), "tasks": [], "hours": 0}
 
-        why = _is_away(sat, away)
-        if why:
-            entry["note"] = (f"{why} — nothing scheduled. Anything already "
-                             f"planted still needs water; leave a note for "
-                             f"whoever is covering, scoped to keeping things "
-                             f"alive. Keeping a planting alive is not work in "
-                             f"the sense this weekend is lost for")
+        lost = _is_away(sat, away)
+        if lost:
+            entry["note"] = _away_note(*lost)
             plan.append(entry)
             continue
         if not groomed:

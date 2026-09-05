@@ -262,8 +262,13 @@ def check(slug):
     return out
 
 
+#: Worst first. A task hitting two blackouts, or one span on several days,
+#: answers for the strongest thing any of those days says about it.
+_VERDICT_ORDER = (conditions.BARRED, conditions.UNSCOPED, conditions.PERMITTED)
+
+
 def blackout_conflicts(slug):
-    """Dated work that falls in a period the record says gets no work at all.
+    """Dated work that falls inside a blackout, and what the blackout says of it.
 
     Kept out of `check()` deliberately. `check()` asks one question — do
     `tasks.json` and the plan documents still say the same thing — and it is
@@ -272,6 +277,13 @@ def blackout_conflicts(slug):
     response to it is usually a conversation rather than an edit: a freeze watch
     inside a blackout cannot simply be moved to a week when there is no freeze.
     So it reports and does not block.
+
+    Every task that falls inside is returned, carrying a `verdict` from
+    `conditions.blackout_bars`, and the reason it is all of them rather than only
+    the barred ones is that the audit question is "what is in this week". Eleven
+    permitted jobs inside a blackout and eleven unexamined ones look identical
+    from outside, and the second is the thing worth catching. The caller decides
+    what to shout about; a `permitted` verdict is a recorded decision, not a find.
 
     A repeating job is reported by the occurrences that land inside, not by its
     span, because a weekly bowl scrub that runs through a blackout is one
@@ -284,17 +296,92 @@ def blackout_conflicts(slug):
         return []
     out = []
     for t in data.get("tasks", []):
-        hits = []
+        hits, verdicts, said = [], set(), []
         for a, z in spans:
             for d in _occurrences(t, a, z):
                 hits.append(d)
+                verdicts.add(conditions.blackout_bars(cond, d, t.get("kind")))
+                inside = conditions.in_blackout(cond, d)
+                if not inside:
+                    # A day `_occurrences` called a hit and no blackout claims.
+                    # Reported rather than raised or dropped: it is a bug in the
+                    # occurrence arithmetic, and a bug that empties this report is
+                    # worse than one that shows a line nobody can rule on
+                    said.append(f"{d} is not in any blackout, so nothing here "
+                                f"can rule on it")
+                    continue
+                scope = inside.get("scope") or {}
+                phrase = (f"the {_date(inside['from']):%-d %b}-"
+                          f"{_date(inside['to']):%-d %b} blackout "
+                          + (f"bars {scope.get('bars', 'work it has not named')}"
+                             if scope else "bars all work"))
+                if phrase not in said:
+                    said.append(phrase)
         if hits:
+            # None is reachable only if a hit day lands outside every span, which
+            # is a bug in `_occurrences` rather than a state to reason about. It
+            # is carried through as the verdict rather than raised, so the check
+            # reports a task it cannot rule on instead of taking the whole run down
+            worst = next((v for v in _VERDICT_ORDER if v in verdicts), None)
             out.append({"id": t["id"], "title": t["title"],
                         "minutes": t.get("minutes", 0),
                         "critical": bool(t.get("critical")),
                         "repeat": bool(t.get("repeat")),
+                        "kind": t.get("kind"),
+                        "verdict": worst,
+                        "blackout": "; ".join(said),
                         "dates": sorted(d.isoformat() for d in set(hits))})
     return out
+
+
+def _report_blackout(clashes, records):
+    """Read the blackout board out, loudest thing first.
+
+    Barred and unscoped work is named task by task. Work the blackout's own
+    record permits is counted and listed by id on one line, and not itemised,
+    because a check that prints eleven paragraphs about eleven jobs somebody has
+    already ruled on is the check that gets switched off inside a week. It is
+    still printed: "eleven tasks inside a blackout" is the shape of an oversight,
+    and the answer to it has to be visible from the same place the shape is.
+    """
+    def days(c):
+        out = ", ".join(f"{_date(d):%-d %b}" for d in c["dates"][:6])
+        return out + (f" and {len(c['dates']) - 6} more"
+                      if len(c["dates"]) > 6 else "")
+
+    flagged = [c for c in clashes if c["verdict"] != conditions.PERMITTED]
+    allowed = [c for c in clashes if c["verdict"] == conditions.PERMITTED]
+
+    if flagged:
+        print(f"\n  and {len(flagged)} task{'s' if len(flagged) > 1 else ''} "
+              f"ask{'' if len(flagged) > 1 else 's'} for work inside a blackout "
+              f"that the blackout does not allow:\n")
+        for c in flagged:
+            why = (f"{c['blackout']}" if c["verdict"] == conditions.BARRED else
+                   f"{c['blackout']}, and its scope neither bars nor permits "
+                   f"{c['kind'] or 'a task with no kind'} — so nobody has ruled "
+                   f"on this one")
+            print(f"      {c['id']} \"{c['title']}\" — {days(c)}"
+                  + ("  CANNOT SLIP" if c["critical"] else ""))
+            print(f"          {c['kind'] or 'no kind'}: {why}")
+
+    if allowed:
+        print(f"\n  {len(allowed)} task{'s' if len(allowed) > 1 else ''} fall "
+              f"inside a blackout and {'are' if len(allowed) > 1 else 'is'} work "
+              f"its own record permits: "
+              f"{', '.join(c['id'] for c in allowed)}")
+        for rec in records:
+            scope = rec.get("scope") or {}
+            if not scope:
+                continue
+            settled = f" [{scope['settled']}]" if scope.get("settled") else ""
+            print(f"      {rec['from']:%-d %b}-{rec['to']:%-d %b} bars "
+                  f"{scope.get('bars', 'work it has not named')}{settled}. "
+                  f"Permitted inside it: "
+                  f"{'; '.join(scope.get('permits') or ['nothing recorded'])}")
+
+    print("\n  These do not block a render. Moving one is a decision, "
+          "not an edit.")
 
 
 def _occurrences(t, a, z):
@@ -313,7 +400,11 @@ def _occurrences(t, a, z):
         return out
     if t.get("window"):
         lo, hi = _date(t["window"][0]), _date(t["window"][1])
-        return [lo] if lo <= z and hi >= a else []
+        # A window overlapping the span asks for work on some day inside it, and
+        # which day is not knowable from the record. The first day of the overlap
+        # is the honest stand-in: the window's own start can be weeks outside the
+        # span, and reporting that day as one inside it is a wrong date.
+        return [max(lo, a)] if lo <= z and hi >= a else []
     d = _date(t["date"])
     return [d] if a <= d <= z else []
 
@@ -972,17 +1063,8 @@ def main():
         else:
             print("  tasks.json agrees with every section it was built from")
         if clashes:
-            print(f"\n  and {len(clashes)} task"
-                  f"{'s' if len(clashes) > 1 else ''} fall inside a blackout, "
-                  f"which is a period the record says gets no work at all:\n")
-            for c in clashes:
-                days = ", ".join(f"{_date(d):%-d %b}" for d in c["dates"][:6])
-                if len(c["dates"]) > 6:
-                    days += f" and {len(c['dates']) - 6} more"
-                print(f"      {c['id']} \"{c['title']}\" — {days}"
-                      + ("  CANNOT SLIP" if c["critical"] else ""))
-            print("\n  These do not block a render. Moving one is a decision, "
-                  "not an edit.")
+            _report_blackout(clashes, conditions.blackout_records(
+                yards.load_conditions(args.slug) or {}))
         raise SystemExit(1 if problems else 0)
 
     if args.restamp:
