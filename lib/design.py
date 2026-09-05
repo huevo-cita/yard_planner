@@ -3,6 +3,7 @@
 
     python3 -m lib.design <slug>            summary and every objection
     python3 -m lib.design <slug> --init     empty design.json
+    python3 -m lib.design <slug> --layout   the bed maps against the plant list
     python3 -m lib.design <slug> --json     objections, machine-readable
 
 This is a linter for a garden. It does not choose plants; that is research, and
@@ -187,6 +188,10 @@ def resolve_zone(sun, site, zone):
 
 def _norm(s):
     return "".join(c for c in str(s).lower() if c.isalnum())
+
+
+def _n(count, word):
+    return f"{count} {word}" + ("" if count == 1 else "s")
 
 
 def resolve_site_zone(site, zone):
@@ -1770,6 +1775,449 @@ def check_grouping(design):
     return out
 
 
+# --------------------------------------------------- the maps against the list
+#
+# `lib.drawbeds` renders every bed map from `design.layout`, which is a SECOND,
+# hand-authored representation of the same planting: its own positions, its own
+# counts and its own written labels. Nothing compared it against
+# `design.plants`, and the raised bed has been showing the symptom for as long
+# as both have existed — 32 cells against 45 plant entries, with the linter's
+# only comment being that a count is the wrong way to read a grid.
+#
+# That comment is true and it is not an answer. The 13 are three crops planted
+# several to the square, which is the method. Naming them is a different thing
+# from tolerating the gap, and the difference is the whole of this section.
+
+#: What one mark on a bed map stands for, per zone kind. This is the asymmetry
+#: between the two representations, declared rather than absorbed into a
+#: tolerance, and read straight off what `lib.drawbeds` draws.
+#:
+#:   border     `plants` — a circle whose radius is half a mature spread. One
+#:              circle is one plant, so the counts have to match exactly.
+#:   grid       `cells` — a rectangle of soil one foot square. Square-foot
+#:              planting deliberately puts ten garlic cloves or six violas in
+#:              two squares, so the comparison is squares <= plants, per crop,
+#:              and a crop with MORE squares than plants is the failure.
+#:   container  nothing draws a barrel, and a map of three circles in a row
+#:              would carry no information the `containers` count does not.
+#:
+#: One tolerance over the whole yard would have swallowed the raised bed's
+#: 13-plant gap and g02's missing bluebonnet in the same shrug. Two rules keyed
+#: to what each bed actually is keeps the second one visible.
+LAYOUT_UNIT = {"border": "plant", "grid": "square", "container": None}
+
+#: Words a label may carry that describe the plant's STATE on the day rather
+#: than its identity, dropped before matching. The maps' own legends define
+#: them: g02's subtitle reads "HATCHED = dormant, cut back or bare on the day",
+#: and g03's note is "cut BOTH to the ground in the last week of November". A
+#: mark reading "Mint marigold CUT" names a plant that is still bought, still
+#: planted and still on the bill.
+LAYOUT_STATES = ("cut", "existing", "dormant", "bare", "stub")
+
+#: How short an abbreviation may be and still count as one. Two characters
+#: match by accident, and the accident is not hypothetical: `V` is a prefix of
+#: `Viola` in a bed that also holds sweet alyssum, `A` is a prefix of
+#: `alyssum` in the same bed, and a one-letter rule would have called the g03
+#: map reconciled on the strength of two initials. Those two labels are defined
+#: in a `side_notes` line reading "V = viola   A = sweet alyssum", which is a
+#: legend for a person and not one for anything else. The remedy is a `plant`
+#: key on the mark, which is why the objection asks for one.
+LABEL_ABBREV_MIN = 3
+
+_LABEL_BREAK = re.compile(r"-\s*\n\s*")
+_LABEL_WORD = re.compile(r"[A-Za-z0-9]+")
+
+
+def _label_tokens(text):
+    """A label's identity words, lowercased. Two typographic facts, not slack.
+
+    A hyphen at a line break is a hyphenation: `"Milk-\\nweed"` is one word, and
+    reading it as two loses every hyphenated label on these maps. And a label is
+    set inside a circle at five point, so where it is abbreviated it is
+    abbreviated by truncation — `Gregg's mistfl.`, `Mex. bush sage`.
+    """
+    text = _LABEL_BREAK.sub("", str(text or "")).replace("\n", " ")
+    return [w for w in (t.lower() for t in _LABEL_WORD.findall(text))
+            if w not in LAYOUT_STATES]
+
+
+def _label_say(label):
+    """A label as the map shows it. Labels carry newlines to fit inside a
+    circle, and `repr` of one prints `'PoB\\nstub'`, which is not what anybody
+    is looking at when they go and check.
+    """
+    return " ".join(str(label).split())
+
+
+def _token_hit(a, b):
+    """Whether two words are the same word, one possibly truncated."""
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= LABEL_ABBREV_MIN and long_.startswith(short)
+
+
+def _tokens_match(label, name):
+    """Every word of the label answered by a distinct word of the name.
+
+    Distinct matters: without it `"sage sage"` would match a name holding one
+    `sage`, and the direction of this check is that the LABEL must be fully
+    accounted for. Extra words in the plant name are expected — the records
+    carry buying instructions in them, like `Milkweed - ASK FOR Asclepias
+    tuberosa OR A. asperula BY NAME`.
+    """
+    spare = list(name)
+    for t in label:
+        hit = next((s for s in spare if _token_hit(t, s)), None)
+        if hit is None:
+            return False
+        spare.remove(hit)
+    return True
+
+
+def resolve_mark(label, records):
+    """(plant, how) for one map label against one zone's plant records.
+
+    `how` is why it matched, and it is reported rather than swallowed because
+    the weakest kind of match is the one worth seeing:
+
+        name          the label is the record's name
+        botanical     the label is the record's whole binomial
+        abbreviation  every word of the label truncates a word of the name
+        fragment      it matches nothing in the name and only part of the
+                      binomial. `Carex` against `Cedar sedge` / `Carex
+                      planostachys` — a genus, not a plant, and not a thing to
+                      say at a till
+        ambiguous     more than one record answers to it, so a person decides
+        None          nothing answers to it
+
+    Never guesses. A label two records could be is reported as ambiguous, not
+    assigned to the first: comparing a map against the wrong record and
+    reporting the result as a disagreement is worse than reporting the gap.
+    """
+    toks = _label_tokens(label)
+    if not toks:
+        return None, None
+    flat = "".join(toks)
+    for p in records:
+        if _norm(p.get("name")) == flat:
+            return p, "name"
+    for p in records:
+        if p.get("botanical") and _norm(p["botanical"]) == flat:
+            return p, "botanical"
+    # An initial is not an abbreviation. `LABEL_ABBREV_MIN` alone does not stop
+    # `A` matching, because a record's own name can contain a one-letter word:
+    # `Milkweed - ASK FOR Asclepias tuberosa OR A. asperula BY NAME` holds `A`,
+    # and exact equality was letting the g03 alyssum marker "resolve" against
+    # the g02 milkweed's buying instruction. Below this length only the whole
+    # name counts, and the two branches above have already asked.
+    if len(flat) < LABEL_ABBREV_MIN:
+        return None, None
+    for field, how in (("name", "abbreviation"), ("botanical", "fragment")):
+        hits = [p for p in records if p.get(field)
+                and _tokens_match(toks, _label_tokens(p[field]))]
+        if len(hits) == 1:
+            return hits[0], how
+        if len(hits) > 1:
+            return None, "ambiguous"
+    return None, None
+
+
+def layout_zone(site, bed):
+    """The zone key a layout bed draws, or None. Resolved, never guessed.
+
+    A layout bed is named for the file it writes — `g01-southeast-corner`,
+    `raised-bed` — and a zone is keyed `bed_g01`, `bed_raised`. Nothing joined
+    the two, which is most of the reason nothing ever compared them.
+
+    Three ways in order: an explicit `zone` on the bed, then `resolve_site_zone`
+    on the name, then a zone whose `label_short` appears as one of the name's
+    hyphen-separated words. The last has to be unique or this returns None,
+    because a bed compared against the wrong zone's records reports a
+    disagreement that is entirely its own invention.
+    """
+    if bed.get("zone"):
+        return resolve_site_zone(site, bed["zone"]) or bed["zone"]
+    name = bed.get("name") or ""
+    direct = resolve_site_zone(site, name)
+    if direct:
+        return direct
+    words = {w for w in _label_tokens(name.replace("-", " "))}
+    hits = [key for key, z in (site.get("zones") or {}).items()
+            if isinstance(z, dict) and z.get("label_short")
+            and _norm(z["label_short"]) in words]
+    return hits[0] if len(hits) == 1 else None
+
+
+#: What a mark means when it declares `"plant": null` — drawn on purpose and
+#: not a planting. g02's 'FROG' is the case: a marker for the pond frog
+#: ornament, on the map because it is a landmark for finding a bed edge in
+#: February. Distinguished from an ABSENT `plant` key, which says nothing.
+#: Without this, `--layout` reports an ornament as a plant the record forgot
+#: forever, and the only way to silence it is to delete it from the map.
+NOT_A_PLANT = object()
+
+
+def mark_declares(mark):
+    """What a mark says it draws: a name, NOT_A_PLANT, or None for silence.
+
+    Three states and not two, which is the whole point. `mark.get("plant")`
+    collapses a declared non-plant into an undeclared one, and the remedy this
+    module prints — `"plant": null` on anything that is deliberately not a
+    plant — would then have been advice to write a key nothing reads. That is
+    the failure being fixed here, so leaving it in the remedy text unimplemented
+    would be a fresh instance of it.
+    """
+    if "plant" not in mark:
+        return None
+    v = mark["plant"]
+    return NOT_A_PLANT if v is None else v
+
+
+def layout_marks(bed):
+    """(label, squares, declared) per mark, whatever the bed type calls them.
+
+    `squares` is how much grid a cell covers, so a 2x1 cell spanning two
+    squares counts as two rather than as one — otherwise a wide cell reads as a
+    single square and the total silently undercounts the bed.
+
+    `declared` is the mark's own answer to what it draws, kept apart from the
+    label it prints, because the two are different claims: a label is what the
+    map SAYS and a declaration is what it MEANS. Keeping them separate is what
+    lets an abbreviation stay short on a drawing that has to fit in a circle
+    while still being checkable — 'V' can go on staying 'V'.
+    """
+    if bed.get("type") == "grid":
+        return [(c.get("label"),
+                 max(1, int(c.get("w", 1)) * int(c.get("h", 1))),
+                 mark_declares(c))
+                for c in bed.get("cells") or []]
+    return [(p.get("label"), 1, mark_declares(p))
+            for p in bed.get("plants") or []]
+
+
+def reconcile_layout(design, site):
+    """One record per layout bed, comparing it against the plant records.
+
+    Reports rather than decides. The caller turns this into objections, and
+    `--layout` prints it whole, because "the two agree" is worth printing: the
+    argument for keeping two representations at all rests on their agreement
+    being evidence, and evidence nobody prints is not evidence.
+    """
+    plants = design.get("plants") or []
+    by_zone = {}
+    for p in plants:
+        if p.get("zone"):
+            key = resolve_site_zone(site, p["zone"]) or p["zone"]
+            by_zone.setdefault(key, []).append(p)
+
+    out = []
+    for bed in ((design.get("layout") or {}).get("beds") or []):
+        key = layout_zone(site, bed)
+        records = by_zone.pop(key, []) if key else []
+        kind = zone_kind(site, key) if key else "border"
+        rec = {"bed": bed.get("name"), "zone": key, "kind": kind,
+               "unit": LAYOUT_UNIT.get(kind, "plant"),
+               "marks": 0, "plants": sum(p.get("count", 1) for p in records),
+               "matched": [], "unresolved": {}, "fragments": {},
+               "ambiguous": {}, "unmarked": [], "declared": 0,
+               "not_plants": {}, "misdeclared": {}}
+        seen = {}
+        for label, squares, declared in layout_marks(bed):
+            if declared is NOT_A_PLANT:
+                # Not counted as a mark at all: the bed's plant total is being
+                # compared against its planting, and an ornament is neither.
+                say = _label_say(label) or "(unlabelled)"
+                rec["not_plants"][say] = rec["not_plants"].get(say, 0) + squares
+                rec["declared"] += 1
+                continue
+            rec["marks"] += squares
+            if declared is not None:
+                rec["declared"] += 1
+                hit = [p for p in records if p.get("name") == declared]
+                if not hit:
+                    # A declaration that names nothing is worse than no
+                    # declaration: it reads as checked and is not. Reported
+                    # under its own heading rather than as an unresolved label,
+                    # because the remedy is different — somebody wrote this.
+                    say = _label_say(label) or _label_say(declared)
+                    rec["misdeclared"][say] = declared
+                    continue
+                seen[declared] = seen.get(declared, 0) + squares
+                continue
+            plant, how = resolve_mark(label, records)
+            if plant is None:
+                bucket = ("ambiguous" if how == "ambiguous" else "unresolved")
+                say = _label_say(label)
+                rec[bucket][say] = rec[bucket].get(say, 0) + squares
+                continue
+            if how == "fragment":
+                rec["fragments"][_label_say(label)] = plant["name"]
+            seen[plant["name"]] = seen.get(plant["name"], 0) + squares
+        for p in records:
+            if p["name"] not in seen:
+                rec["unmarked"].append((p["name"], p.get("count", 1)))
+            else:
+                rec["matched"].append(
+                    (p["name"], seen[p["name"]], p.get("count", 1)))
+        out.append(rec)
+
+    # A zone with plants and no bed map at all. Containers are exempt by
+    # declaration above, not by omission: three circles in a row would tell
+    # nobody anything the `containers` count does not already say.
+    for key, records in by_zone.items():
+        if LAYOUT_UNIT.get(zone_kind(site, key)) is None:
+            continue
+        out.append({"bed": None, "zone": key, "kind": zone_kind(site, key),
+                    "unit": LAYOUT_UNIT.get(zone_kind(site, key), "plant"),
+                    "marks": 0,
+                    "plants": sum(p.get("count", 1) for p in records),
+                    "matched": [], "unresolved": {}, "fragments": {},
+                    "ambiguous": {}, "declared": 0, "not_plants": {},
+                    "misdeclared": {},
+                    "unmarked": [(p["name"], p.get("count", 1))
+                                 for p in records]})
+    return out
+
+
+def check_layout(design, site):
+    """Where the bed maps and the plant records stop agreeing."""
+    out = []
+    fragments = []
+    for rec in reconcile_layout(design, site):
+        z, unit = rec["zone"], rec["unit"]
+        if rec["bed"] is None:
+            out.append(_obj("serious", f"zone {z}",
+                            f"{rec['plants']} plants are planned here and no "
+                            f"bed map draws this zone, so there is nothing to "
+                            f"plant from and nothing to check the list against",
+                            f"add a bed to design.json's `layout` block for "
+                            f"{z}, then re-render with lib.drawbeds"))
+            continue
+        if rec["zone"] is None:
+            out.append(_obj("serious", "layout",
+                            f"bed map {rec['bed']!r} names no zone this site "
+                            f"holds, so its {rec['marks']} marks are compared "
+                            f"against nothing. It renders perfectly and could "
+                            f"say anything",
+                            "put a `zone` key on the bed naming the site.json "
+                            "zone it draws"))
+            continue
+
+        fragments += [(z, label, name)
+                      for label, name in sorted(rec["fragments"].items())]
+
+        # The count, under this bed's own unit. A grid cell is allowed to hold
+        # more than one plant and a border circle is not, and that is the whole
+        # asymmetry — stated per crop rather than absorbed into a margin. So a
+        # grid is only wrong when a crop has MORE squares than plants, and a
+        # border is wrong in either direction.
+        over = [(n, m, c) for n, m, c in rec["matched"]
+                if (m > c if unit == "square" else m != c)]
+        if unit == "square":
+            if over:
+                named = ", ".join(f"{n} in {m} squares against {c} plants"
+                                  for n, m, c in sorted(over))
+                out.append(_obj("serious", f"zone {z}",
+                                f"the map gives more squares to a crop than "
+                                f"there are plants to fill them — {named}. A "
+                                f"square may hold several of one thing; it "
+                                f"cannot hold a fraction of one",
+                                "raise the count in `plants`, or take the "
+                                "spare squares back on the map"))
+            multi = [(n, m, c) for n, m, c in rec["matched"] if c > m]
+            if multi:
+                named = ", ".join(f"{n} {c} in {m}" for n, m, c in sorted(multi))
+                spare = sum(c - m for _n, m, c in multi)
+                out.append(_obj("note", f"zone {z}",
+                                f"{rec['marks']} squares against "
+                                f"{rec['plants']} plants, and the "
+                                f"{spare}-plant difference is "
+                                f"{_n(len(multi), 'crop')} sown several to the "
+                                f"square, which is the method rather than a "
+                                f"discrepancy — {named}. This is the answer to "
+                                f"the count the grid check can only shrug at",
+                                None))
+        elif rec["marks"] != rec["plants"] or over:
+            # Both facts in one objection, and the per-plant list is never
+            # dropped just because the total already disagrees: "39 against 37"
+            # sends somebody to count a nineteen-foot border, and "Gulf muhly:
+            # 5 on the map, 3 on the list" sends them to the plant.
+            named = ", ".join(f"{n}: {m} on the map, {c} on the list"
+                              for n, m, c in sorted(over))
+            if rec["marks"] != rec["plants"]:
+                said = (f"the bed map draws {rec['marks']} plants and the "
+                        f"plant records hold {rec['plants']}. One circle is "
+                        f"one plant in a border, so these are two different "
+                        f"plantings, and the map is the one somebody plants "
+                        f"from" + (f" — {named}" if named else ""))
+            else:
+                said = (f"the totals agree and the plants do not — {named}. A "
+                        f"total is the one thing two opposite errors in the "
+                        f"same bed will always agree on")
+            out.append(_obj("serious", f"zone {z}", said,
+                            "reconcile the two, then re-render with "
+                            "lib.drawbeds"))
+
+        # Names, reported from both ends at once, because they are one finding:
+        # a mark nothing answers to and a plant nothing draws are the same gap
+        # seen from either side. Aggregated per zone and per distinct label —
+        # one line per marker would be sixty lines saying one thing, which is
+        # how a check gets switched off.
+        # A declaration naming no record. Serious rather than a note, and this
+        # is the one place the check is stricter about a marked-up map than an
+        # unmarked one: an unresolved label is silence, and a `plant` key that
+        # matches nothing is a false statement that reads as verified.
+        if rec["misdeclared"]:
+            named = ", ".join(f"{lab!r} claims {name!r}"
+                              for lab, name in sorted(rec["misdeclared"].items()))
+            out.append(_obj("serious", f"zone {z}",
+                            f"{_n(len(rec['misdeclared']), 'mark')} on this map "
+                            f"declares a plant this zone's records do not hold "
+                            f"— {named}. A wrong declaration is worse than "
+                            f"none: it reads as reconciled",
+                            "correct the `plant` key to the record's exact "
+                            "`name`, or move the record into this zone"))
+
+        blind = sum(rec["unresolved"].values()) + sum(rec["ambiguous"].values())
+        if blind or rec["unmarked"]:
+            labels = ", ".join(
+                f"{lab!r}" + (f" x{n}" if n > 1 else "")
+                for lab, n in sorted(rec["unresolved"].items()))
+            amb = ", ".join(f"{lab!r}" for lab in sorted(rec["ambiguous"]))
+            missing = ", ".join(
+                f"{n}" + (f" x{c}" if c > 1 else "")
+                for n, c in sorted(rec["unmarked"]))
+            said = (f"{blind} of {rec['marks']} marks on this map name nothing "
+                    f"in the plant records"
+                    + (f" — {labels}" if labels else "")
+                    + (f"; ambiguous: {amb}" if amb else "")
+                    + (f". And {_n(len(rec['unmarked']), 'plant record')} "
+                       f"{'is' if len(rec['unmarked']) == 1 else 'are'} drawn "
+                       f"by no mark — {missing}" if rec["unmarked"] else "")
+                    + f". The counts still balance at "
+                      f"{rec['marks']} to {rec['plants']}, so this is not "
+                      f"evidence the map is wrong; it is the point past which "
+                      f"nothing can tell whether it is")
+            out.append(_obj("note", f"zone {z}", said,
+                            "put a `plant` key on each mark naming the record "
+                            "it draws, and `\"plant\": null` on anything that "
+                            "is deliberately not a plant"))
+
+    if fragments:
+        named = "; ".join(f"{lab!r} in {z} for {name}"
+                          for z, lab, name in fragments)
+        out.append(_obj("serious", "layout",
+                        f"a bed map labels a plant with part of its botanical "
+                        f"name rather than with a name — {named}. A genus is "
+                        f"not a plant: nobody can buy from this label, and "
+                        f"asking for it by the part that is written is how the "
+                        f"wrong species comes home",
+                        "label the mark with the record's own name, so the map "
+                        "and the shopping list say the same word"))
+    return out
+
+
 def check(slug, force=False):
     design = yards.load(slug, "design.json") or {}
     site = yards.load(slug, "site.json") or {}
@@ -1806,6 +2254,7 @@ def check(slug, force=False):
     out += check_vision(design, vis)
     out += check_season(design, vis, site)
     out += check_grouping(design)
+    out += check_layout(design, site)
 
     rank = {"blocking": 0, "serious": 1, "note": 2}
     out.sort(key=lambda o: rank[o["level"]])
@@ -1844,11 +2293,62 @@ def report(slug, force=False):
         print()
 
 
+def report_layout(slug):
+    """The bed maps beside the plant records, agreement included.
+
+    Printed whole rather than only where it disagrees, because two independent
+    representations that match is the only argument for keeping both, and an
+    agreement nobody prints is not evidence of one.
+    """
+    design = yards.load(slug, "design.json") or {}
+    site = yards.load(slug, "site.json") or {}
+    recs = reconcile_layout(design, site)
+    if not recs:
+        print(f"{slug} has no `layout` block to reconcile")
+        return
+    print(f"{slug} — bed maps against plant records\n")
+    for rec in recs:
+        unit = rec["unit"]
+        rule = ("one circle is one plant" if unit == "plant"
+                else "a square may hold several of one crop")
+        print(f"  {rec['bed'] or '(no map)'}  ->  {rec['zone']}  "
+              f"[{rec['kind']}, {rule}]")
+        print(f"      {rec['marks']} {unit}s on the map, "
+              f"{rec['plants']} plants on the list")
+        for name, marks, count in sorted(rec["matched"]):
+            bad = marks > count if unit == "square" else marks != count
+            flag = "  <-- differs" if bad else ""
+            print(f"        ok   {name:<44s} {marks} : {count}{flag}")
+        for name, count in sorted(rec["unmarked"]):
+            print(f"        ??   {name:<44s} on the list, drawn by nothing "
+                  f"(x{count})")
+        for label, n in sorted(rec["unresolved"].items()):
+            print(f"        ??   {label!r} x{n} on the map, naming nothing on "
+                  f"the list")
+        for label, name in sorted(rec["fragments"].items()):
+            print(f"        !!   {label!r} is part of the botanical name of "
+                  f"{name}, not a name")
+        for label in sorted(rec["ambiguous"]):
+            print(f"        ??   {label!r} could be more than one record")
+        for label, name in sorted(rec["misdeclared"].items()):
+            print(f"        !!   {label!r} declares {name!r}, which this zone's "
+                  f"records do not hold")
+        for label, n in sorted(rec["not_plants"].items()):
+            print(f"        --   {label!r} x{n} declared not a plant, so it is "
+                  f"not counted either way")
+        if rec["declared"]:
+            print(f"        {rec['declared']} of these marks say what they draw; "
+                  f"the rest are matched by their label alone")
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("slug")
     ap.add_argument("--init", action="store_true")
+    ap.add_argument("--layout", action="store_true",
+                    help="the bed maps against the plant records, per zone")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="check against a board with open doubts; the "
@@ -1860,6 +2360,9 @@ def main():
             print(f"{args.slug} already has a design.json; not overwriting")
             return
         print(f"wrote {yards.save(args.slug, 'design.json', blank(args.slug))}")
+        return
+    if args.layout:
+        report_layout(args.slug)
         return
     if args.json:
         print(json.dumps(check(args.slug, force=args.force), indent=2))

@@ -12,8 +12,9 @@ Each mutation names its own suite, because the behaviours covered here are owned
 by different files: the reconciliation between `lib.schedule` and `tasks.json`
 by `tools/test_reconcile.py`, the no-build week's visibility on the calendar by
 `tools/test_blackout.py`, layered soil — which layer rules a plant's pH and
-which layer rules the water — by `tools/test_layers.py`, and a bed's depth
-against the rows it is offered by `tools/test_rows.py`. Running the whole repo
+which layer rules the water — by `tools/test_layers.py`, a bed's depth
+against the rows it is offered by `tools/test_rows.py`, and the bed maps against
+the plant records by `tools/test_layout.py`. Running the whole repo
 against every
 mutation would be slower and would also let a mutation be "caught" by a suite
 that has no business knowing about it.
@@ -453,6 +454,134 @@ MUTATIONS = [
         "        tight = \"\"\n        if along is not None:",
         "        tight = \"\"\n        if False:",
     ),
+    (
+        "layout-check-unwired",
+        "layout",
+        "lib/design.py",
+        "the reconciliation is written, tested and never called — which is the "
+        "exact failure it exists to catch. `overhang_ft` was read by one "
+        "module and written by none for the same reason",
+        "    out += check_layout(design, site)",
+        "    pass",
+    ),
+    (
+        "layout-unit-collapsed",
+        "layout",
+        "lib/design.py",
+        "every bed is measured in squares, so a border drawing one more circle "
+        "than there are plants stops being an error. One tolerance over the "
+        "whole yard is what this table exists instead of",
+        'LAYOUT_UNIT = {"border": "plant", "grid": "square", "container": None}',
+        'LAYOUT_UNIT = {"border": "square", "grid": "square", '
+        '"container": None}',
+    ),
+    (
+        "layout-initials-resolve",
+        "layout",
+        "lib/design.py",
+        "one letter counts as an abbreviation, so `V` resolves to `Viola` and "
+        "`A` to `alyssum` and the g03 map reports as reconciled on the "
+        "strength of two initials — a quiet output over a check that ran on "
+        "nothing",
+        "LABEL_ABBREV_MIN = 3",
+        "LABEL_ABBREV_MIN = 1",
+    ),
+    (
+        "layout-genus-accepted",
+        "layout",
+        "lib/design.py",
+        "a label matching only part of the binomial is treated as a name, so "
+        "`Carex` against `Cedar sedge` goes quiet — the same shape as the "
+        "error corrected this morning, which came from asking for a sedge by "
+        "a common name",
+        '("name", "abbreviation"), ("botanical", "fragment")',
+        '("name", "abbreviation"), ("botanical", "abbreviation")',
+    ),
+    (
+        "layout-ambiguity-assigned",
+        "layout",
+        "lib/design.py",
+        "a label two records could answer to is assigned to the first instead "
+        "of reported, so the map is compared against a record somebody picked "
+        "arbitrarily and the result is printed as a verdict",
+        '        if len(hits) > 1:\n            return None, "ambiguous"',
+        "        if len(hits) > 1:\n            return hits[0], how",
+    ),
+    (
+        "layout-plant-names-dropped",
+        "layout",
+        "lib/design.py",
+        "the count objection stops naming which plant moved, so a nineteen-"
+        "foot border comes back as '39 against 37' and the reader has to "
+        "count it by hand",
+        '                        f"from" + (f" — {named}" if named else ""))',
+        '                        f"from")',
+    ),
+    (
+        "layout-wide-cell-is-one",
+        "layout",
+        "lib/design.py",
+        "a cell spanning two squares counts as one, so a wide cell silently "
+        "undercounts the grid and the difference is then explained away as "
+        "several plants to the square",
+        '                 max(1, int(c.get("w", 1)) * int(c.get("h", 1))),',
+        "                 1,",
+    ),
+    (
+        "layout-zone-guessed",
+        "layout",
+        "lib/design.py",
+        "a bed name matching two zones is joined to the first rather than "
+        "reported, so a map is compared against the wrong bed's records and "
+        "the disagreement is entirely the check's own invention",
+        "    return hits[0] if len(hits) == 1 else None",
+        "    return hits[0] if hits else None",
+    ),
+    (
+        "layout-hyphenation-ignored",
+        "layout",
+        "lib/design.py",
+        "a hyphen at a line break reads as two words, so every hyphenated "
+        "label on the maps — `Milk-\\nweed`, `Dami-\\nanita`, `Golden-\\neye` "
+        "— stops resolving and the output fills with findings that are the "
+        "matcher's fault",
+        '_LABEL_BREAK = re.compile(r"-\\s*\\n\\s*")',
+        '_LABEL_BREAK = re.compile(r"(?!x)x")',
+    ),
+    (
+        "layout-null-plant-collapsed",
+        "layout",
+        "lib/design.py",
+        "`\"plant\": null` stops meaning anything, so a mark declared NOT a "
+        "plant is indistinguishable from one that declares nothing. This is "
+        "the original bug restored: the module printed `\"plant\": null` as its "
+        "own remedy while `.get` quietly collapsed the two, which is advice to "
+        "write a key half of which nothing reads",
+        "    return NOT_A_PLANT if v is None else v",
+        "    return v",
+    ),
+    (
+        "layout-declaration-unread",
+        "layout",
+        "lib/design.py",
+        "an explicit `plant` key is ignored and the label is matched instead, "
+        "so the one remedy offered for an unreadable map does nothing when "
+        "somebody takes it — and `V` on the g03 map stays unresolvable however "
+        "carefully it is annotated",
+        "            if declared is not None:",
+        "            if False:",
+    ),
+    (
+        "layout-misdeclaration-trusted",
+        "layout",
+        "lib/design.py",
+        "a `plant` key naming no record in the zone is counted as if it had "
+        "matched, so a typo'd declaration reads as reconciled — strictly worse "
+        "than leaving the mark unannotated, because it silences the check "
+        "rather than merely failing to help it",
+        "                if not hit:",
+        "                if False:",
+    ),
 ]
 
 
@@ -460,7 +589,8 @@ MUTATIONS = [
 #: suite that is supposed to know about it, so "caught" means the right file
 #: noticed rather than something downstream tripping over the wreckage.
 SUITES = {"reconcile": "test_reconcile.py", "blackout": "test_blackout.py",
-          "layers": "test_layers.py", "rows": "test_rows.py"}
+          "layers": "test_layers.py", "rows": "test_rows.py",
+          "layout": "test_layout.py"}
 
 
 def run_suite(suite, timeout=300):
