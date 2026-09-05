@@ -138,8 +138,17 @@ JOB_INPUTS = {
     },
     "schedule": {
         "sections": ["address", "climate", "zones"],
-        "why": "back-planning counts frost dates and heat windows out of "
-               "`climate`, and task sizing scales with bed area from `zones`.",
+        "why": "narrower than it looks, and worth stating exactly because the "
+               "obvious reading is wrong. `climate` is read once, by "
+               "`frost_dates`, which `build` calls after the plan is already "
+               "assembled and only to print beside it — no task is placed by "
+               "frost arithmetic, and the seed-start and days-to-maturity "
+               "helpers that do count backwards are reachable from the command "
+               "line and never from `build`. `zones` is read for bed LABELS, to "
+               "match a design zone against the ground record; task hours are "
+               "flat archetypes and do not scale with area. What actually sizes "
+               "a plan is `conditions.json` — the hours band, the travel gaps "
+               "and the blackouts — and that file is outside every all-clear.",
     },
 }
 

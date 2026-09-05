@@ -20,7 +20,10 @@ Sections
     tools         what can be done without renting or buying
     person        experience, physical limits, hours a week, travel gaps
     budget        the ceiling, and whether it is a lump or a monthly trickle
-    constraints   HOA, landlord, pets, children, deer, deadlines
+    constraints   HOA, landlord, pets, children, deer, standing rules, and the
+                  three different things a date can mean here: the display
+                  milestone the garden has to look right on, the blackouts when
+                  no work happens, and whether the project ends at all
 
 Every section carries `last_verified`. Conditions decay: compost gets used, beds
 get weedy, a borrowed tiller goes home. Anything past its window is re-confirmed
@@ -142,8 +145,106 @@ def blank(slug):
                    "willing_to_phase": None},
         "constraints": {"last_verified": None, "hoa": None, "landlord": None,
                         "pets": [], "children": None, "wildlife": [],
-                        "deadlines": []},
+                        "deadlines": [], "rules": [],
+                        "display_milestone": None, "blackouts": [],
+                        "project_end": None},
     }
+
+
+#: The keys `blank()` declares under `ground`. See `unread_ground`.
+GROUND_SCHEMA = ("last_verified", "areas", "hardscape", "surface_note")
+
+
+def unread_ground(cond):
+    """Ground facts filed under a key nothing reads.
+
+    An empty `ground.areas` is read by `lib.schedule` as a bare lot — measure
+    it, mark it out, dig it, edge it, till it. That is the right reading of
+    "nothing is built here" and the wrong reading of "nobody wrote it down under
+    this key", and the two are indistinguishable from the key alone. One yard
+    recorded ten built features under `ground.already_built`, a spelling it
+    invented, and drew twelve hours of groundwork for four beds that were
+    already dug, edged and planted.
+
+    This deliberately does not read the stray key and carry on. An `areas` entry
+    turns on its `state`, which is what the schedule gates against, and reading
+    "edged" out of the sentence "Four in-ground beds, all edged" is a guess
+    rather than a rename. So this names the key and the count and stops, and the
+    migration onto the schema stays a written act with somebody's word behind
+    each state.
+
+    A note or a status string is prose and is not flagged; a non-empty list of
+    records is.
+    """
+    ground = cond.get("ground") or {}
+    out = []
+    for key, value in ground.items():
+        if key in GROUND_SCHEMA:
+            continue
+        if (isinstance(value, list) and value
+                and all(isinstance(v, dict) for v in value)):
+            out.append({"key": key, "count": len(value)})
+    return sorted(out, key=lambda r: r["key"])
+
+
+# ------------------------------------------------ what a date on a yard means
+
+def _as_date(v):
+    if isinstance(v, datetime.date):
+        return v
+    try:
+        return datetime.date.fromisoformat(str(v)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def display_milestone(cond):
+    """The date the garden has to *look* right on, or None.
+
+    Deliberately not called a deadline. A deadline is a date work runs up to,
+    and reading a display date that way is what put the largest planting of one
+    yard's autumn three weeks before the party it was meant to be settled for.
+    """
+    return (cond.get("constraints") or {}).get("display_milestone")
+
+
+def blackouts(cond):
+    """Periods when no work happens at all, as (from, to) inclusive.
+
+    Distinct from `person.travel_gaps`, which says where somebody is. A blackout
+    says only that the yard gets no hours, whatever the reason, and a week that
+    is spoken for is not the same fact as a week spent away from home.
+    """
+    out = []
+    for b in (cond.get("constraints") or {}).get("blackouts") or []:
+        a, z = _as_date(b.get("from")), _as_date(b.get("to") or b.get("from"))
+        if a and z:
+            out.append((a, z))
+    return out
+
+
+def in_blackout(cond, day):
+    """Whether a date falls inside a blackout, and which one."""
+    day = _as_date(day)
+    for a, z in blackouts(cond):
+        if day and a <= day <= z:
+            return {"from": a.isoformat(), "to": z.isoformat()}
+    return None
+
+
+def project_end(cond):
+    """The date the project ends, and whether anybody has actually said.
+
+    Three-valued on purpose. A recorded `null` means somebody was asked and the
+    answer was that there is no end — which is not the same as nobody having
+    been asked, and the difference decides whether work after the display
+    milestone may be treated as out of scope. It may not, unless it says so.
+    """
+    rec = (cond.get("constraints") or {}).get("project_end")
+    if rec is None:
+        return {"stated": False, "date": None}
+    return {"stated": True, "date": _as_date(rec.get("date")),
+            "source": rec.get("source"), "note": rec.get("note")}
 
 
 # ------------------------------------------------------------------ freshness
@@ -395,6 +496,23 @@ def report(slug, only_stale=False):
     if b.get("ceiling_usd"):
         print(f"  budget: ${b['ceiling_usd']:,.0f} {b.get('cadence') or ''}, "
               f"${b.get('spent_so_far_usd') or 0:,.0f} spent")
+
+    mile = display_milestone(cond)
+    if mile:
+        print(f"\n  display milestone: {mile.get('date')} — "
+              f"{mile.get('what') or 'the garden has to look right'}")
+    for a, z in blackouts(cond):
+        print(f"  blackout: {a} to {z}, no work at all")
+    end = project_end(cond)
+    if end["stated"]:
+        print(f"  project end: {end['date'] or 'none — the project is open-ended'}")
+
+    stray = unread_ground(cond)
+    for s in stray:
+        print(f"\n  ground.{s['key']} holds {s['count']} records and nothing "
+              f"reads it.\n  Every tool sees ground.areas, which is empty, so "
+              f"this yard plans as a bare lot.\n  Move them to `areas` and "
+              f"`hardscape`, deciding each area's `state` as you go.")
 
     missing = [r["section"] for r in staleness(cond)
                if r["state"] == "never recorded"]

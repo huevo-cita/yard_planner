@@ -53,7 +53,7 @@ import json
 import os
 import re
 
-from . import yards
+from . import conditions, yards
 
 MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
@@ -65,7 +65,13 @@ HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
 #: Documents whose dated sections tasks.json is allowed to be extracted from.
 #: Anything else cited on a task is reference material and is linked, not hashed.
-SOURCE_DOCS = ("PLAN.md", "SOWING-CALENDAR.md", "SOURCING.md", "SCHEDULE.md")
+#:
+#: A document that states a date belongs here. `ANT-PLAN.md` did not, and it
+#: carries a dated table of seven jobs; one of them was scheduled for a Saturday
+#: that no calendar in the yard had ever heard of, because nothing hashed the
+#: section and no task cited it.
+SOURCE_DOCS = ("PLAN.md", "SOWING-CALENDAR.md", "SOURCING.md", "SCHEDULE.md",
+               "ANT-PLAN.md")
 
 
 # ------------------------------------------------------------------ the record
@@ -254,6 +260,80 @@ def check(slug):
                     f"`date_inferred` and a note saying where its date came from")
                 break
     return out
+
+
+def blackout_conflicts(slug):
+    """Dated work that falls in a period the record says gets no work at all.
+
+    Kept out of `check()` deliberately. `check()` asks one question — do
+    `tasks.json` and the plan documents still say the same thing — and it is
+    wired to refuse a render when the answer is no. This asks a different
+    question, about the world rather than about two files, and the honest
+    response to it is usually a conversation rather than an edit: a freeze watch
+    inside a blackout cannot simply be moved to a week when there is no freeze.
+    So it reports and does not block.
+
+    A repeating job is reported by the occurrences that land inside, not by its
+    span, because a weekly bowl scrub that runs through a blackout is one
+    missed refill and a planting session inside one is a lost weekend.
+    """
+    data = load(slug)
+    cond = yards.load_conditions(slug) or {}
+    spans = conditions.blackouts(cond)
+    if not data or not spans:
+        return []
+    out = []
+    for t in data.get("tasks", []):
+        hits = []
+        for a, z in spans:
+            for d in _occurrences(t, a, z):
+                hits.append(d)
+        if hits:
+            out.append({"id": t["id"], "title": t["title"],
+                        "minutes": t.get("minutes", 0),
+                        "critical": bool(t.get("critical")),
+                        "repeat": bool(t.get("repeat")),
+                        "dates": sorted(d.isoformat() for d in set(hits))})
+    return out
+
+
+def _occurrences(t, a, z):
+    """Every day this task actually asks for work between a and z inclusive."""
+    r = t.get("repeat")
+    if r:
+        start, end = _date(r["from"]), _date(r["to"])
+        step = _step_days(r.get("every"))
+        if not step:
+            return [d for d in (start,) if a <= d <= z]
+        out, d = [], start
+        while d <= end:
+            if a <= d <= z:
+                out.append(d)
+            d += datetime.timedelta(days=step)
+        return out
+    if t.get("window"):
+        lo, hi = _date(t["window"][0]), _date(t["window"][1])
+        return [lo] if lo <= z and hi >= a else []
+    d = _date(t["date"])
+    return [d] if a <= d <= z else []
+
+
+#: `repeat.every` is written the way a person says a cadence, so the unit has to
+#: be read as well as the number. "6 months" is not six days, and reading it that
+#: way puts a twice-yearly gutter clean inside every week it is asked about.
+_UNITS = {"day": 1, "days": 1, "week": 7, "weeks": 7, "month": 30,
+          "months": 30, "year": 365, "years": 365}
+
+
+def _step_days(every):
+    every = str(every or "").strip().lower()
+    if every in _UNITS:
+        return _UNITS[every]
+    m = re.match(r"^(\d+)\s*(\w*)$", every)
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    return n * _UNITS.get(unit, 1)
 
 
 def stamp(findings):
@@ -882,15 +962,28 @@ def main():
 
     if args.check:
         problems = check(args.slug)
-        if not problems:
+        clashes = blackout_conflicts(args.slug)
+        if problems:
+            print(f"  {len(problems)} disagreement"
+                  f"{'s' if len(problems) > 1 else ''} between tasks.json and "
+                  f"the documents it was built from:\n")
+            for p in problems:
+                print(f"      {p['message']}")
+        else:
             print("  tasks.json agrees with every section it was built from")
-            return
-        print(f"  {len(problems)} disagreement"
-              f"{'s' if len(problems) > 1 else ''} between tasks.json and the "
-              f"documents it was built from:\n")
-        for p in problems:
-            print(f"      {p['message']}")
-        raise SystemExit(1)
+        if clashes:
+            print(f"\n  and {len(clashes)} task"
+                  f"{'s' if len(clashes) > 1 else ''} fall inside a blackout, "
+                  f"which is a period the record says gets no work at all:\n")
+            for c in clashes:
+                days = ", ".join(f"{_date(d):%-d %b}" for d in c["dates"][:6])
+                if len(c["dates"]) > 6:
+                    days += f" and {len(c['dates']) - 6} more"
+                print(f"      {c['id']} \"{c['title']}\" — {days}"
+                      + ("  CANNOT SLIP" if c["critical"] else ""))
+            print("\n  These do not block a render. Moving one is a decision, "
+                  "not an edit.")
+        raise SystemExit(1 if problems else 0)
 
     if args.restamp:
         restamp(args.slug)

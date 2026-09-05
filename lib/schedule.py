@@ -7,11 +7,21 @@
     python3 -m lib.schedule <slug> --harvest-by 2027-06-01 --crop "bush bean"
 
 Counts backwards from the target date in weekends, checks the plan against the
-hours the person actually has, and refuses to put heavy work in a week they said
-they are away.
+hours the person actually has, and refuses to put heavy work in a week the record
+says is unavailable.
 
-The three kinds of deadline arithmetic
---------------------------------------
+What `build()` does and does not do
+-----------------------------------
+`build()` places archetype tasks into weekends and nothing else. In particular it
+does **no frost arithmetic**: `frost_dates()` is called after the plan is already
+assembled, only to print alongside it, and the two functions below that do the
+real counting are reachable from the command line and from `raised-bed-rotation`,
+never from `build()`. So a plan from this module is fitted to the hours and to the
+calendar, and is not checked against a planting window. Read the dates as "this
+much work fits before that date", not as "this is when to plant".
+
+The deadline arithmetic, which lives here but runs on its own
+-------------------------------------------------------------
     seed start      tomatoes and peppers want 6-8 weeks indoors before the last
                     frost; brassicas 5-6; cucurbits 3-4 and they resent being
                     started earlier. Counting backwards from the frost date is
@@ -19,9 +29,23 @@ The three kinds of deadline arithmetic
     days to matu-   a harvest date minus days to maturity gives a sow-by date,
     rity            plus a fortnight because catalogue figures assume ideal
                     conditions and nobody has those
-    bloom window    a date the yard has to look right sets which plants can
-                    possibly be in flower, and that is a design constraint that
-                    has to travel backwards into the plant list
+
+A third kind is named in the design skill and is not implemented here: a bloom
+window, where the date the yard has to look right decides which plants can
+possibly be in flower. That constraint travels backwards into the plant list
+rather than into this schedule.
+
+Three things a date can mean, and why they are separate
+-------------------------------------------------------
+    display         the garden has to LOOK right on this day. Work may run past
+    milestone       it, and the project does not end there
+    blackout        no work happens in this period at all. Read from
+                    `constraints.blackouts` alongside `person.travel_gaps`
+    project end     when the work stops, if it ever does. Usually it does not
+
+`vision.target_date` is the first of these. Back-planning up to a display date as
+though it were the last day work is allowed is what packs a planting into the
+three weeks before a party, and it is the reason those three are kept apart.
 
 Why weekends
 ------------
@@ -156,23 +180,33 @@ def _saturdays_back(target, count):
     return [d - datetime.timedelta(weeks=i) for i in range(count)]
 
 
-def _away_ranges(person):
-    """Travel gaps, as date ranges. Accepts a bare date or {"from", "to"}."""
+def _away_ranges(cond):
+    """Every weekend the yard gets no hours, as date ranges.
+
+    Two sources, because they are two different facts. `person.travel_gaps` says
+    where somebody is. `constraints.blackouts` says only that a period is spoken
+    for, whatever the reason — and a week that is booked solid at home is not
+    travel, so recording it as travel to get it honoured would be the same class
+    of error this module was already making with the ground record.
+    """
     out = []
-    for g in person.get("travel_gaps", []):
+    for g in (cond.get("person") or {}).get("travel_gaps", []):
         if isinstance(g, dict):
             a = _date(g.get("from") or g.get("start"))
             b = _date(g.get("to") or g.get("end") or a)
         else:
             a = b = _date(g)
-        out.append((a, b))
-    return out
+        out.append((a, b, "away"))
+    return out + [(a, b, "blacked out") for a, b in cond_mod.blackouts(cond)]
 
 
 def _is_away(sat, ranges):
-    """A weekend counts as lost if either of its days falls inside a gap."""
+    """Why this weekend is lost, or None. Either of its two days is enough."""
     sun = sat + datetime.timedelta(days=1)
-    return any(a <= d <= b for a, b in ranges for d in (sat, sun))
+    for a, b, why in ranges:
+        if any(a <= d <= b for d in (sat, sun)):
+            return why
+    return None
 
 
 # ------------------------------------------------------------------ deadlines
@@ -283,6 +317,11 @@ def _cautions(plan, cond):
     A rule like "never mulch the bluebonnet strip" is worthless sitting in a
     constraints list if the plan says "mulch (3 h)" and nothing connects the
     two. This pairs them by verb so the rule appears on the weekend it matters.
+
+    Reads `constraints.rules`, which `conditions.blank()` declares. It has to:
+    a reader pointed at a key the schema never creates cannot fire on any
+    conformant yard, and silently returning nothing looks exactly like a yard
+    with no standing rules.
     """
     scheduled = {t["task"] for w in plan for t in w.get("tasks", [])}
     verbs = {t: TASK_ALIASES.get(t, t).split()[0] for t in scheduled}
@@ -431,9 +470,17 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
     if not tasks:
         return {"error": "no design.json to schedule"}
 
-    person = cond.get("person") or {}
+    # Groundwork is the expensive half of a plan and the half most likely to be
+    # already done. Drawing it because the ground record is filed under a key
+    # nothing reads is the one failure here that costs whole weekends, so it is
+    # named rather than left to be noticed in the totals.
+    stray = cond_mod.unread_ground(cond)
+    groundwork = [t["task"] for t in tasks
+                  if t["task"] in ("measure and mark out", "kill turf",
+                                   "dig and edge a bed", "amend and till")]
+
     per_weekend = hours_per_weekend or cond_mod.weekly_hours(cond) or 6
-    away = _away_ranges(person)
+    away = _away_ranges(cond)
     start_no_earlier = _date(start_from or datetime.date.today())
 
     total_hours = sum(t["hours"] for t in tasks)
@@ -452,10 +499,13 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
             break
         entry = {"weekend_of": sat.isoformat(), "tasks": [], "hours": 0}
 
-        if _is_away(sat, away):
-            entry["note"] = ("away — nothing scheduled. Anything already planted "
-                             "still needs water; leave a note for whoever is "
-                             "covering, scoped to keeping things alive")
+        why = _is_away(sat, away)
+        if why:
+            entry["note"] = (f"{why} — nothing scheduled. Anything already "
+                             f"planted still needs water; leave a note for "
+                             f"whoever is covering, scoped to keeping things "
+                             f"alive. Keeping a planting alive is not work in "
+                             f"the sense this weekend is lost for")
             plan.append(entry)
             continue
         if not groomed:
@@ -520,6 +570,16 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
                {"through_day": d, "frequency": how} for d, how in WATERING_DECAY],
            "cautions": _cautions(plan, cond),
            }
+    if stray and groundwork:
+        keys = ", ".join(f"ground.{s['key']} ({s['count']} records)"
+                         for s in stray)
+        out["ground_unread"] = (
+            f"{sum(TASK_HOURS.get(t, 3) for t in groundwork)} of these hours "
+            f"are groundwork — {', '.join(groundwork)} — and this yard records "
+            f"{keys}, which nothing reads. ground.areas is empty, so the plan "
+            f"above is a bare-lot plan. If those beds already exist, move the "
+            f"records onto `areas` with a `state` each and re-run; the "
+            f"groundwork will drop out on its own")
     if provisional:
         out["provenance"] = provisional
     restriction = ((cond.get("water") or {}).get("irrigation") or {}) \
@@ -555,6 +615,8 @@ def report(slug, target=None, hours=None, force=False):
     if p.get("provenance"):
         print(f"  {p['provenance']}: the dates below rest on assumptions still "
               f"in question\n")
+    if p.get("ground_unread"):
+        print(f"  {p['ground_unread']}\n")
     if p.get("warning"):
         print(f"  {p['warning']}\n")
     if p["last_frost"]:
