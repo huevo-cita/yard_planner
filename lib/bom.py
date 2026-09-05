@@ -121,6 +121,25 @@ def bed_fill_volume(length_ft, width_ft, depth_in):
 CAVEATS = "_caveats"     # reserved key on `need`; never a purchasable line
 
 
+def mulched(site):
+    """Zones asking to be mulched, whether or not the design has planted them.
+
+    Everything else here is scoped to the zones the design puts a plant in,
+    which is right for compost and for plant counts and wrong for exactly one
+    case: a bed that exists, is edged, is being weeded this month and has no
+    entry in the plant list yet. g05 on cloverleaf-austin was in neither of the
+    two mulch figures d9 was arguing between, and the reason was structural
+    rather than an oversight — no plants, so no zone, so no mulch.
+
+    Declaring `mulch_topoff_in` on a zone is a statement that this bed gets
+    mulch, which is a thing a person knows before the planting is designed. It
+    is the declaration and not the bed's existence that brings it in, so a lawn
+    or a gravel court cannot arrive here by accident.
+    """
+    return {k for k, z in (site.get("zones") or {}).items()
+            if isinstance(z, dict) and z.get("mulch_topoff_in")}
+
+
 def _caveat(need, say):
     need.setdefault(CAVEATS, []).append(say)
 
@@ -161,16 +180,32 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
     # composted every turnover and never mulched; a container is neither.
     unpriced = []
     excluded = {"mulch": [], "compost": []}
-    for zone in sorted(planted):
+    mulch_only = mulched(site) - planted
+    for zone in sorted(planted | mulch_only):
         key = resolve_site_zone(site, zone) or zone
         z = (site.get("zones") or {}).get(key) or {}
         a = areas.get(key)
         if not a:
             unpriced.append(zone)
             continue
-        for item, depth, verb in (("mulch", mulch_depth_in, "at"),
+        # A bed that states its own top-off depth gets that instead of the
+        # standard mulching depth. `mulch_depth_in` is what a bed wants when it
+        # is bare, and on a yard where the owner has already spread three to six
+        # inches of bought soil and mulch it is not what any bed wants: it costed
+        # 33.1 cu ft of mulch for ground that needed a scatter, and then added
+        # the nine bags he had said he would buy on top of it.
+        for item, depth, verb in (("mulch",
+                                   z.get("mulch_topoff_in") or mulch_depth_in,
+                                   "topped off at" if z.get("mulch_topoff_in")
+                                   else "at"),
                                   ("compost", compost_depth_in,
                                    "topdressed at")):
+            # A bed that is here only because it asked for mulch gets mulch and
+            # nothing else. Composting an undesigned bed is a different decision
+            # from topping its mulch off, and quietly making it would have grown
+            # the compost figure by a fifth on the way past.
+            if item != "mulch" and zone in mulch_only:
+                continue
             off = z.get(f"no_{item}")
             if off:
                 excluded[item].append(f"{zone} — {off}" if isinstance(off, str)

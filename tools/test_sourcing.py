@@ -83,7 +83,13 @@ def ok(cond, label, detail=""):
 # the board visibly rather than by a decimal.
 SITE = {"yard": SLUG, "schema_version": 2,
         "address": {"street": "a street", "lat": 30.27, "lon": -97.70},
-        "zones": {"bed a": {"area_sqft": 100}},
+        # bed a is bare ground and takes the standard mulching depth. bed b has
+        # mulch on it already and states a top-off, and NOTHING IS PLANTED IN IT
+        # — which is the case d9 found: a bed that exists, is edged and is being
+        # weeded this month falls out of every quantity here, because the loop is
+        # scoped to the zones the design puts a plant in.
+        "zones": {"bed a": {"area_sqft": 100},
+                  "bed b": {"area_sqft": 60, "mulch_topoff_in": 1.0}},
         "climate": {}, "boundary": {}, "frame": {}, "features": {},
         "obstructions": {}, "provenance": {}}
 
@@ -588,6 +594,29 @@ def check_bill(bom, sourcing):
        "a hardscape line the design costs at nothing costs nothing",
        f"${toads.get('usd')} up to ${toads.get('high_usd')}: "
        f"{toads.get('pricing', {}).get('basis')}")
+
+    # A top-off depth per bed, which is the whole of d9. The failure it replaces
+    # was not an arithmetic error: the derived figure was correct for mulching
+    # 160 sq ft of bare ground and the beds were not bare, so it was answering a
+    # question nobody had asked and being added to the owner's own nine bags on
+    # the way to the shopping list.
+    why = " ".join(need["mulch"]["why"])
+    ok(round(need["mulch"]["quantity"], 2)
+       == round(bom.mulch_volume(100, 3.0) + bom.mulch_volume(60, 1.0), 2),
+       "a bed's own top-off depth is used, and the default where none is given",
+       f"{need['mulch']['quantity']:.2f} cu ft: {why}")
+    ok("bed b topped off at 1.0 in" in why and "bed a at 3.0 in" in why,
+       "and the line says which beds were topped off and which were mulched",
+       why)
+    ok("bed b" in why and "bed b" not in " ".join(need["compost"]["why"]),
+       "an unplanted bed that asks for mulch gets mulch and not compost",
+       f"compost: {' '.join(need['compost']['why'])}")
+    ok(round(need["compost"]["quantity"], 2)
+       == round(bom.mulch_volume(100, 2.0), 2),
+       "so the compost figure is the planted beds alone, unmoved by any of this",
+       f"{need['compost']['quantity']:.2f} cu ft")
+    ok("mulch" in billed,
+       "and the mulch still reaches the bill after all of that", sorted(billed))
 
     gaps = quiet(bom.price_gaps, SLUG, bom=bill)
     ok(gaps["gaps"] and gaps["gaps"] == sorted(
