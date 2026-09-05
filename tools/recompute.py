@@ -90,7 +90,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 from lib import design as design_mod  # noqa: E402
-from lib import siteschema, solar, yards  # noqa: E402
+from lib import inputs, siteschema, solar, yards  # noqa: E402
 import influence  # noqa: E402
 
 # Provenance sources that assert somebody observed the thing. An entry making
@@ -680,59 +680,103 @@ def check_cross_file(slug, site, dsn, sun):
     return out
 
 
-# Modification times cannot tell an edit that moved a bed from an edit that
-# fixed a typo in a note, so a one-second tolerance reported every derived file
-# as stale whenever site.json was touched after a generation pass — which is
-# what correcting a note does. An hour is about one working session: files
-# written in the same sitting as the edit are the same batch of work, and
-# anything genuinely left behind is left behind by longer than that.
-SAME_SESSION = 3600.0
+#: How many changed subtrees a finding names before it says "and n more".
+NAME_AT_MOST = 4
 
 
-def _ago(seconds):
-    """A gap in the largest unit that does not round to zero."""
-    if seconds >= 86400:
-        return f"{seconds / 86400.0:.1f} days"
-    if seconds >= 3600:
-        return f"{seconds / 3600.0:.1f} hours"
-    return f"{seconds / 60.0:.0f} minutes"
+def _say_moved(m):
+    """The changed inputs, in the order a reader wants them.
+
+    A subtree that changed and also gained a member is one piece of news, so
+    the census line only carries what the fingerprints did not already name.
+    """
+    changed = set(m.get("changed") or [])
+    groups = (("changed", sorted(changed)),
+              ("added", m.get("added") or []),
+              ("no longer read", m.get("removed") or []),
+              ("gained or lost members",
+               [n for n in m.get("counted") or []
+                if not any(n == c or n.startswith(c + ".") for c in changed)]))
+    parts = []
+    for label, names in groups:
+        if not names:
+            continue
+        shown = ", ".join(names[:NAME_AT_MOST])
+        if len(names) > NAME_AT_MOST:
+            shown += f", and {len(names) - NAME_AT_MOST} more"
+        parts.append(f"{label}: {shown}")
+    return "; ".join(parts)
 
 
 def check_staleness(slug, site):
-    """Derived files older than what they were derived from, and dead [cNN]."""
+    """Derived artifacts built from inputs that have since moved, and dead [cNN].
+
+    This used to compare modification times with an hour of tolerance, and was
+    wrong on both axes. It cried wolf for a whole working day over a corrected
+    provenance string and a rewritten note, neither of which can move a shadow —
+    and the remedy such a finding recommends is another run of `lib.sunmodel`,
+    which is gated, so a false positive points somebody at the doubt gate for
+    nothing. In the other direction the hour of tolerance was exactly the window
+    an agent session works in, so a real geometry edit left un-regenerated was
+    invisible for as long as it mattered most.
+
+    Each artifact now records a fingerprint per input subtree it was built from,
+    which is `lib.doubts`'s all-clear mechanism and `lib.week`'s section hashes
+    for the third time in this repo, and for the same reason both exist: the
+    finding can name what moved. The scope comes from `lib.inputs.ARTIFACTS`
+    off the same `JOB_INPUTS` map the gate uses, so the staleness question and
+    the gate question cannot drift apart — `tools/doctor.py` checks that map
+    against static analysis already.
+
+    There is no tolerance to tune, because a content digest needs none.
+
+    An artifact written before this existed carries no stamp, and that is
+    reported as a question that cannot be answered yet rather than as staleness.
+    Asserting freshness there would be the old false negative, and asserting
+    staleness would be the old false positive.
+    """
     out = []
     d = yards.yard_dir(slug)
 
-    def mtime(name):
-        p = os.path.join(d, name)
-        return os.path.getmtime(p) if os.path.exists(p) else None
+    for name, why in (("sun-hours.json", "every light figure in the yard"),
+                      ("coverage.json", "the ranked gap report")):
+        if not os.path.exists(os.path.join(d, name)):
+            continue
+        artifact = yards.load(slug, name) or {}
+        m = inputs.moved(artifact.get("inputs"), site,
+                         inputs.ARTIFACTS[name])
+        if m is None:
+            out.append(_finding(
+                "staleness", name,
+                "records no digest of the site.json subtrees it was built "
+                "from, so whether it is current cannot be answered",
+                f"{why}, on trust. The next run of the job that writes it "
+                f"stamps one and the question becomes answerable"))
+        elif not m["current"]:
+            out.append(_finding(
+                "staleness", name,
+                "was built from site.json values that have since moved — "
+                + (_say_moved(m) or "the census of what is in them"),
+                f"{why}, computed from geometry the record no longer holds"))
 
-    base = mtime("site.json")
-    if base:
-        for name, why in (
-                ("sun-hours.json", "every light figure in the yard"),
-                ("coverage.json", "the ranked gap report"),
-                ("design.json", "the plant list and the spacing check")):
-            t = mtime(name)
-            if t is not None and t < base - SAME_SESSION:
-                out.append(_finding(
-                    "staleness", name, f"{_ago(base - t)} older than site.json",
-                    why))
     # One finding for the whole map directory. Eight lines saying the same thing
     # about eight drawings written by one command is eight times the reading for
     # the same fact.
+    #
+    # A PNG cannot carry a stamp, so the drawings inherit `sun-hours.json`'s:
+    # they are written by the same command from the same geometry, and a run
+    # that rewrote one rewrote all of them. What that misses is a drawing
+    # deleted or edited by hand afterwards, which nothing here ever caught.
     mapdir = os.path.join(d, "maps")
-    if base and os.path.isdir(mapdir):
-        stale = [n for n in sorted(os.listdir(mapdir))
-                 if (mtime(os.path.join("maps", n)) or base) < base - SAME_SESSION]
-        if stale:
-            oldest = min(mtime(os.path.join("maps", n)) for n in stale)
+    if os.path.isdir(mapdir) and os.listdir(mapdir):
+        sun = yards.load(slug, "sun-hours.json") or {}
+        m = inputs.moved(sun.get("inputs"), site, "sunmodel")
+        if m is not None and not m["current"]:
+            names = sorted(os.listdir(mapdir))
             out.append(_finding(
-                "staleness", f"maps/ — {len(stale)} of "
-                             f"{len(os.listdir(mapdir))} drawings",
-                f"up to {_ago(base - oldest)} older than "
-                f"site.json: {', '.join(stale[:4])}"
-                + (", ..." if len(stale) > 4 else ""),
+                "staleness", f"maps/ — {len(names)} drawings",
+                "drawn beside a sun-hours.json whose inputs have moved: "
+                + (_say_moved(m) or "the census of what is in them"),
                 "drawings of geometry that has since changed. One "
                 "`lib.sunmodel` run rewrites all of them"))
 
@@ -753,6 +797,117 @@ def check_staleness(slug, site):
     return out
 
 
+# ----------------------------------------------------------------- citations
+
+#: An unresolved binomial. `"Carex perdentata or C. texensis"` is not a species
+#: and cannot be checked against anything: the two have different light ratings,
+#: so every downstream verdict is a coin toss nobody tossed. `spp.` is the same
+#: failure in genus form, and a slash is how it usually gets typed.
+UNRESOLVED = re.compile(r"\s+or\s+|/|\bspp?\.|\bsp\.|\?|\bcf\.|\bagg\.", re.I)
+
+#: A citation that names a record. Any one of these is enough: a URL, a
+#: catalogue or accession id, a page or section reference, or a table name.
+#: What is being asked for is something a second person can go and open.
+HAS_RECORD = re.compile(
+    r"https?://"                            # a url
+    r"|\b[A-Z]{2,}[A-Z0-9]*\d[A-Z0-9]*\b"   # CAPL3, G2189, a symbol or accession
+    r"|\b(?:table|fig(?:ure)?|sec(?:tion)?|§|p{1,2}\.|page|no\.)\s*[\dIVX]"
+    r"|\.md[:#]\d"                           # research-plants.md:147
+    r"|\bsection\s+\d",
+    re.I)
+
+#: A retrieval date. Without one a citation cannot be re-read as it was read:
+#: LBJ edits its pages, and "Soil pH: Acidic" today is not evidence about what
+#: the page said when somebody wrote 6.0 into the record.
+HAS_DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b"
+                      r"|\b\d{1,2}\s+\w+\s+(19|20)\d\d\b"
+                      r"|\b\w+\s+\d{1,2},?\s+(19|20)\d\d\b")
+
+#: Authorities whose name alone reads as evidence and is not. Naming them
+#: explicitly rather than flagging every `source` keeps the check on the failure
+#: it was built for: "Lady Bird Johnson Wildflower Center" as a whole citation,
+#: where the page it means is one of nine thousand.
+AUTHORITIES = ("lady bird johnson", "lbj", "wildflower center", "usda",
+               "nrcs", "plants database", "agrilife", "aggie horticulture",
+               "extension", "missouri botanical", "rhs", "monrovia",
+               "native plant society", "npsot", "calflora", "efloras",
+               "gardenia", "dave's garden", "wikipedia")
+
+#: The fields whose value is a claim about a species rather than about this
+#: yard, and which therefore have to cite something.
+CITED_FIELDS = ("source", "light_source", "soil_drainage_source",
+                "rooting_depth_source", "months_source", "ph_source",
+                "water_source")
+
+#: A document in this repo, cited with an anchor. Exempt from all of the above:
+#: it is under version control, so what it said when the number was written is
+#: recoverable exactly, which is more than a retrieval date buys.
+IN_REPO = re.compile(r"\b[\w-]+\.md\s*[:#§]\s*[\d\w]|\b[\w-]+\.md\s+section\s+\d",
+                     re.I)
+
+
+def check_citations(slug):
+    """Whether a plant record's citations can be checked by a second person.
+
+    Two checks, and one deliberately missing third.
+
+    `botanical` gets a regex, because an unresolved binomial is a defect on its
+    face. The sedge in this design was recorded as `"Carex perdentata or
+    C. texensis"`, and the two do not share a light rating, so its `light` was
+    a guess wearing a citation. That one is `serious`.
+
+    A `source` gets asked whether it names a *record*. "Lady Bird Johnson
+    Wildflower Center" is unfalsifiable prose; "LBJ CAPL3, <url>, read
+    2026-09-05" is checkable in half a minute. This one is a `note`, not a
+    defect, and deliberately so: it fires on a large fraction of any existing
+    design, and a check that indicts most of the file on its first run is a
+    check somebody switches off by Wednesday. It also asks only of citations
+    that name an authority, because those are the ones whose name reads as
+    evidence — `research-plants.md section 3.1` points at a record in this repo
+    and is left alone.
+
+    None of this says the right plant was chosen. A record can carry a perfect
+    citation for a species that will die where it is being put, and every
+    number here can agree with its source while the choice is wrong. That is
+    judgement, it stays judgement, and a clean run of this is not a second
+    opinion about it.
+    """
+    out = []
+    design = yards.load(slug, "design.json") or {}
+    for p in design.get("plants") or []:
+        if not isinstance(p, dict):
+            continue
+        who = p.get("name") or p.get("botanical") or "?"
+        bot = str(p.get("botanical") or "")
+        if bot and UNRESOLVED.search(bot):
+            out.append(_finding(
+                "citations", f"{who} — botanical {bot!r}",
+                "is not one species, so nothing about it can be checked "
+                "against a source",
+                "every rating on this record — light, water, pH — is being "
+                "read off whichever of the candidates the writer had in mind, "
+                "and the record does not say which"))
+        for field in CITED_FIELDS:
+            text = str(p.get(field) or "").strip()
+            if not text:
+                continue
+            low = text.lower()
+            if not any(a in low for a in AUTHORITIES) or IN_REPO.search(text):
+                continue
+            missing = [what for what, rx in (("a record id, url or section",
+                                              HAS_RECORD),
+                                             ("a retrieval date", HAS_DATE))
+                       if not rx.search(text)]
+            if missing:
+                out.append(_finding(
+                    "citation form", f"{who} — {field}",
+                    f"names an authority without {' or '.join(missing)}: "
+                    f"{text[:90]!r}",
+                    "a second person cannot open what this cites. Not a "
+                    "defect on its own — the number may well be right"))
+    return out
+
+
 # ----------------------------------------------------------------- reporting
 
 def run(slug):
@@ -768,10 +923,10 @@ def run(slug):
     if notes and any(f["what"] == "sun-hours.json" for f in stale):
         notes.insert(0, _finding(
             "zone notes", "READ THESE WITH THE STALENESS FINDING",
-            "sun-hours.json is older than site.json, so every delta below is "
-            "measured against a model that predates the current geometry. The "
-            "disagreements are real; the exact figures will move when "
-            "lib.sunmodel re-runs",
+            "the staleness check cannot vouch for sun-hours.json, so every "
+            "delta below is measured against a model that may predate the "
+            "current geometry. The disagreements are real; the exact figures "
+            "will move when lib.sunmodel re-runs",
             "correcting a note to a stale model's number just moves the error"))
 
     checks = (check_derivations(site)
@@ -779,6 +934,7 @@ def run(slug):
               + notes
               + check_units(site, dsn)
               + check_cross_file(slug, site, dsn, sun)
+              + check_citations(slug)
               + stale)
     numbers = sweep(table, prose_sources(slug))
     return table, checks, numbers
@@ -796,6 +952,15 @@ def report_checks(checks):
         by.setdefault(f["check"], []).append(f)
     for name in sorted(by):
         print(f"\n  -- {name} ({len(by[name])})")
+        if name.startswith("citation"):
+            # Said here and not only in the docstring, because the place a
+            # green check gets over-read is the place it is printed.
+            for line in influence._wrap(
+                    "These ask whether a number can be checked against what it "
+                    "cites. None of them asks whether the right species was "
+                    "chosen for the site, and a clean run is not a second "
+                    "opinion about that.", 68):
+                print(f"     {line}")
         for f in by[name]:
             print(f"     {f['what']}")
             for line in influence._wrap(f["detail"], 68):

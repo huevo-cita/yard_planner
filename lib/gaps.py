@@ -36,7 +36,8 @@ import sys
 
 import numpy as np
 
-from . import conditions, doubts, siteschema, solar, sunmodel, yards
+from . import (conditions, doubts, inputs, siteschema, solar,
+               sunmodel, yards)
 
 # the stated exchange rate: how much one unit of each is worth, on one scale
 WEIGHTS = {"hours_per_day": 10.0, "usd": 0.04, "decisions": 2.5}
@@ -625,6 +626,11 @@ def audit(slug, quick=False):
         "exchange_rate": WEIGHTS,
         "gaps": gaps,
     }
+    # See `inputs.ARTIFACTS` for why the ranked gap report is stamped against
+    # the shade model's declared input set rather than one of its own.
+    if site is not None:
+        coverage["inputs"] = inputs.stamp(
+            site, inputs.ARTIFACTS["coverage.json"])
     yards.save(slug, "coverage.json", coverage)
     return coverage
 

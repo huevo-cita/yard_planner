@@ -33,6 +33,28 @@ actually happened on a real yard in this repo — and asserts they come back.
   a dead citation       a `[cNN]` in a plan document with no such changelog
                         entry, so the reason for a line is unfindable.
 
+  an unresolved binomial  `"Carex perdentata or C. texensis"`, which is not one
+                        species. The two do not share a light rating, so every
+                        verdict on that record was a coin toss nobody tossed.
+
+  an institution as a citation  "Lady Bird Johnson Wildflower Center" as the
+                        whole source of a number, where the page it means is
+                        one of nine thousand. Reported apart from the defects,
+                        because it fires widely on any existing design.
+
+And the staleness check gets both of the errors that made its predecessor worth
+replacing, because a fix that only proves the new behaviour would pass just as
+happily with the old tolerance put back:
+
+  a cosmetic edit       a provenance string corrected and a note rewritten,
+                        which under the modification-time check reported every
+                        derived file in the yard as stale for a whole day — and
+                        the remedy such a finding recommends is a gated job.
+
+  an edit in the hour   a real geometry edit left un-regenerated, which the old
+                        one-hour tolerance was blind to, in exactly the window
+                        an agent session works in.
+
 And three negative controls, because a checker that fires on everything is the
 same as one that fires on nothing:
 
@@ -127,6 +149,48 @@ DESIGN = {
         # PLANTED: a zone site.json does not have.
         {"name": "Orphan D", "zone": "vanished_bed", "count": 1,
          "mature_spread_ft": 1.0, "annual": False},
+
+        # Five citation cases, each an actual plant-record defect or an actual
+        # good citation from this repo. Spreads are small enough that good_bed
+        # stays inside its area, so none of these moves the spacing check.
+        #
+        # PLANTED: an unresolved binomial. Neither named species is shade-rated
+        # and the record says shade, which is the defect it hides.
+        {"name": "Sedge", "botanical": "Carex perdentata or C. texensis",
+         "zone": "good_bed", "count": 1, "mature_spread_ft": 0.5,
+         "light": "shade", "annual": False,
+         "source": "Lady Bird Johnson Wildflower Center CAPE2, "
+                   "https://example.invalid/cape2, read 2026-09-05"},
+        # PLANTED: an authority as the whole citation. No record, no date.
+        {"name": "Daisy", "botanical": "Tetraneuris scaposa",
+         "zone": "good_bed", "count": 1, "mature_spread_ft": 0.5,
+         "annual": False, "source": "Lady Bird Johnson Wildflower Center"},
+        # PLANTED: a record and no retrieval date. LBJ edits its pages, so
+        # what the page says today is not evidence about what it said when
+        # somebody wrote a number down against it.
+        {"name": "Mistflower", "botanical": "Ageratina havanensis",
+         "zone": "good_bed", "count": 1, "mature_spread_ft": 0.5,
+         "annual": False,
+         "source": "Lady Bird Johnson Wildflower Center AGHA2, "
+                   "https://example.invalid/agha2"},
+        # A CONTROL: an in-repo document with an anchor. Version control beats
+        # a retrieval date, so this is exempt.
+        {"name": "Yucca", "botanical": "Yucca pallida",
+         "zone": "good_bed", "count": 1, "mature_spread_ft": 0.5,
+         "annual": False,
+         "soil_drainage_source": "research-plants.md:147 — Edwards Plateau "
+                                 "limestone native, USDA hardiness 7-10"},
+        # A CONTROL: a named table and a read date, which is what the check
+        # asks for.
+        {"name": "Milkweed", "botanical": "Asclepias tuberosa",
+         "zone": "good_bed", "count": 1, "mature_spread_ft": 0.5,
+         "annual": False,
+         "rooting_depth_source": "USDA NRCS New Jersey Irrigation Guide, "
+                                 "Table I, read 2026-09-05"},
+        # A CONTROL: cites no authority at all, so nothing is asked of it.
+        {"name": "Yaupon", "botanical": "Ilex vomitoria",
+         "zone": "good_bed", "count": 1, "mature_spread_ft": 0.5,
+         "annual": False, "source": "the owner's own hedge, measured 30 Aug"},
     ],
 }
 
@@ -181,6 +245,10 @@ def check(ok, name, detail=""):
 def build(root):
     d = os.path.join(root, SLUG)
     os.makedirs(os.path.join(d, "maps"))
+    # A drawing cannot carry a digest of its own, so it inherits
+    # sun-hours.json's. One is enough to prove the directory is reported.
+    with open(os.path.join(d, "maps", "sun-jun.png"), "wb") as fh:
+        fh.write(b"not really a png")
     for name, data in (("design.json", DESIGN), ("sun-hours.json", SUN),
                        ("doubts.json", DOUBTS), ("changelog.json", CHANGELOG),
                        ("conditions.json", {"soil": {"ph": 8.2}}),
@@ -189,14 +257,24 @@ def build(root):
             json.dump(data, fh, indent=2)
     with open(os.path.join(d, "PLAN.md"), "w") as fh:
         fh.write(PLAN)
-    # site.json written last and stamped newest, so every derived file above is
-    # stale against it. That is the planted staleness.
     with open(os.path.join(d, "site.json"), "w") as fh:
         json.dump(SITE, fh, indent=2)
-    now = os.path.getmtime(os.path.join(d, "site.json"))
-    for name in ("sun-hours.json", "design.json"):
-        os.utime(os.path.join(d, name), (now - 86400 * 3, now - 86400 * 3))
+    # sun-hours.json is left unstamped on purpose. It used to be back-dated
+    # three days so that a modification-time comparison would call it stale;
+    # nothing here touches the clock now, and the planted fault is that the
+    # artifact does not say what it was built from.
     return d
+
+
+def restamp(d, site, artifact="sun-hours.json"):
+    """Write an artifact carrying a digest of the inputs in `site`."""
+    from lib import inputs
+    path = os.path.join(d, artifact)
+    with open(path) as fh:
+        data = json.load(fh)
+    data["inputs"] = inputs.stamp(site, inputs.ARTIFACTS[artifact])
+    with open(path, "w") as fh:
+        json.dump(data, fh, indent=2)
 
 
 def has(findings, check_name, needle):
@@ -267,8 +345,96 @@ def main():
               "check_space finds no area for it and silently passes")
         check(bool(has(checks, "staleness", "c99")),
               "a citation with no changelog entry is caught")
-        check(bool(has(checks, "staleness", "sun-hours.json")),
-              "a derived file older than site.json is caught")
+
+        print("\nstaleness by content, not by clock")
+        site = yards.load_site(SLUG)
+        unstamped = recompute.check_staleness(SLUG, site)
+        check(bool(has(unstamped, "staleness", "records no digest")),
+              "an artifact with no input digest says the question cannot be "
+              "answered",
+              "asserting freshness is the old false negative and asserting "
+              "staleness is the old false positive")
+        check(not [f for f in unstamped
+                   if f["what"] == "sun-hours.json" and "moved" in f["detail"]],
+              "and it does not claim anything moved")
+        check(not has(unstamped, "staleness", "design.json"),
+              "design.json raises nothing: no run generates it, so no run "
+              "could stamp it",
+              "its staleness against site.json is what `lib.doubts --clear "
+              "design` answers, by going stale and naming the value")
+
+        d = os.path.join(root, SLUG)
+        restamp(d, site)
+        check(not has(recompute.check_staleness(SLUG, site),
+                      "staleness", "sun-hours.json"),
+              "a stamped artifact whose inputs have not moved is silent")
+
+        # The false positive that ran all day on 2026-09-05: a provenance
+        # string corrected and a note rewritten, neither of which can move a
+        # shadow. Under the mtime check every derived file in the yard was
+        # reported stale, and the remedy such a finding recommends is a gated
+        # job.
+        #
+        # The note is *rewritten* rather than added, which is the shape the
+        # real edit had. Adding a key does move the census, deliberately: that
+        # is the layer which notices a whole obstruction appearing, and it
+        # cannot tell a new fence from a new note.
+        cosmetic = json.loads(json.dumps(site))
+        cosmetic["provenance"]["zones.good_bed.x"]["source"] = "reported"
+        cosmetic["zones"]["bad_bed"]["note"] = "rewritten, and it moves nothing"
+        with open(os.path.join(d, "site.json"), "w") as fh:
+            json.dump(cosmetic, fh, indent=2)
+        check(not has(recompute.check_staleness(SLUG, cosmetic),
+                      "staleness", "sun-hours.json"),
+              "a corrected provenance string and a rewritten note are not "
+              "staleness")
+
+        # And the false negative the hour of tolerance bought: a real geometry
+        # edit, left un-regenerated inside the same working session.
+        moved = json.loads(json.dumps(site))
+        moved["zones"]["good_bed"]["x"] = [10, 71]
+        with open(os.path.join(d, "site.json"), "w") as fh:
+            json.dump(moved, fh, indent=2)
+        found = has(recompute.check_staleness(SLUG, moved),
+                    "staleness", "sun-hours.json")
+        check(bool(found), "a geometry edit is caught with no tolerance to wait "
+                           "out")
+        check(bool(found) and "zones.good_bed" in found[0]["detail"],
+              "and the finding names the subtree that moved",
+              found[0]["detail"] if found else "no finding")
+        check(bool(has(recompute.check_staleness(SLUG, moved),
+                       "staleness", "maps/")),
+              "the drawings inherit it, as one finding for the directory")
+        with open(os.path.join(d, "site.json"), "w") as fh:
+            json.dump(SITE, fh, indent=2)
+
+        print("\ncitations")
+        cit = recompute.check_citations(SLUG)
+        check(bool(has(cit, "citations", "Sedge")),
+              "an unresolved binomial is caught, and as a defect",
+              "'Carex perdentata or C. texensis' is not one species, and the "
+              "two do not share a light rating")
+        check(bool(has(cit, "citation form", "Daisy")),
+              "an authority named without a record id or a date is caught")
+        check(all(f["check"] == "citation form" for f in cit
+                  if "Daisy" in f["what"]),
+              "and it is reported apart from the defects, because it fires "
+              "widely on any existing design")
+        mist = has(cit, "citation form", "Mistflower")
+        check(bool(mist) and "retrieval date" in mist[0]["detail"],
+              "a record with no retrieval date is caught on the date alone",
+              mist[0]["detail"] if mist else "no finding")
+        check(not has(cit, "citation form", "Yucca"),
+              "a citation naming an in-repo document with an anchor is left "
+              "alone",
+              "the repo is under version control, which beats a retrieval "
+              "date")
+        check(not has(cit, "citation form", "Milkweed — rooting_depth_source"),
+              "a citation carrying a table name and a read date passes")
+        check(not [f for f in cit if "Yaupon" in f["what"]],
+              "a plant whose every citation is a record raises nothing",
+              "a checker that fires on everything is one that fires on "
+              "nothing")
 
         print("\nnegative controls")
         check(not has(checks, "derivations", "good_bed"),

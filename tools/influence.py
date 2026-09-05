@@ -158,10 +158,18 @@ class _PathReads(ast.NodeVisitor):
     def __init__(self, tree):
         # name (as unparsed source) -> the dotted prefix of the record it holds.
         # The root record is the empty prefix.
-        self.aliases = {a: "" for a in inputs.SITE_ALIASES}
+        self.aliases = self._seed()
         self.patterns = {}          # pattern -> the line that reads it
         self.keys = {}              # any dict-key literal -> line number
         self._learn(tree)
+
+    def _seed(self):
+        """The names known to hold the record before anything is followed.
+
+        A subclass pointed at a different record overrides this and learns its
+        roots from the loader calls instead — see `_FileReads`.
+        """
+        return {a: "" for a in inputs.SITE_ALIASES}
 
     # ---- learning which local names hold a piece of the record
 
@@ -303,6 +311,302 @@ class _PathReads(ast.NodeVisitor):
             if s:
                 self.keys.setdefault(s, node.lineno)
         self.generic_visit(node)
+
+
+class _FileReads(_PathReads):
+    """Leaf-path patterns one module reads out of one named yard file.
+
+    Same machinery as `_PathReads`, pointed at a different record. Two
+    differences, and both matter for the question this is asked:
+
+    `_PathReads` starts from `inputs.SITE_ALIASES` — the names a *site* record
+    travels under. A design record travels under `design`, `dsn`, `d`, and
+    nobody is going to keep a list of those current. So this starts from
+    nothing and learns its roots from the loader calls instead: a name bound to
+    `yards.load(slug, "design.json")` holds a design record, whatever it is
+    called. Everything downstream is `_PathReads`'s own alias-and-iteration
+    following.
+
+    And writes are not reads. `_PathReads` records `site["zones"] = {}` and
+    `siteschema.set_path(site, path, v)` as reads, which is harmless where the
+    question is "does any job touch this" and fatal here: a key a module
+    *creates* would read as a key it consumes and nothing writes.
+    """
+
+    def __init__(self, tree, filename, module, roots=()):
+        self.filename = filename
+        self.module = module
+        self.roots = tuple(roots)
+        super().__init__(tree)
+        self._poison(tree)
+
+    def _seed(self):
+        return {name: "" for name in self.roots}
+
+    def _poison(self, tree):
+        """Drop any name a scope binds to two different things.
+
+        `lib.bom` binds `p` to a design plant and, fifty lines later in the same
+        function, to a row out of its own price table. First-binding-wins then
+        reads the price table's keys as if they were plant fields, which is a
+        fabricated finding rather than a loose one. A name that is not one thing
+        throughout its scope is not evidence about anything, so it goes.
+
+        This makes the scan miss reads, which is the safe direction: a missed
+        read is a finding that never appears, and an invented one is a person
+        sent to look at working code.
+        """
+        bad = set()
+        for node in ast.walk(tree):
+            pairs = []
+            if isinstance(node, (ast.Assign, ast.NamedExpr)):
+                value = node.value
+                if isinstance(value, ast.BoolOp) and \
+                        isinstance(value.op, ast.Or):
+                    value = value.values[0]
+                prefix = self._resolve(value)
+                pairs = [(t, prefix) for t in
+                         (node.targets if isinstance(node, ast.Assign)
+                          else [node.target])]
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                prefix = self._iterated(node.iter)
+                target = node.target
+                pairs = ([(e, prefix) for e in target.elts[1:]]
+                         if isinstance(target, ast.Tuple)
+                         else [(target, prefix)])
+            elif isinstance(node, ast.comprehension):
+                pairs = [(node.target, self._iterated(node.iter))]
+            for target, prefix in pairs:
+                if not isinstance(target, (ast.Name, ast.Attribute)):
+                    continue
+                name = inputs._unwrap(ast.unparse(target))
+                if name in self.aliases and self.aliases[name] != prefix:
+                    bad.add(name)
+        for name in bad:
+            self.aliases.pop(name, None)
+
+    def _is_root(self, node):
+        """Does this call load the file being asked about?"""
+        if not isinstance(node, ast.Call):
+            return False
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else \
+            (f.id if isinstance(f, ast.Name) else None)
+        if name is None:
+            return False
+        if name == "load":
+            if len(node.args) >= 2 and _const_str(node.args[1]):
+                return _const_str(node.args[1]) == self.filename
+            # `week.load(slug)` from outside, `load(slug)` from within week.py
+            owner = (inputs._unwrap(ast.unparse(f.value))
+                     if isinstance(f, ast.Attribute) else self.module)
+            return MODULE_LOADERS.get(owner) == self.filename
+        return DEDICATED.get(name) == self.filename
+
+    def _resolve(self, node):
+        if self._is_root(node):
+            return ""
+        return super()._resolve(node)
+
+    def _record(self, node):
+        prefix = self._resolve(node)
+        if prefix:
+            self.patterns.setdefault(prefix, node.lineno)
+
+    def visit_Subscript(self, node):
+        if isinstance(getattr(node, "ctx", None), ast.Store):
+            self.generic_visit(node)
+            return
+        super().visit_Subscript(node)
+
+    def visit_Call(self, node):
+        f = node.func
+        setter = isinstance(f, ast.Attribute) and \
+            f.attr in ("set_path", "set_provenance", "setdefault", "pop")
+        if not setter:
+            self._record(node)
+        self.generic_visit(node)
+
+
+#: Loaders whose name alone says which file comes back.
+DEDICATED = {"load_conditions": "conditions.json",
+             "load_vision": "vision.json",
+             "load_site": "site.json"}
+
+#: Modules with a `load(slug)` of their own, and the file it returns.
+MODULE_LOADERS = {"week": "tasks.json", "doubts": "doubts.json",
+                  "changelog": "changelog.json", "niches": "niches.json",
+                  "sourcing": "sourcing.json", "siteschema": "site.json"}
+
+#: The yard records this asks about. Each is a file some module reads by name,
+#: so a key read against one either exists in it or does not.
+YARD_FILES = ("site.json", "design.json", "conditions.json", "tasks.json",
+              "vision.json", "niches.json", "sun-hours.json", "coverage.json",
+              "sourcing.json", "doubts.json", "changelog.json")
+
+
+def _scopes(tree):
+    """Each function, plus the module body with the functions taken out.
+
+    Aliases are learned from names, and a name is only that name inside the
+    function that binds it. Scanning a module as one tree makes every `site` the
+    same `site`, and `lib.gaps.report` rebinds `site` to a slice of
+    `coverage.json` eleven lines after another function bound it to the site
+    record. First-binding-wins then attributes the second function's reads to
+    the first function's record, which is not an over-approximation — it is a
+    fabricated finding, and module-wide scanning produced about ninety of them.
+
+    Nested definitions are scanned again as part of their parent, which
+    double-counts a pattern and cannot invent one.
+    """
+    funcs = [n for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    bare = ast.Module(
+        body=[s for s in tree.body
+              if not isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                    ast.ClassDef))],
+        type_ignores=[])
+    return [bare] + funcs
+
+
+def file_reads(filename):
+    """Every read pattern any module in `lib/` makes against one yard file.
+
+    Each pattern comes back with every site that reads it, because the first one
+    is often the least interesting.
+
+    A site is only seen where the record is bound to a name *in that scope*. An
+    accessor taking the record as a parameter — `conditions.on_hand(cond, item)`
+    — says nothing about what it holds, so its reads are invisible here.
+    Seeding parameter names the module binds from a loader elsewhere was tried
+    and abandoned: it found the accessor and, with it, forty-five findings out
+    of `lib.siteschema` and `lib.drawsite`, which read parameters holding dicts
+    those modules had just built themselves. The key still surfaces from
+    wherever the record *is* bound; only the sharpest line number is lost.
+    """
+    out = {}
+    for name in sorted(os.listdir(os.path.join(ROOT, "lib"))):
+        if not name.endswith(".py") or name == "__init__.py":
+            continue
+        module = name[:-3]
+        path = os.path.join(ROOT, "lib", name)
+        with open(path) as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        for scope in _scopes(tree):
+            v = _FileReads(scope, filename, module)
+            v.visit(scope)
+            for pattern, line in v.patterns.items():
+                sites = out.setdefault(pattern, [])
+                if (module, line) not in sites:
+                    sites.append((module, line))
+    return {p: sorted(s) for p, s in out.items()}
+
+
+def _containers(data, parts):
+    """Every dict or list the parent path of a pattern reaches in this record."""
+    nodes = [data]
+    for part in parts[:-1]:
+        nxt = []
+        for node in nodes:
+            if part == "*":
+                members = (list(node.values()) if isinstance(node, dict)
+                           else node if isinstance(node, list) else [])
+                nxt += [m for m in members if isinstance(m, (dict, list))]
+            elif isinstance(node, dict) and part in node:
+                nxt.append(node[part])
+            elif isinstance(node, list) and part.lstrip("-").isdigit():
+                i = int(part)
+                if -len(node) <= i < len(node):
+                    nxt.append(node[i])
+        nodes = [n for n in nxt if isinstance(n, (dict, list))]
+        if not nodes:
+            return []
+    return nodes
+
+
+def unwritten(slug, files=YARD_FILES):
+    """Keys a module reads off a yard file that the file never writes.
+
+    Two bugs of exactly this shape landed on one yard in one day. `lib.niches`
+    read `overhang_ft` off `niches.json` and `derive` never wrote it, so every
+    bed was budgeted at zero apron and one bed's declared fourteen inches was
+    silently ignored. `lib.schedule` read `hardscape["name"]` against a design
+    that writes `item`, and four of seventeen build archetypes could not fire.
+    Both are static, both are cheap, and neither was visible to any check.
+
+    What comes back is a pattern, where it is read, how many objects the pattern
+    reaches, and the sibling keys those objects do carry — because the sibling
+    list is usually the answer. `hardscape.*.name` over thirteen entries whose
+    siblings are `item, zone, count, cost_usd, note` names its own fix.
+
+    What this does NOT distinguish, and the report says so: a missing writer
+    from a reader with a working fallback. `plants.*.needs_support` is read by
+    `lib.schedule` and written by no plant, and the guard behind it also reads
+    `layer` and the plant's name, so the archetype fires anyway. Only a person
+    can tell those apart, which is why this reports and files nothing.
+
+    And the honest limit, which a previous audit stated better than this
+    docstring can: this would have caught both of the bugs above outright, and
+    would not have caught the one alongside them. `usable_depth_ft` was written,
+    read, and correct — the failure was that nothing multiplied it by anything.
+    Two readers agreeing because they share an assumption is not a question
+    presence can answer, and no cheap general check for it exists.
+    """
+    out = []
+    for filename in files:
+        data = yards.load(slug, filename)
+        if not isinstance(data, (dict, list)):
+            continue
+        for pattern, sites in sorted(file_reads(filename).items()):
+            parts = pattern.split(".")
+            leaf = parts[-1]
+            if leaf == "*" or leaf.lstrip("-").isdigit():
+                continue        # names no key of its own
+            holders = [n for n in _containers(data, parts)
+                       if isinstance(n, dict)]
+            if not holders or any(leaf in h for h in holders):
+                continue
+            siblings = sorted({k for h in holders for k in h})
+            out.append({
+                "file": filename, "pattern": pattern, "leaf": leaf,
+                "read_at": [f"lib.{m}:{ln}" for m, ln in sites],
+                "reaches": len(holders),
+                "siblings": siblings[:12],
+                "more_siblings": max(0, len(siblings) - 12),
+            })
+    out.sort(key=lambda f: (-f["reaches"], f["file"], f["pattern"]))
+    return out
+
+
+def report_unwritten(rows, slug):
+    print("=" * 78)
+    print(f"READ BY A MODULE, WRITTEN BY NOTHING  ({len(rows)})")
+    print("=" * 78)
+    for line in _wrap(
+            "A key some module in lib/ reads off one of this yard's records, "
+            "which no object in that record carries. Either the writer is "
+            "missing or the reader has a fallback, and this cannot tell those "
+            "apart — the sibling keys are printed because they are usually the "
+            "answer. Nothing here is filed.", 74):
+        print(f"  {line}")
+    print()
+    if not rows:
+        print("  every key any module reads off this yard's records is in "
+              "them.\n")
+        return
+    for r in rows:
+        print(f"  {r['file']}  {r['pattern']}")
+        for line in _wrap(
+                "read in " + ", ".join(r["read_at"]) + f", over {r['reaches']} "
+                f"object{'s' if r['reaches'] != 1 else ''} that do not carry "
+                f"{r['leaf']!r}", 66):
+            print(f"      {line}")
+        sibs = ", ".join(r["siblings"])
+        if r["more_siblings"]:
+            sibs += f", and {r['more_siblings']} more"
+        for i, line in enumerate(_wrap("they carry: " + sibs, 66)):
+            print(f"      {line}")
+    print()
 
 
 def code_reads():
@@ -766,10 +1070,27 @@ def main():
                     help="cap on values perturbed (default 12)")
     ap.add_argument("--targets", action="store_true",
                     help="the load-bearing paths, one per line")
+    ap.add_argument("--unwritten", action="store_true",
+                    help="keys a module reads off a yard record that no "
+                         "object in that record carries. Exits non-zero on "
+                         "findings")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--verbose", action="store_true",
                     help="every row, not the first 18 of each quadrant")
     args = ap.parse_args()
+
+    if args.unwritten:
+        gone = unwritten(args.slug)
+        stamp = yards.sandbox_stamp(args.slug)
+        if stamp:
+            print(f"** {stamp}. A rehearsal copy, not the plan. **\n")
+        if args.json:
+            print(json.dumps({"yard": args.slug, "unwritten": gone}, indent=2,
+                             default=str))
+        else:
+            print(f"{args.slug} — lib/ against this yard's records\n")
+            report_unwritten(gone, args.slug)
+        raise SystemExit(1 if gone else 0)
 
     rows = analyse(args.slug, do_sensitivity=args.sensitivity,
                    limit=args.limit)

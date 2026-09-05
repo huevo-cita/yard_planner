@@ -14,7 +14,11 @@ by `tools/test_reconcile.py`, the no-build week's visibility on the calendar by
 `tools/test_blackout.py`, layered soil — which layer rules a plant's pH and
 which layer rules the water — by `tools/test_layers.py`, a bed's depth
 against the rows it is offered by `tools/test_rows.py`, and the bed maps against
-the plant records by `tools/test_layout.py`. Running the whole repo
+the plant records by `tools/test_layout.py`, which build archetypes a design can
+actually reach by `tools/test_archetypes.py`, whether a derived artifact's
+inputs have moved and whether a plant record's citations name a record by
+`tools/test_recompute.py`, and keys read off a yard record that nothing writes
+by `tools/test_influence.py`. Running the whole repo
 against every
 mutation would be slower and would also let a mutation be "caught" by a suite
 that has no business knowing about it.
@@ -35,7 +39,8 @@ Three outcomes, not two, and the third is the reason this file exists
                 hole, and the only outcome that says something about coverage
 
 **It edits the working tree.** `lib/reconcile.py`, `lib/schedule.py`,
-`lib/week.py`, `lib/design.py`, `lib/conditions.py` and `lib/doubts.py` are
+`lib/week.py`, `lib/design.py`, `lib/conditions.py`, `lib/doubts.py`,
+`lib/inputs.py`, `tools/recompute.py` and `tools/influence.py` are
 rewritten in place for the length of one test run each — under
 a second — and put back in a `finally`. A `SIGKILL` or a `git commit -a` from
 another terminal inside that window will catch a deliberately broken module.
@@ -582,6 +587,152 @@ MUTATIONS = [
         "                if not hit:",
         "                if False:",
     ),
+    (
+        "archetype-label-unsplit",
+        "archetypes",
+        "lib/schedule.py",
+        "the hardscape label stops being cut at the first dimension, so "
+        "`Pavestone Edgestone concrete edgers 12x3.5x3.5 in` is matched whole "
+        "and matches nothing — which is the original bug, where 13 hardscape "
+        "entries reached 4 of 17 archetypes",
+        "        label = _LABEL_END.split(text, 1)[0].strip().lower()",
+        "        label = text.strip().lower()",
+    ),
+    (
+        "archetype-pot-size-raw",
+        "archetypes",
+        "lib/schedule.py",
+        "pot sizes stop being normalised, so the design's `1 gal` and `4 in` "
+        "never meet the `3gal`/`5gal` vocabulary the shrub guard tests and no "
+        "plant is ever big enough to need a hole dug for it",
+        '    s = str(plant.get("pot_size") or "").strip().lower().replace(" ", "")',
+        '    s = str(plant.get("pot_size") or "")',
+    ),
+    (
+        "archetype-ground-ignored",
+        "archetypes",
+        "lib/schedule.py",
+        "the ground record stops being asked whether the edging is already "
+        "in, so a yard that was edged eighteen months ago is scheduled to be "
+        "edged again — the failure mode in the other direction, and the one "
+        "that costs the plan its credibility on the first line",
+        '    if edging and not _ground_state_says(cond, "edged"):',
+        "    if edging:",
+    ),
+    (
+        "archetype-drip-key-exact",
+        "archetypes",
+        "lib/schedule.py",
+        "`extra_materials` is looked up by exact key again, so a design "
+        "listing `1/4 in drip tubing` schedules no irrigation. This is the "
+        "hardscape bug in a second place, and `tools/influence.py "
+        "--unwritten` is what found it",
+        "    drip = [k for k in (design.get(\"extra_materials\") or {})\n"
+        "            if any(w in k.lower() for w in IRRIGATION_WORDS)]",
+        "    drip = [k for k in (design.get(\"extra_materials\") or {})\n"
+        "            if k == \"drip line\"]",
+    ),
+    (
+        "staleness-unstamped-is-fresh",
+        "recompute",
+        "lib/inputs.py",
+        "an artifact carrying no input digest is answered `current` instead of "
+        "unanswerable, which is the old false negative restored — and the one "
+        "that matters, because every artifact in the repo is unstamped until "
+        "its producer next runs",
+        '    if not isinstance(recorded, dict) or not recorded.get("subtrees"):\n'
+        "        return None",
+        '    if not isinstance(recorded, dict) or not recorded.get("subtrees"):\n'
+        '        return {"changed": [], "added": [], "removed": [],\n'
+        '                "counted": [], "current": True}',
+    ),
+    (
+        "staleness-prose-counted",
+        "recompute",
+        "lib/inputs.py",
+        "notes and citations go back into the digest, so correcting a note "
+        "reports every derived file as stale — the false positive that ran for "
+        "a whole working day, pointing at a gated job each time",
+        'PROSE_LEAVES = {"note", "notes", "comment", "comments", "why", '
+        '"description",',
+        'PROSE_LEAVES = {"nothing at all", "comment", "comments", "why", '
+        '"description",',
+    ),
+    (
+        "staleness-values-unhashed",
+        "recompute",
+        "lib/inputs.py",
+        "the digest covers only the census, so a value being edited inside an "
+        "existing bed moves nothing and a real geometry change is invisible. "
+        "The census layer alone looks like it is working, which is what makes "
+        "this worth a mutation",
+        "    body = json.dumps([sorted(trees.items()), sorted(cens.items())],",
+        "    body = json.dumps([sorted(cens.items())],",
+    ),
+    (
+        "citation-binomial-accepted",
+        "recompute",
+        "tools/recompute.py",
+        "the unresolved-binomial regex matches nothing, so `Carex perdentata "
+        "or C. texensis` passes and every rating on that record keeps citing "
+        "whichever of the two the writer had in mind",
+        'UNRESOLVED = re.compile(r"\\s+or\\s+|/|\\bspp?\\.|\\bsp\\.|\\?|\\bcf\\.|\\bagg\\.", re.I)',
+        'UNRESOLVED = re.compile(r"(?!x)x")',
+    ),
+    (
+        "citation-form-as-defect",
+        "recompute",
+        "tools/recompute.py",
+        "the record-id sweep is filed as a defect rather than a note. It "
+        "fires on most of any existing design, so this is the shape of the "
+        "check being switched off by Wednesday",
+        '                    "citation form", f"{who} — {field}",',
+        '                    "citations", f"{who} — {field}",',
+    ),
+    (
+        "citation-date-not-asked",
+        "recompute",
+        "tools/recompute.py",
+        "a retrieval date stops being required, so an LBJ page cited by "
+        "symbol alone passes — and LBJ edits its pages, so what it says today "
+        "is not evidence about what it said when the number was written",
+        '                                             ("a retrieval date", HAS_DATE))',
+        '                                             ("a retrieval date", re.compile("")))',
+    ),
+    (
+        "unwritten-writes-are-reads",
+        "influence",
+        "tools/influence.py",
+        "assignment into a record counts as a read, so every key a module "
+        "*creates* is reported as one nothing writes. The detector then "
+        "returns a page of findings about working code, which is how it stops "
+        "being read",
+        '        if isinstance(getattr(node, "ctx", None), ast.Store):',
+        "        if False:",
+    ),
+    (
+        "unwritten-shadowing-kept",
+        "influence",
+        "tools/influence.py",
+        "a name bound to two different things in one scope keeps its first "
+        "binding, so `lib.bom`'s price-table row is read as a design plant "
+        "and the tool invents findings — this is worse than missing one, "
+        "because a fabricated finding sends somebody to look at working code",
+        "                if name in self.aliases and self.aliases[name] != prefix:",
+        "                if False:",
+    ),
+    (
+        "unwritten-scopes-merged",
+        "influence",
+        "tools/influence.py",
+        "a module is scanned as one tree again, so an alias learned in one "
+        "function reaches a parameter of the same name in the next. On the "
+        "real lib/ that turns 18 findings into 62, and the 44 extra are "
+        "fabricated — worse than missing one, because each sends somebody to "
+        "look at working code",
+        "    return [bare] + funcs",
+        "    return [tree]",
+    ),
 ]
 
 
@@ -590,7 +741,8 @@ MUTATIONS = [
 #: noticed rather than something downstream tripping over the wreckage.
 SUITES = {"reconcile": "test_reconcile.py", "blackout": "test_blackout.py",
           "layers": "test_layers.py", "rows": "test_rows.py",
-          "layout": "test_layout.py"}
+          "layout": "test_layout.py", "archetypes": "test_archetypes.py",
+          "recompute": "test_recompute.py", "influence": "test_influence.py"}
 
 
 def run_suite(suite, timeout=300):

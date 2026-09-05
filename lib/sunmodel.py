@@ -69,7 +69,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Polygon as MplPolygon, Circle
 
-from . import doubts, siteschema, solar, yards
+from . import doubts, inputs, siteschema, solar, yards
 
 AZ_BINS = 360
 EYE = 2.0                       # inches above grade: a seedling's point of view
@@ -1462,6 +1462,12 @@ def run(slug, cell=6.0, outdir=None, quick=False, force=False):
     })
     if provisional:
         result["provenance"] = "; ".join(provisional)
+    # What geometry this run actually read, so that `tools/recompute.py` can
+    # answer "have the inputs changed" instead of "is this file older than
+    # site.json". A note or a provenance string being corrected moves no ray and
+    # now moves no digest either, which matters because the remedy a staleness
+    # finding recommends is another run of this gated job.
+    result["inputs"] = inputs.stamp(m.S, "sunmodel")
     yards.save(slug, "sun-hours.json", result)
     print("wrote", yards.path(slug, "sun-hours.json"))
     print_markdown(m, table, clocks)

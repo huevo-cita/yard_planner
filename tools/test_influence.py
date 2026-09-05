@@ -229,6 +229,156 @@ def test_iteration_followed():
           "grade `no`, which overstates the finding")
 
 
+UNWRITTEN_LIB = '''
+"""A scratch module for the read-but-never-written detector."""
+from . import yards
+
+
+def budget(slug):
+    cond = yards.load_conditions(slug)
+    return (cond.get("budget") or {}).get("ceiling_usd")
+
+
+def hardscape(slug):
+    design = yards.load(slug, "design.json") or {}
+    for h in design.get("hardscape") or []:
+        if h.get("kind") == "path":
+            return h["item"]
+    return None
+
+
+def fallback(slug):
+    design = yards.load(slug, "design.json") or {}
+    for h in design.get("hardscape") or []:
+        label = h.get("item") or h.get("name")
+        if label:
+            return label
+    return None
+
+
+def creates(slug):
+    design = yards.load(slug, "design.json") or {}
+    design["totals"] = {"count": len(design.get("plants") or [])}
+    design.setdefault("stamped", True)
+    return design
+
+
+def one_scope(slug):
+    design = yards.load(slug, "design.json") or {}
+    for h in design.get("hardscape") or []:
+        if h.get("item"):
+            return h
+
+
+def another_scope(h):
+    """`h` here is whatever the caller passed, and this module never says."""
+    return h.get("invented_by_scope_merging")
+
+
+def shadowed(slug):
+    prices = {"mulch": {"bag_usd": 4.5}}
+    for p in (yards.load(slug, "design.json") or {}).get("plants") or []:
+        if p.get("name"):
+            break
+    p = prices["mulch"]
+    return p.get("bag_usd")
+'''
+
+
+def test_unwritten(verbose=False):
+    """A key read off a yard record that no object in it carries.
+
+    Two bugs of this shape landed on one yard in one day, so the properties
+    worth asserting are the ones whose failure is silent — a detector that
+    finds nothing looks exactly like a clean record.
+
+    The scratch module below is written into a copy of `lib/` so the scan runs
+    over real source rather than a mock, and carries one of each case:
+
+      a missing writer      `budget.ceiling_usd` against a record holding
+                            `ceiling`. This is the live finding on the real
+                            yard, and the reason `lib.bom` reports no budget
+                            ceiling on a yard that records one.
+      a missing writer      `hardscape.*.item` is written and read; the guard
+                            beside it tests `kind == "path"`, which no entry
+                            carries. That is the schedule bug of the same day.
+      a reader with a fallback  `h.get("item") or h.get("name")`. Reported, and
+                            the report says it cannot tell this from the case
+                            above, because only a person can.
+      a key the module writes  `design["totals"]` and `setdefault("stamped")`
+                            are creations, not consumption. Counting them
+                            would report every artifact a module builds.
+      a shadowed name       `p` bound to a design plant and then to a row of a
+                            price table. Reading the second as the first
+                            fabricates findings out of working code, which is
+                            worse than missing one.
+    """
+    root = tempfile.mkdtemp(prefix="unwritten-test-")
+    was_root, was_yards = influence.ROOT, yards.GARDEN_ROOT
+    try:
+        shutil.copytree(os.path.join(ROOT, "lib"), os.path.join(root, "lib"))
+        with open(os.path.join(root, "lib", "scratchmod.py"), "w") as fh:
+            fh.write(UNWRITTEN_LIB)
+        d = os.path.join(root, "yardsdir", SLUG)
+        os.makedirs(d)
+        for name, data in (
+                ("site.json", {"label": "scratch"}),
+                ("conditions.json", {"budget": {"ceiling": None,
+                                                "spent_so_far": "some"}}),
+                ("design.json", {"hardscape": [{"item": "flagstone path",
+                                                "quantity": 20}],
+                                 "plants": [{"name": "Yucca"}]})):
+            with open(os.path.join(d, name), "w") as fh:
+                json.dump(data, fh)
+        influence.ROOT = root
+        yards.GARDEN_ROOT = os.path.join(root, "yardsdir")
+        rows = influence.unwritten(SLUG)
+        if verbose:
+            for r in rows:
+                print(f"          {r['file']} {r['pattern']} "
+                      f"{r['read_at']}")
+    finally:
+        influence.ROOT, yards.GARDEN_ROOT = was_root, was_yards
+        shutil.rmtree(root, ignore_errors=True)
+
+    found = {r["pattern"] for r in rows}
+    check("budget.ceiling_usd" in found,
+          "a key read against a record holding a near-miss name is caught",
+          f"got {sorted(found)}")
+    check("hardscape.*.kind" in found,
+          "and the same shape one level down a list",
+          f"got {sorted(found)}")
+    check("hardscape.*.name" in found,
+          "a reader with a working fallback is reported too, because nothing "
+          "static can tell it from a missing writer")
+    hits = [r for r in rows if r["pattern"] == "budget.ceiling_usd"]
+    check(bool(hits) and hits[0]["siblings"] == ["ceiling", "spent_so_far"],
+          "the finding carries the sibling keys, which are usually the fix",
+          f"got {hits[0]['siblings'] if hits else 'nothing'}")
+    check(bool(hits) and any("scratchmod" in s for s in hits[0]["read_at"]),
+          "and where it is read")
+
+    print("          negative controls")
+    check("totals" not in found and "stamped" not in found,
+          "a key the module writes is not a key it reads",
+          "counting a write would report every artifact any module builds")
+    check("totals.count" not in found,
+          "nor anything underneath one")
+    check("plants.*.bag_usd" not in found,
+          "a name rebound to something else in the same scope is dropped, not "
+          "guessed at",
+          "reading a price table's keys as plant fields invents findings out "
+          "of working code")
+    check("hardscape.*.item" not in found and "plants.*.name" not in found,
+          "a key that is read and present raises nothing")
+    check(not any("invented_by_scope_merging" in p for p in found),
+          "an alias learned in one function does not reach a parameter of the "
+          "same name in the next",
+          "scanning a module as one tree does exactly this, and on the real "
+          "lib/ it turns 18 findings into 62 — the 44 extra all fabricated, "
+          "mostly out of modules that read a dict they had just built")
+
+
 def test_short_numbers():
     """Numbers too common to search for are refused rather than answered."""
     corpus = {"PLAN.md": {"text": "the bed is 0.0 ft and 6 in and 630.34 ft",
@@ -255,6 +405,8 @@ def main():
     test_wildcard_tail()
     print("\nthe scan has not gone quiet")
     test_iteration_followed()
+    print("\nread by a module, written by nothing")
+    test_unwritten(args.verbose)
     print("\nnumbers too common to search for")
     test_short_numbers()
 
