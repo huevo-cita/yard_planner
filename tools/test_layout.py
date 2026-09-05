@@ -398,30 +398,37 @@ else:
        all(r["marks"] == r["plants"] for r in recs.values()
            if r["unit"] == "plant"),
        [(k, v["marks"], v["plants"]) for k, v in recs.items()])
-    ok("g02 holds a plant record no mark draws — the bluebonnet seed bank",
-       any("Bluebonnet" in n for n, _c in recs["g02-rear-wall"]["unmarked"]),
-       recs["g02-rear-wall"]["unmarked"])
-    ok("and a mark that is not a plant at all, which no count could reveal",
-       "FROG" in recs["g02-rear-wall"]["unresolved"],
-       recs["g02-rear-wall"]["unresolved"])
-    ok("the sedge is labelled 'Carex' on both maps it appears on",
-       [k for k, v in recs.items() if "Carex" in v["fragments"]]
-       == ["g03-seating", "g04-west-wall"],
+    ok("every plant record in every bed is drawn by a mark",
+       not [k for k, v in recs.items() if v["unmarked"]],
+       {k: v["unmarked"] for k, v in recs.items() if v["unmarked"]})
+    ok("every mark on every border map says which record it draws",
+       all(v["declared"] == v["marks"] + len(v["not_plants"])
+           for v in recs.values() if v["unit"] == "plant"),
+       [(k, v["declared"], v["marks"], v["not_plants"])
+        for k, v in recs.items() if v["unit"] == "plant"])
+    ok("g02's 'FROG' is declared not a planting rather than left unreadable",
+       recs["g02-rear-wall"]["not_plants"] == {"FROG": 1}
+       and not recs["g02-rear-wall"]["unresolved"],
+       (recs["g02-rear-wall"]["not_plants"],
+        recs["g02-rear-wall"]["unresolved"]))
+    ok("no map labels a plant with a fragment of its botanical name",
+       not [k for k, v in recs.items() if v["fragments"]],
        {k: v["fragments"] for k, v in recs.items()})
-    ok("and it points at the record renamed this morning",
-       recs["g03-seating"]["fragments"]["Carex"] == "Cedar sedge")
+    ok("and none is declared against the wrong record, or ambiguously",
+       not [k for k, v in recs.items() if v["misdeclared"] or v["ambiguous"]],
+       {k: (v["misdeclared"], v["ambiguous"]) for k, v in recs.items()})
     objs = design.check_layout(REAL, RSITE)
     ok("no bed map disagrees with the records on a count today",
        not [o for o in objs if "draws" in o["say"] or "totals agree" in o["say"]
             or "more squares" in o["say"]],
        [o["say"] for o in objs])
-    serious = [o for o in objs if o["level"] == "serious"]
-    ok("so the one serious finding today is the genus label",
-       len(serious) == 1 and "part of its botanical name" in serious[0]["say"],
+    ok("so there is nothing serious left to say about the maps",
+       not [o for o in objs if o["level"] == "serious"],
        [(o["level"], o["say"][:60]) for o in objs])
-    ok("and everything else it has to say is a note",
-       {o["level"] for o in objs} == {"serious", "note"},
-       sorted({o["level"] for o in objs}))
+    ok("and the one note is the raised bed's squares against its plants",
+       [o["level"] for o in objs] == ["note"]
+       and "32 squares against 45 plants" in objs[0]["say"],
+       [(o["level"], o["say"][:60]) for o in objs])
 
     # ------------------------------------------------------- the falsifier
     head("the two can now disagree, which is the point of keeping both")
@@ -450,26 +457,31 @@ else:
 
     MOVED = copy.deepcopy(REAL)
     for p in MOVED["plants"]:
-        if p["name"] == "Rock rose":
+        if p["name"] == "Mealy blue sage":
             p["zone"] = "bed_g01"               # drawn in g02, recorded in g01
     objs = design.check_layout(MOVED, RSITE)
     ok("a plant moved to another zone is caught in both beds at once",
-       len([o for o in objs
-            if o["level"] == "serious"
-            and ("bed_g01" in o["about"] or "bed_g02" in o["about"])]) == 2,
+       {o["about"] for o in objs if o["level"] == "serious"}
+       == {"zone bed_g01", "zone bed_g02"},
        [(o["about"], o["say"][:70]) for o in objs if o["level"] == "serious"])
 
+    # The maps no longer say 'Carex', so putting it back is what makes this
+    # a test rather than a vacuous `all` over nothing.
     RENAMED = copy.deepcopy(REAL)
     for p in RENAMED["plants"]:
         if p["name"] == "Cedar sedge":
             p["name"] = "Texas sedge"           # this morning's error, restored
             p["botanical"] = "Carex texensis"
+    for b in RENAMED["layout"]["beds"]:
+        for m in b.get("plants", []):
+            if m.pop("plant", None) == "Cedar sedge":
+                m["label"] = "Carex"            # and the label left behind
+    frags = [r["fragments"] for r in design.reconcile_layout(RENAMED, RSITE)
+             if r["fragments"]]
     ok("and the map's 'Carex' follows the record wherever the record goes, "
        "which is why the label is the fault",
-       all(r["fragments"].get("Carex") == "Texas sedge"
-           for r in design.reconcile_layout(RENAMED, RSITE)
-           if r["fragments"]),
-       [r["fragments"] for r in design.reconcile_layout(RENAMED, RSITE)])
+       len(frags) == 2 and all(f.get("Carex") == "Texas sedge" for f in frags),
+       frags)
 
     head("and the linter actually runs it")
     # The failure this whole check is an instance of, one more time: a thing
@@ -482,11 +494,18 @@ else:
         wired = None
         print(f"  --    design is gated on this yard right now ({e}), skipped")
     if wired is not None:
-        ok("`python3 -m lib.design` reports the layout findings",
-           any("name nothing in the plant records" in o["say"] for o in wired))
-        ok("including the genus label, at serious",
-           any(o["level"] == "serious" and "part of its botanical name"
-               in o["say"] for o in wired))
+        # Pinning a particular finding here would make this test a record of
+        # today's defects, and it would go red the moment one was fixed —
+        # which is what happened when the maps were put right. Assert the
+        # wiring instead: whatever `check_layout` says, `check` repeats.
+        mine = {o["say"] for o in design.check_layout(REAL, RSITE)}
+        ok("`python3 -m lib.design` reports every layout finding there is",
+           mine and mine <= {o["say"] for o in wired},
+           sorted(s[:60] for s in mine - {o["say"] for o in wired}))
+        ok("and a layout finding it invented would be caught here too",
+           not [o for o in wired
+                if "sown several to the square" in o["say"] and o["say"]
+                not in mine])
         ok("and the raised bed's count now has an answer beside the shrug",
            any("sown several to the square" in o["say"] for o in wired)
            and any("worth a look at the map" in o["say"] for o in wired),
