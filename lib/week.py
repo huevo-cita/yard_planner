@@ -398,6 +398,120 @@ def _report_blackout(clashes, records):
           "not an edit.")
 
 
+def _permit_headline(text):
+    """A permitted activity's name, without the paragraph defending it.
+
+    A `scope.permits` entry is written to be argued with and runs to forty
+    words: "keep-alive watering, including the 60-day establishment regime the
+    October plantings are on days 50-57 of, and the bird bath, mammal bowl and
+    Bti that keep the water features usable". Three of those on the calendar is
+    a plan document again, and there is already one of those.
+
+    The clause before the first dash or `, including` is the name of the thing.
+    The rest is the reason, and the reason stays in conditions.json, behind the
+    changelog reference printed on the same line.
+    """
+    s = re.split(r"\s+[-\u2013\u2014]\s+|,\s+including\b|;\s+", str(text), 1)[0]
+    s = s.strip().rstrip(".,")
+    if len(s) <= 64:
+        return s
+    return s[:61].rsplit(" ", 1)[0] + "..."
+
+
+def _settled_ref(slug, doubt_id):
+    """The changelog entry that settled a doubt, as a bare `cNN`, or None.
+
+    Looked up from the doubt id the scope already carries rather than written
+    into the calendar, because a reference typed into a generated document is
+    the one that goes stale without anything noticing. `--from-doubts` files one
+    entry per settled card, so this is one-to-one in the normal case; where a
+    card has several the most recent wins, and where it has none the calendar
+    simply carries no reference.
+    """
+    if not doubt_id:
+        return None
+    from . import changelog
+    hits = [e["id"] for e in changelog.load(slug).get("entries", [])
+            if e.get("from_doubt") == doubt_id]
+    return hits[-1] if hits else None
+
+
+def week_blackout(data, cond, monday):
+    """What a blackout says about this week, for the person reading the page.
+
+    The December scope was legible to every tool in the repo and invisible to a
+    person: this module printed the week's 2 h 35 min with no sign it was a
+    no-build week, and `CALENDAR.md` said nothing either. A decision recorded
+    where only code can see it is the failure AGENTS.md is about, one file
+    along.
+
+    Deliberately not `blackout_conflicts`, which answers the audit question —
+    what is in this blackout, across the whole record — and is read by
+    `--check`. This answers the door-handle question: is this week a no-build
+    week, what does it still allow, and is anything on it that the record does
+    not allow. A task the scope permits is not named, because eleven permitted
+    jobs listed one by one is the paragraph nobody reads twice; the count of
+    what is *not* permitted is the thing worth interrupting somebody with.
+    """
+    sunday = monday + datetime.timedelta(days=6)
+    out = []
+    for rec in conditions.blackout_records(cond or {}):
+        a, z = max(rec["from"], monday), min(rec["to"], sunday)
+        if a > z:
+            continue
+        flagged = []
+        for t in (data or {}).get("tasks", []):
+            verdicts = {conditions.blackout_bars(cond, d, t.get("kind"))
+                        for d in _occurrences(t, a, z)}
+            worst = next((v for v in _VERDICT_ORDER if v in verdicts), None)
+            if worst in (conditions.BARRED, conditions.UNSCOPED):
+                flagged.append({"id": t["id"], "title": t["title"],
+                                "kind": t.get("kind"), "verdict": worst})
+        scope = rec.get("scope") or {}
+        out.append({
+            "from": rec["from"], "to": rec["to"], "covers": (a, z),
+            "all_week": a == monday and z == sunday,
+            "scoped": bool(scope),
+            "bars": scope.get("bars") if scope else "all work",
+            "permits": [_permit_headline(p) for p in scope.get("permits") or []],
+            "settled": scope.get("settled"),
+            "flagged": flagged,
+        })
+    return out
+
+
+def _blackout_banner(blocks, slug=None):
+    """The no-build week, as the two or three lines a calendar can afford."""
+    lines = []
+    for b in blocks:
+        a, z = b["covers"]
+        when = f"{b['from']:%-d %b}-{b['to']:%-d %b}"
+        part = "" if b["all_week"] else f", and it covers {a:%a %-d} to {z:%a %-d}"
+        head = (f"**NO-BUILD WEEK · the {when} blackout bars "
+                f"{b['bars'] or 'work it has not named'}{part}.**")
+        ref = _settled_ref(slug, b["settled"]) if slug else None
+        tail = []
+        if b["permits"]:
+            tail.append("Permitted: " + " · ".join(b["permits"]))
+        elif b["scoped"]:
+            tail.append("It names nothing it permits")
+        else:
+            tail.append("It names no exception, so it bars everything")
+        if not b["flagged"]:
+            tail.append("everything below is work it allows")
+        said = ". ".join(s[0].upper() + s[1:] for s in tail) + "."
+        if ref:
+            said += f" [{ref}]"
+        lines += [f"{head} {said}", ""]
+        if b["flagged"]:
+            named = "; ".join(
+                f"{f['id']} \"{f['title']}\" ({f['kind'] or 'no kind'}, "
+                f"{'barred' if f['verdict'] == conditions.BARRED else 'nobody has ruled on it'})"
+                for f in b["flagged"])
+            lines += [f"**Still on this week and not permitted:** {named}.", ""]
+    return lines
+
+
 def _occurrences(t, a, z):
     """Every day this task actually asks for work between a and z inclusive."""
     r = t.get("repeat")
@@ -743,7 +857,7 @@ def _buy_table(data, buys):
     return out
 
 
-def render_week(data, monday, heading=None):
+def render_week(data, monday, heading=None, cond=None, slug=None):
     days, starting, running = placed(data, monday)
     buys = buys_for(data, monday)
     if not days and not starting and not running and not buys:
@@ -768,6 +882,11 @@ def render_week(data, monday, heading=None):
         banner.append(f"Cannot slip: {shown}")
     out.append("**" + ". ".join(b[0].upper() + b[1:] for b in banner) + ".**")
     out.append("")
+
+    # Before the buying and before the days, because it changes what the rest of
+    # the week means. An hours figure over a no-build week reads as an ordinary
+    # light week, and the person acting on it is on the way out of the door.
+    out += _blackout_banner(week_blackout(data, cond, monday), slug)
 
     if buys:
         out += _buy_table(data, buys)
@@ -857,6 +976,7 @@ def calendar(slug, today=None, force=False):
     today = today or datetime.date.today()
     this = monday_of(today)
     first, last = span_of(data)
+    cond = yards.load_conditions(slug) or {}
 
     out = [HEADER.format(name=yard_name(slug))]
     if problems:
@@ -877,12 +997,12 @@ def calendar(slug, today=None, force=False):
         sun = mon + datetime.timedelta(days=6)
         head = (f"## This week — {mon:%a %-d %b} to {sun:%a %-d %b}" if i == 0
                 else f"## Week of {mon:%a %-d %B}")
-        body += render_week(data, mon, head)
+        body += render_week(data, mon, head, cond=cond, slug=slug)
 
     if past:
         done = []
         for mon in past:
-            done += render_week(data, mon)
+            done += render_week(data, mon, cond=cond, slug=slug)
         if done:
             body.append("## Weeks already gone")
             body.append("")
@@ -1023,6 +1143,29 @@ def report(slug, when=None):
     total = minutes_in(days, starting)
 
     print(f"{slug} — {mon:%a %-d %b} to {sun:%a %-d %b}   {hours(total)}\n")
+    # Above the work, for the same reason the calendar carries it above the
+    # days: an hours figure over a no-build week reads as an ordinary quiet one.
+    for b in week_blackout(data, yards.load_conditions(slug) or {}, mon):
+        a, z = b["covers"]
+        print(f"  NO-BUILD WEEK   the {b['from']:%-d %b}-{b['to']:%-d %b} "
+              f"blackout bars {b['bars'] or 'work it has not named'}"
+              + ("" if b["all_week"] else f", {a:%a %-d} to {z:%a %-d} of this "
+                                          f"week")
+              + (f"  [{b['settled']}]" if b.get("settled") else ""))
+        if b["permits"]:
+            print(f"      permitted: {'; '.join(b['permits'])}")
+        elif b["scoped"]:
+            print("      it names nothing it permits")
+        else:
+            print("      it names no exception, so it bars everything")
+        for f in b["flagged"]:
+            print(f"      NOT PERMITTED  {f['id']} {f['title']} "
+                  f"({f['kind'] or 'no kind'}) — "
+                  + ("barred" if f["verdict"] == conditions.BARRED
+                     else "nobody has ruled on this kind"))
+        if not b["flagged"]:
+            print("      everything below is work it allows")
+        print()
     if not days and not starting and not running and not buys:
         print("  nothing dated this week")
     for b in buys:

@@ -50,6 +50,11 @@ What is proved here, and each of these is easy to pass by accident:
                         the eleven permitted jobs are still printed, because
                         eleven jobs nobody looked at and eleven somebody ruled on
                         are indistinguishable if the report is silent
+  a person can see it   all of the above was legible to every tool and invisible
+                        on the page. The week printed its 2 h 35 min with no
+                        sign it was a no-build week. So `lib.week` and
+                        `CALENDAR.md` now say so above the days, name what is
+                        permitted, and name anything in the week that is not
 
 Everything runs against a temporary GARDEN_ROOT, so no real yard is read or
 written and none of this touches personal data.
@@ -505,6 +510,155 @@ def check_scoped_conflicts(week, conditions, root):
        f"got {found['t03']['blackout']!r}")
 
 
+#: A `permits` entry as the record actually writes one: the name of the thing,
+#: then a dash, then forty words defending it. Verbatim from
+#: cloverleaf-austin's December scope, because the point of the shortening is
+#: that it survives real text rather than a tidy fixture.
+LONG_PERMIT = ("keep-alive watering, including the 60-day establishment "
+               "regime the October plantings are on days 50-57 of, and the "
+               "bird bath, mammal bowl and Bti that keep the water features "
+               "usable")
+
+
+def check_visible_to_a_person(week, conditions, root):
+    """The scope was legible to every tool and invisible on the page.
+
+    `--check` and `lib.schedule` both read the December scope correctly while
+    `lib.week` printed the week's 2 h 35 min with no sign it was a no-build
+    week, and `CALENDAR.md` said nothing either. A decision recorded where only
+    code can see it is the same failure as a doubt written into prose: it is in
+    the wrong file, and the calendar is the file somebody reads on the way out
+    of the door.
+    """
+    d = os.path.join(root, SLUG)
+    os.makedirs(d, exist_ok=True)
+    scope = dict(SCOPE, permits=[LONG_PERMIT, "party-eve setup and the party "
+                                              "itself - carrying the pots in"])
+    with open(os.path.join(d, "conditions.json"), "w") as fh:
+        json.dump(cond_with([{"from": "2026-12-07", "to": "2026-12-13",
+                              "kind": "no-build", "scope": scope}]), fh)
+    tasks = {"yard": SLUG, "sources": {}, "shopping": [], "tasks": [
+        {"id": "t01", "date": "2026-12-09", "minutes": 20, "kind": "water",
+         "title": "Establishment watering", "critical": True},
+        {"id": "t02", "date": "2026-12-13", "minutes": 0, "kind": "event",
+         "title": "The party"},
+        {"id": "t03", "date": "2026-11-21", "minutes": 120, "kind": "build",
+         "title": "Build the bird bath"},
+    ]}
+    with open(os.path.join(d, "tasks.json"), "w") as fh:
+        json.dump(tasks, fh)
+    data = week.load(SLUG)
+    cond = week.yards.load_conditions(SLUG)
+
+    blocked = week.week_blackout(data, cond, datetime.date(2026, 12, 7))
+    ok(len(blocked) == 1 and blocked[0]["all_week"],
+       "the December week is reported as blacked out end to end",
+       f"got {blocked}")
+    ok(blocked and blocked[0]["bars"] == "build work",
+       "and says it bars build work rather than all work",
+       f"got {blocked and blocked[0]['bars']!r}")
+    ok(blocked and not blocked[0]["flagged"],
+       "and nothing in that week is work the record does not allow",
+       f"flagged {blocked and blocked[0]['flagged']}")
+
+    quiet = week.week_blackout(data, cond, datetime.date(2026, 11, 16))
+    ok(quiet == [],
+       "a week the blackout does not touch is not annotated at all",
+       f"got {quiet} on the week of 16 November — a banner on every week is a "
+       f"banner nobody reads")
+
+    lines = week.render_week(data, datetime.date(2026, 12, 7), None, cond=cond,
+                             slug=SLUG)
+    text = "\n".join(lines)
+    ok("NO-BUILD WEEK" in text,
+       "CALENDAR.md's week says NO-BUILD WEEK",
+       f"the rendered week was:\n{text[:400]}")
+    ok("bars build work" in text,
+       "and names what is barred")
+    ok("keep-alive watering" in text,
+       "and names what is nonetheless permitted",
+       "the page says the week is off and not what may still happen, which is "
+       "how a recorded decision starts reading as an omission")
+    ok("everything below is work it allows" in text.lower(),
+       "and, nothing here being barred, says so rather than leaving it open",
+       "the week is clear and the page does not say so, so a person has to "
+       "read the scope against every line themselves")
+    ok(LONG_PERMIT not in text,
+       "and carries the permit's name, not the paragraph defending it",
+       "the whole 40-word justification went onto the calendar, which is a "
+       "plan document again")
+    ok(week._permit_headline(LONG_PERMIT) == "keep-alive watering",
+       "the headline of a permit is the clause before its reason",
+       f"got {week._permit_headline(LONG_PERMIT)!r}")
+    ok(week._permit_headline("just a short one") == "just a short one",
+       "and a short permit is left exactly as written")
+
+    banner_at = next(i for i, l in enumerate(lines) if "NO-BUILD" in l)
+    first_day = next(i for i, l in enumerate(lines) if l.startswith("### "))
+    ok(banner_at < first_day,
+       "the banner is above the day-by-day, not under it",
+       f"banner at line {banner_at}, first day at {first_day} — a person who "
+       f"has read the hours and gone outside will not scroll back for it")
+
+    plain = "\n".join(week.render_week(data, datetime.date(2026, 11, 16), None,
+                                      cond=cond, slug=SLUG))
+    ok("NO-BUILD" not in plain,
+       "and an ordinary week's render is untouched",
+       f"got:\n{plain[:300]}")
+    ok(plain == "\n".join(week.render_week(data,
+                                           datetime.date(2026, 11, 16), None)),
+       "and rendering without a conditions record produces the same page, so "
+       "a yard with no blackouts is unaffected")
+
+
+def check_unruled_work_is_named(week, conditions, root):
+    """A task inside the week that the scope neither bars nor permits.
+
+    The count of what is *not* permitted is the thing worth interrupting
+    somebody with, and `unscoped` has to be in that count. Folding it into
+    "permitted" would make the record's silence into its permission.
+    """
+    d = os.path.join(root, SLUG)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "conditions.json"), "w") as fh:
+        json.dump(cond_with([{"from": "2026-12-07", "to": "2026-12-13",
+                              "scope": dict(SCOPE)}]), fh)
+    tasks = {"yard": SLUG, "sources": {}, "shopping": [], "tasks": [
+        {"id": "t01", "date": "2026-12-10", "minutes": 240, "kind": "build",
+         "title": "Dig and edge the west bed"},
+        {"id": "t02", "date": "2026-12-11", "minutes": 30, "kind": "harvest",
+         "title": "Pick the last of the lettuce"},
+        {"id": "t03", "date": "2026-12-09", "minutes": 20, "kind": "water",
+         "title": "Establishment watering"},
+    ]}
+    with open(os.path.join(d, "tasks.json"), "w") as fh:
+        json.dump(tasks, fh)
+    data = week.load(SLUG)
+    cond = week.yards.load_conditions(SLUG)
+    b = week.week_blackout(data, cond, datetime.date(2026, 12, 7))[0]
+    got = {f["id"]: f["verdict"] for f in b["flagged"]}
+    ok(got == {"t01": conditions.BARRED, "t02": conditions.UNSCOPED},
+       "the barred job and the unruled one are both named, the permitted one "
+       "is not",
+       f"got {got}")
+    text = "\n".join(week.render_week(data, datetime.date(2026, 12, 7), None,
+                                      cond=cond, slug=SLUG))
+    ok("not permitted" in text.lower() and "t01" in text and "t02" in text,
+       "and the page names them",
+       f"got:\n{text[:500]}")
+    ok("nobody has ruled on it" in text,
+       "saying of the unruled one that nobody has ruled on it",
+       "an unscoped task is being shown as barred, which claims a decision "
+       "nobody made")
+    # Case-insensitively, because the banner capitalises each sentence it
+    # joins. Matching the lowercase spelling passed whether the line was
+    # printed or not, which made this the one check here that could never fail.
+    ok("everything below is work it allows" not in text.lower(),
+       "and does not also claim the week is clear",
+       "the page says both that something is not permitted and that everything "
+       "is allowed")
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser()
@@ -542,6 +696,9 @@ def main():
         check_conflicts(week, root)
         print("\n and what it reports once the blackout has a scope")
         check_scoped_conflicts(week, conditions, root)
+        print("\n and whether a person reading the calendar can see any of it")
+        check_visible_to_a_person(week, conditions, root)
+        check_unruled_work_is_named(week, conditions, root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
