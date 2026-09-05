@@ -421,6 +421,14 @@ def derive(slug):
                 "kind": design.zone_kind(site, key),
                 "area_sqft": round(area * share, 1),
                 "usable_depth_ft": z.get("usable_depth_ft"),
+                # `_rejects` and `_border_slots` have both read this since the
+                # first version and nothing ever wrote it, so every zone looked
+                # like it had no apron and g03's declared 1.167 ft counted for
+                # nothing. A field read but never written reads identically to
+                # a field that is always zero, which is how a `lib.schedule`
+                # guard came to consult `hardscape["kind"]` against a design
+                # that writes `item`.
+                "overhang_ft": design.z_overhang(site, key) or None,
                 "light": {
                     "hours": round(h, 2),
                     "category": light_band(h),
@@ -539,7 +547,16 @@ def capacity(slug, data=None):
     if not data.get("niches"):
         raise SystemExit(f"{slug} has no niches yet: --derive first")
 
+    site = yards.load_site(slug) or {}
     for n in data["niches"]:
+        # Refreshed from site.json every run rather than read off the niche,
+        # so the depth allowance the rows are budgeted against is the measured
+        # record and not a copy of it. Safe to refresh where `usable_depth_ft`
+        # would not be: the overhang is a declared allowance about how the bed
+        # should look, not a growing condition, so it is not in `signature`
+        # and moving it cannot orphan a slate.
+        n["overhang_ft"] = design.z_overhang(
+            site, (n.get("zones") or [None])[0]) or None
         if n["kind"] == "container":
             n["slots"] = _container_slots(n)
             continue
@@ -579,30 +596,116 @@ def _classes_for(layer, depth):
     return out
 
 
-# How many rows a bed of a given depth physically has. A two-and-a-half foot
-# border is a back row and a front row; calling for a middle row as well is
-# asking for three plants standing on each other's feet, and the bed then reads
-# as overplanted for a reason no count will explain.
+# Which ranks to give up first when a bed cannot hold all three. The front row
+# is what is seen from a seat and is never dropped; the middle goes first,
+# because a bed that cannot afford three ranks is a back-and-front bed.
+_ROW_SETS = (("back", "middle", "front"), ("back", "front"), ("front",))
+
+
+def _shallowest(layer, room):
+    """The least depth a rank of this layer can take, or None if none fits.
+
+    Read off `SIZES` rather than asserted, so a change to the size classes
+    carries through instead of leaving a hard-coded threshold behind that used
+    to agree with them.
+    """
+    reps = [rep for _n, rep, _f, _m in _classes_for(layer, room)]
+    return min(reps) if reps else None
+
+
+def _run_ft(niche):
+    """The bed's length, recovered as soil over usable depth.
+
+    Exactly the way `design.zone_canopy_room` recovers it, and for the same
+    reason: it is already implied by two numbers the zone carries, and a third
+    would be a third thing to keep in step.
+    """
+    depth = niche.get("usable_depth_ft")
+    area = niche.get("area_sqft")
+    if not depth or not area:
+        return None
+    return float(area) / float(depth)
+
+
+def _along_the_run(niche, spread):
+    """How many plants of this spread a single rank holds, or None.
+
+    A rank is one line, so it holds run / spread of a thing and no more. The
+    area share does not know that, and the gap is not small: g05's front rank
+    is paid 9.3 sq ft of share, an edging plant covers 0.196 of it, and 47 of
+    them were offered for an 8.7 ft line with room for 17.
+
+    Unlike depth this is a CEILING and never an exclusion, because being tight
+    along the run is a different kind of wrong from being impossible. Plants
+    set closer than their spread merge into a continuous mass, which is often
+    what a border wants; a plant set deeper into a bed than the bed is deep is
+    in the wall.
+    """
+    run = _run_ft(niche)
+    if not run or not spread:
+        return None
+    return int(run // float(spread))
+
+
+def _min_stack(rows, room):
+    """The shallowest stack these ranks can be built as."""
+    each = [_shallowest(lay, room) for lay in rows]
+    if any(e is None for e in each):
+        return None
+    return design.row_stack_depth(each)
+
+
+# How many ranks a bed of a given depth physically has, and it is the SUM that
+# decides it. This used to be two thresholds — three rows at 3.0 ft, two at
+# 1.5 — and both were wrong in the same direction, by exactly the amount the
+# sum was never taken: the shallowest three-rank stack the size classes allow
+# is small + small + edging, which is 3.5 ft, so a bed between 3.0 and 3.5 ft
+# was handed a rank it could not hold. g05 at 3.708 ft cleared 3.0 and got
+# three rows of 2.5 + 2.5 + 1.5 = 6.5 ft, and nothing downstream compared that
+# to the 3.708 the tape had measured.
 def _rows_for(depth):
     if depth is None:
         return [lay for lay, _ in LAYERS]
-    d = float(depth)
-    if d < 1.5:
-        return ["front"]
-    if d < 3.0:
-        return ["back", "front"]
-    return [lay for lay, _ in LAYERS]
+    room = float(depth)
+    for rows in _ROW_SETS:
+        need = _min_stack(rows, room)
+        if need is not None and need <= room:
+            return [lay for lay, _ in LAYERS if lay in rows]
+    return []
 
 
-def _no_row(layer, depth, rows):
-    return (f"a bed {float(depth):.1f} ft deep holds "
+def _no_row(layer, depth, rows, room=None):
+    """Why a bed does not have this rank, in the arithmetic that decided it.
+
+    The old sentence said only how many rows a bed of this depth holds, which
+    read like a rule of thumb because that is what it was: two hard-coded
+    thresholds that had drifted out of step with `SIZES`. It now quotes the sum
+    that settled it, so somebody can disagree with the number rather than with
+    the verdict.
+    """
+    room = float(depth or 0) if room is None else float(room)
+    held = _min_stack(rows, room)
+    wanted = _min_stack([lay for lay, _ in LAYERS], room)
+    how_deep = (f"a bed {float(depth):.1f} ft deep" if depth
+                else "a bed of unrecorded depth")
+    if not rows:
+        return (f"{how_deep} holds no rank at all: even the smallest "
+                f"front-row plant spreads more than that")
+    tail = (f", and the {' and '.join(rows)} rows this bed does hold need "
+            f"{held:g} ft of it" if held is not None else "")
+    smallest = (f"the three of them need {wanted:g} ft of depth at their very "
+                f"smallest{tail}"
+                if wanted is not None else
+                f"no three ranks of these size classes fit a bed this "
+                f"shallow{tail}")
+    return (f"{how_deep} holds "
             f"{len(rows)} row{'' if len(rows) == 1 else 's'} "
-            f"({' and '.join(rows)}), not three. There is no {layer} of this "
-            f"bed to plant")
+            f"({' and '.join(rows)}), not three. Ranks do not overlap, so "
+            f"{smallest}. There is no {layer} of this bed to plant")
 
 
 def _border_slots(n):
-    """Lay a border out as rows, spending an area budget from the back forwards.
+    """Lay a border out as rows, spending area, depth and run from the back.
 
     The order matters. The back row is what the bed is *for* — it is the thing
     seen over everything else — so it gets first call on the space, and the
@@ -610,47 +713,119 @@ def _border_slots(n):
     some layer loses that layer entirely rather than being given two of
     something, because two of a thing is the collection `check_grouping`
     objects to, with an extra plant.
+
+    Three budgets, not one, because a bed has three ways of running out and area
+    is only the first of them.
+
+      area   the coverage band, `design.COVER_FLOOR` to `COVER_CEILING`
+      depth  the sum of the ranks front to back, `design.row_stack_depth`.
+             Area cannot see it: g05 was given 2.5 + 2.5 + 1.5 ft of rows in a
+             bed 3.708 ft deep and it read 1.10x, comfortably inside the band
+      run    how many of a thing fit along the bed's length — a ceiling on the
+             count, never an exclusion. See `_along_the_run`
+
+    Depth is the one that excludes, because it is the one that is impossible
+    rather than merely tight.
     """
     area, depth = float(n["area_sqft"]), n.get("usable_depth_ft")
+    # Whatever apron the zone declares its front rank may lean out over. The
+    # field was read here from the first version and never written by `derive`,
+    # so g03's declared 1.167 ft counted for nothing and this module was
+    # quietly stricter than the linter it budgets against.
+    room = (float(depth) + float(n.get("overhang_ft") or 0)) if depth else None
+    run = _run_ft(n)
     floor = area * design.COVER_FLOOR
     ceiling = area * design.COVER_CEILING
-    slots, excluded, spent_lo, spent_hi = [], [], 0.0, 0.0
+    slots, excluded, spent_lo, spent_hi, spent_depth = [], [], 0.0, 0.0, 0.0
 
-    rows = _rows_for(depth)
-    total = sum(sh for lay, sh in LAYERS if lay in rows)
-    for layer, raw_share in LAYERS:
+    rows = _rows_for(room)
+    total = sum(sh for lay, sh in LAYERS if lay in rows) or 1.0
+    # Depth is shared out the same way area is, on the same shares, with two
+    # adjustments that between them make the sum come out right.
+    #
+    # Every rank is floored at its shallowest possible band and only what is
+    # LEFT OVER after those floors gets divided by share, because a rank given
+    # less depth than its smallest plant is not a thinner rank, it is no rank.
+    # And whatever a rank does not spend is carried forward to the next one
+    # rather than lost, because the classes are coarse: a rank allotted 2.32 ft
+    # takes the 1.5 ft class and the 0.8 ft left over is real depth that the
+    # front row can use.
+    #
+    # Straight share-out and back-first greed were both tried and both are
+    # worse. Share-out alone starves the back rank of a 3.5 ft bed below its
+    # own minimum. Greed hands the back rank of a 6.5 ft bed 4 ft and leaves
+    # the front row six inches, which is not what anybody laying out a border
+    # does. Since every rank's floor plus its share of the remainder sums to
+    # exactly the room, the stack cannot come out over the bed's depth — which
+    # is the property that was missing, and the reason g05 was ever offered
+    # 6.5 ft of rows in 3.708 ft of bed.
+    spare = (room - (_min_stack(rows, room) or 0)) if room and rows else 0.0
+    carry = 0.0
+    for i, (layer, raw_share) in enumerate(LAYERS):
         if layer not in rows:
-            excluded.append((layer, _no_row(layer, depth, rows)))
+            excluded.append((layer, _no_row(layer, depth, rows, room)))
             continue
         share = raw_share / total
-        choices = _classes_for(layer, depth)
-        pick = None
+        choices = _classes_for(layer, room)
+        alloc = ((_shallowest(layer, room) or 0) + share * spare + carry
+                 if room else None)
+        headroom = alloc
+        pick, blocked = None, None
         for name, rep, foot, minimum in choices:
             # Affordable only if the minimum group still fits under the ceiling
             # once the rows behind it have been paid for. This is the check
             # that stops three groups of three being proposed for a bed with
             # room for six plants.
+            if headroom is not None and rep > headroom + 1e-9:
+                blocked = blocked or (
+                    f"a {name} rank is {rep:g} ft deep and this row's share of "
+                    f"the bed's {room:g} ft of depth is {max(headroom, 0):.2f} "
+                    f"ft. Ranks do not overlap, so taking it would come out of "
+                    f"the rows in front")
+                continue
             if spent_lo + foot * minimum <= ceiling:
                 pick = (name, rep, foot, minimum)
                 break
+            blocked = blocked or (
+                f"{minimum} of the smallest {layer}-row plant is "
+                f"{minimum * foot:.1f} sq ft, and only "
+                f"{ceiling - spent_lo:.1f} sq ft of the {area:.0f} is left "
+                f"once the rows behind it are planted")
         if not pick:
-            reason = (f"even {choices[-1][3]} of the smallest {layer}-row "
-                      f"plant is {choices[-1][3] * choices[-1][2]:.1f} sq ft, "
-                      f"and only {ceiling - spent_lo:.1f} sq ft of the "
-                      f"{area:.0f} is left once the rows behind it are planted"
-                      if choices else
-                      f"every {layer}-row size spreads wider than this bed's "
-                      f"{depth:g} ft of usable depth")
+            reason = blocked or (
+                f"every {layer}-row size spreads wider than this bed's "
+                f"{float(depth or 0):g} ft of usable depth")
             excluded.append((layer, reason))
+            # Hand the unplanted rank's depth to the rows in front rather than
+            # holding it against a row that is not going in.
+            carry = alloc if alloc is not None else 0.0
             continue
 
         name, rep, foot, minimum = pick
+        carry = (alloc - rep) if alloc is not None else 0.0
+        along = _along_the_run(n, rep)
         lo = max(minimum, round(floor * share / foot))
         lo = min(lo, max(minimum, int((ceiling - spent_lo) // foot)))
         hi = max(lo, int(ceiling * share / foot))
         hi = min(hi, max(lo, int((ceiling - spent_hi) // foot)))
+        tight = ""
+        if along is not None:
+            # The run beats the area share, and the minimum group beats the
+            # run: a rank offered fewer than a group is the collection
+            # `check_grouping` objects to, and a group set tight along the bed
+            # merely grows together. Where they conflict the slot says so
+            # rather than quietly offering two of something.
+            lo, hi = max(minimum, min(lo, along)), max(minimum, min(hi, along))
+            hi = max(lo, hi)
+            if along < minimum:
+                tight = (f" {minimum} of them is {minimum * rep:g} ft of row "
+                         f"against a {run:.1f} ft run, so they will be set "
+                         f"tighter than their spread and will grow together "
+                         f"into one mass — which is the count holding and the "
+                         f"spacing giving, not a bed that does not fit.")
         spent_lo += foot * lo
         spent_hi += foot * hi
+        spent_depth += rep
         slots.append({
             "id": f"{n['id']}.{layer}",
             "layer": layer,
@@ -659,13 +834,20 @@ def _border_slots(n):
             "count": [lo, max(lo, hi)],
             "each_sqft": round(foot, 1),
             "budget_share": round(share, 3),
-            "why": (f"the {layer} row of {n['label']}. A {name} plant here "
+            "why": (f"the {layer} row of {n['label']}. "
+                    f"{'An' if name[0] in 'aeiou' else 'A'} {name} plant here "
                     f"spreads about {rep:g} ft and takes {foot:.1f} sq ft, so "
-                    f"{lo} to {hi} of them keeps the bed inside the "
+                    f"{lo if lo == hi else f'{lo} to {hi}'} of them keeps the "
+                    f"bed inside the "
                     f"{design.COVER_FLOOR:.0%}-{design.COVER_CEILING:.0%} "
-                    f"coverage the design check wants. At least {minimum}, "
-                    f"because fewer of one thing reads as a collection rather "
-                    f"than a planting."),
+                    f"coverage the design check wants."
+                    + (f" At least {minimum}, because fewer of one thing reads "
+                       f"as a collection rather than a planting."
+                       if lo <= minimum else "")
+                    + (f" A rank of them is {rep:g} ft of the bed's "
+                       f"{room:g} ft of depth, and {run:.1f} ft of run holds "
+                       f"{along} in one line."
+                       if along is not None else "") + tight),
             "alternatives": [c[0] for c in choices if c[0] != name],
             "decisions": [],
         })
@@ -681,6 +863,13 @@ def _border_slots(n):
             "at_maximum_counts": round(spent_hi, 1),
             "band_sqft": [round(floor, 1), round(ceiling, 1)],
         }
+        if room:
+            # Written down so `--check` can read the stack back off the file
+            # and put it against the tape, rather than only ever being able to
+            # re-run the code that produced it.
+            n["budget"]["depth_room_ft"] = round(room, 3)
+            n["budget"]["rows_ft"] = round(spent_depth, 2)
+            n["budget"]["run_ft"] = round(run, 2)
     return slots
 
 
@@ -1747,12 +1936,20 @@ def count_for(niche, slot, candidate):
     """
     if not slot.get("budget_share") or not candidate.get("mature_spread_ft"):
         return slot["count"][0]
+    spread = float(candidate["mature_spread_ft"])
     room = (float(niche["area_sqft"]) * slot["budget_share"]
             * (design.COVER_FLOOR + design.COVER_CEILING) / 2.0)
-    each = _footprint(float(candidate["mature_spread_ft"]))
+    each = _footprint(spread)
     minimum = next((m for c, lo, hi, m in SIZES if c == slot.get("size")), 3)
     ceiling = int(float(niche["area_sqft"]) * slot["budget_share"]
                   * design.COVER_CEILING // each) or minimum
+    # And the bed's own length, on the plant's spread rather than the class's.
+    # Without this the run ceiling `_border_slots` applied is undone the moment
+    # somebody picks: a smaller plant buys more of it out of the area share,
+    # which is right, up to the point where the extras have no row to stand in.
+    along = _along_the_run(niche, spread)
+    if along is not None:
+        ceiling = max(minimum, min(ceiling, along))
     return max(minimum, min(ceiling, round(room / each)))
 
 
@@ -2078,11 +2275,87 @@ def review(slug, ident=None, data=None):
     return "\n".join(L)
 
 
+def buildable(slug, data=None):
+    """The rows AS RECORDED, against the bed AS MEASURED.
+
+    This is the check that was missing, and the shape of what was missing
+    matters more than the arithmetic. `capacity` budgeted g05's slots against
+    `design.check_space`'s coverage band, `check_space` judged the result
+    against the same band, and the two agreed at 1.10x while both were wrong:
+    neither had ever asked whether three rows of 2.5, 2.5 and 1.5 ft go into a
+    bed the tape says is 3.708 ft deep. Agreement is not verification when both
+    sides read the same input and ask the same question of it.
+
+    So this asks a different question of a different input. It reads the stack
+    back off `niches.json` — the slots as they were written, not as they would
+    be recomputed — and puts it against `site.json`'s measured depth through
+    `design.row_stack_depth`, which is the linter's own rule. Three
+    consequences, and each of them is a way `capacity` can be caught:
+
+      - a bug in `capacity` shows up here, because nothing here re-runs it.
+        Re-deriving and comparing would only ever prove the code agrees with
+        itself, which is how g05 got through
+      - a file written by an older version of `capacity` shows up too. g05's
+        impossible slate sat on disk for a day; every check in this module read
+        the file's own cached figures or rebuilt from scratch, so nothing ever
+        put the two side by side
+      - a depth that has since been re-measured shows up, because the depth
+        here comes from `site.json` and not from the copy `niches.json` cached
+        at derive time. The cached copy is compared too, and named when it has
+        drifted
+
+    What it honestly does not catch: `row_stack_depth` itself being the wrong
+    rule. Both sides read it, so if summing the ranks is not what a border
+    consumes, this check is as wrong as the module it audits and neither can
+    tell. That one needs a person with a tape, and `SITE-WALK.md` is where it
+    would go.
+    """
+    data = data or load(slug)
+    site = yards.load_site(slug) or {}
+    out = []
+    for n in data.get("niches") or []:
+        if n.get("kind") != "border":
+            continue
+        key = (n.get("zones") or [None])[0]
+        measured = ((site.get("zones") or {}).get(key) or {}).get(
+            "usable_depth_ft")
+        cached = n.get("usable_depth_ft")
+        if measured and cached and abs(float(measured) - float(cached)) > 0.005:
+            out.append((n["id"], f"site.json measures this bed "
+                                 f"{float(measured):g} ft deep and niches.json "
+                                 f"still carries {float(cached):g}. Every slot "
+                                 f"below was budgeted against the stale "
+                                 f"figure — re-derive"))
+        depth = measured or cached
+        if not depth:
+            continue
+        room = float(depth) + design.z_overhang(site, key)
+        rows = [(s["layer"], float(s["spread_ft"])) for s in _slots(n)
+                if not s.get("excluded") and s.get("spread_ft")]
+        if len(rows) < 2:
+            continue
+        stack = design.row_stack_depth([sp for _lay, sp in rows])
+        if stack > room + 1e-9:
+            named = ", ".join(f"{lay} {sp:g} ft" for lay, sp in rows)
+            out.append((n["id"], f"the rows on record need {stack:g} ft of "
+                                 f"depth — {named} — and site.json measures "
+                                 f"the bed at {float(depth):g} ft"
+                                 + (f" plus {room - float(depth):g} ft of "
+                                    f"declared overhang" if room > float(depth)
+                                    else "")
+                                 + f". Ranks do not overlap, so this cannot be "
+                                   f"planted at any count. Nothing chosen from "
+                                   f"these slots will fit — re-run --capacity, "
+                                   f"and if it produces the same stack the bug "
+                                   f"is in this module rather than in the file"))
+    return out
+
+
 def check(slug, data=None):
     """Stale slates, empty slots, and picks that no longer fit."""
     data = data or load(slug)
     fresh = {n["id"]: signature(n) for n in derive(slug)["niches"]}
-    bad = []
+    bad = list(buildable(slug, data))
     for n in data.get("niches") or []:
         now = fresh.get(n["id"])
         if now and now != n.get("signature"):

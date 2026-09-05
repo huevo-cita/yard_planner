@@ -880,7 +880,108 @@ def footprint(plant):
 # plants that lose are the slow expensive ones. `lib.niches` budgets its slots
 # against this same band, so a planting picked there passes here by
 # construction rather than by luck.
+#
+# Which is worth reading twice, because it is also how this check went blind.
+# Sharing the band means a slate assembled there lands inside it here BY
+# CONSTRUCTION — the two cannot disagree about area, so their agreement about
+# area says nothing. `bed_g05` was handed three rows summing to 6.5 ft of
+# spread in a bed 3.708 ft deep and passed at 1.10x, because 1.10x was the only
+# question either side asked. Anything the band cannot see has to be measured
+# on a different axis, against a different number, or it is not measured at
+# all. `row_stack` below is that axis.
 COVER_FLOOR, COVER_CEILING = 0.45, 1.15
+
+# The ranks of a border, back to front, as `layer` records them on a plant.
+# Anything else — an `accent`, or a typo — is still standing in the bed and
+# still occupying depth, so it is counted as a band of its own and NAMED, never
+# quietly dropped. A guard that skips what it does not recognise is how seven
+# `lib.schedule` archetypes went unreachable reading `kind` where the design
+# wrote `item`.
+ROWS = ("back", "middle", "front")
+
+
+def row_stack(plants):
+    """(depth_ft, ranks) — the depth a layered planting consumes front to back.
+
+    Ranks in a border do not interleave. A rank whose widest plant spreads *s*
+    feet occupies *s* feet of the bed's depth, because the rank behind it has to
+    stand clear of it or it shades the one in front out, which is the entire
+    point of planting in layers. Put the centres at (s_back + s_front) / 2 apart
+    — the closest they can be — and add the half-spread hanging off each end,
+    and the total comes to exactly the SUM of the ranks' spreads. Three rows at
+    2.5, 2.5 and 1.5 ft need 6.5 ft of depth. There is no arrangement of them
+    that needs less.
+
+    No area calculation can find that, and this is the second axis rather than a
+    refinement of the first: 32.45 sq ft of bed holds 35.7 sq ft of plants at
+    1.10x, comfortably inside the coverage band, in a bed 3.708 ft deep. The two
+    numbers are not in tension because they are not about the same thing.
+
+    A rank is as deep as its WIDEST member, not as deep as its mean. Six plants
+    in the back row of g02 spread 1.2 to 3.0 ft; the band has to be 3.0 ft wide
+    where the plateau goldeneye stands, and the slack elsewhere along the run is
+    length, not depth. Taking the max is also the lenient reading, which is the
+    right direction for a check that objects.
+
+    Vines are excluded on the same grounds `footprint` excludes them: the canopy
+    is carried on a trellis overhead and the ground under it still plants.
+    """
+    ranks = {}
+    for p in plants:
+        layer = p.get("layer")
+        if layer == "vine":
+            continue
+        spread = p.get("mature_spread_ft") or 0
+        if not spread:
+            continue
+        # Every unrecognised layer shares one band rather than getting one
+        # each: three plants filed `accent` are three plants in the same rank
+        # until somebody says otherwise, and inventing three ranks out of one
+        # word would object to a bed that is fine.
+        key = layer if layer in ROWS else "other"
+        wide, name, count = ranks.get(key, (0.0, None, 0))
+        if float(spread) > wide:
+            wide, name = float(spread), p.get("name")
+        ranks[key] = (wide, name, count + 1)
+    order = ROWS + ("other",)
+    out = [(k, ranks[k][0], ranks[k][1], ranks[k][2])
+           for k in order if k in ranks]
+    return row_stack_depth([d for _k, d, _n, _c in out]), out
+
+
+def row_stack_depth(spreads):
+    """The depth a set of ranks consumes. Named so both modules read one rule.
+
+    `lib.niches` spends this budget when it proposes rows and `check_space`
+    measures it against what was actually planted, and they must not each carry
+    their own copy of the arithmetic — that is how `check_space` and
+    `lib.niches` came to agree about g05's area while both were wrong about it.
+
+    One rule in one place is not the same as two modules agreeing, and the
+    difference is what they feed it: niches feeds it the MIDPOINT spread of a
+    size class, `check_space` feeds it the spread of the plant somebody actually
+    bought. A slot that fits at the midpoint of `medium` fails at the top of it,
+    and the linter is where that surfaces.
+    """
+    return sum(float(s) for s in spreads)
+
+
+def depth_room(site, key):
+    """Feet of depth a rank stack may occupy in this zone.
+
+    Usable depth plus whatever canopy overhang the zone declares, which is the
+    same allowance `_check_depth` already gives an individual plant and for the
+    same reason: a top may lean out over a stone apron its roots could never
+    occupy. Undeclared means none, deliberately — whether the front rank may
+    lean out over what is in front of the soil is a judgement about how the bed
+    should look, not something recoverable from the measurements, so the
+    objection names the declaration as its remedy rather than assuming a figure.
+    """
+    z = (site.get("zones") or {}).get(key) or {}
+    depth = z.get("usable_depth_ft")
+    if not depth:
+        return None
+    return float(depth) + z_overhang(site, key)
 
 
 def check_space(design, site, sun):
@@ -968,7 +1069,62 @@ def check_space(design, site, sun):
                             "leave deliberate open ground rather than accidental "
                             "gaps"))
         out += _check_depth(z, plants, site, key)
+        out += _check_row_depth(z, plants, site, key)
     return out
+
+
+def _check_row_depth(zone, plants, site, key):
+    """The ranks, added up, against the depth there is. See `row_stack`.
+
+    `_check_depth` below asks whether any ONE plant is wider than the bed, which
+    is a real question and a narrower one: every plant in g05's derived slate
+    passes it — 2.5, 2.5 and 1.5 ft in a bed 3.708 ft deep, not one of them
+    over — and the three of them together need 6.5 ft. What a layered planting
+    consumes is the sum, and nothing was reading it.
+    """
+    room = depth_room(site, key)
+    if not room:
+        return []
+    stack, ranks = row_stack(plants)
+    # One rank is `_check_depth`'s question with extra words. Reported there,
+    # against the individual plants, where the remedy is per plant.
+    if len(ranks) < 2 or stack <= room:
+        return []
+
+    z = (site.get("zones") or {}).get(key) or {}
+    depth = float(z.get("usable_depth_ft"))
+    named = ", ".join(
+        f"{k} {d:g} ft" + (f" ({n})" if n else "")
+        for k, d, n, _c in ranks)
+    allowed = ("" if room == depth else
+               f" — {depth:g} ft of usable depth plus the {room - depth:g} ft "
+               f"of overhang this zone allows the front rank to lean out over")
+    unranked = next((c for k, _d, _n, c in ranks if k == "other"), 0)
+    guessed = ""
+    if unranked:
+        layers = sorted({str(p.get("layer")) for p in plants
+                         if p.get("layer") not in ROWS
+                         and p.get("layer") != "vine"
+                         and (p.get("mature_spread_ft") or 0)})
+        guessed = (f" {unranked} of these "
+                   f"{'is' if unranked == 1 else 'are'} filed as "
+                   f"{', '.join(repr(x) for x in layers)} rather than as one of "
+                   f"{', '.join(ROWS)}, so they were counted as a single band "
+                   f"of their own; if they in fact stand within another rank, "
+                   f"say so with `layer` and this number falls.")
+    return [_obj("serious", f"zone {zone}",
+                 f"the ranks add up to {stack:g} ft of depth and the bed has "
+                 f"{room:g}{allowed}. That is {stack / room:.2f}x on depth, "
+                 f"against {named}, each rank as deep as its widest plant. "
+                 f"Area is not the constraint and cannot see this: the ranks "
+                 f"cannot overlap without the back one shading out the front "
+                 f"one, so what a layered bed consumes is the sum."
+                 + guessed,
+                 f"lose a rank, or take the widest rank down a size class — "
+                 f"{stack - room:g} ft has to come out of the stack. Setting "
+                 f"`canopy_overhang_ft` on the zone is the other answer, and "
+                 f"only if the front rank may really lean out over whatever is "
+                 f"in front of the soil")]
 
 
 def _check_depth(zone, plants, site, key):
@@ -986,10 +1142,10 @@ def _check_depth(zone, plants, site, key):
         return []
     # A canopy and a root ball are different constraints, and a bed with a
     # gravel or stone apron in front of it can hold a plant whose top leans out
-    # over ground its roots could never occupy. That has to be declared per
-    # zone, because whether the apron may be shaded is a judgement about how the
-    # bed should look, not something derivable from the measurements.
-    reach = float(depth) + float(z.get("canopy_overhang_ft") or 0)
+    # over ground its roots could never occupy. One helper, because
+    # `_check_row_depth` needs the same figure and two copies of "depth plus
+    # whatever overhang is declared" is one copy too many.
+    reach = depth_room(site, key)
     over = [(p["name"], p["mature_spread_ft"], p.get("count", 1))
             for p in plants
             if p.get("layer") != "vine"

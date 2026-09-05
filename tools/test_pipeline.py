@@ -78,11 +78,18 @@ SITE = {
     "label": "scratch",
     "boundary": {"points": [[0, 0], [40, 0], [40, 30], [0, 30]]},
     "zones": {
+        # Deep enough to hold the slate below, which is a fixture requirement
+        # that only became visible once anything checked it. These were 3.5 and
+        # 2.0 ft, against back rows of 3.0 and 1.8 ft standing in front of
+        # middle and front rows: 6.2 ft of ranks in 3.5 ft of bed, and 2.8 in
+        # 2.0. The fixture asserted the bug, so it read as a passing test of a
+        # yard that cannot be built. `shady_border` stays under 3.5 ft on
+        # purpose — `Too Wide` below is 3.5 and has to stay refusable.
         "sunny_border": {"x": [2, 22], "y": [2, 5], "area_sqft": 60.0,
-                         "kind": "border", "usable_depth_ft": 3.5,
+                         "kind": "border", "usable_depth_ft": 6.5,
                          "style": "bed"},
         "shady_border": {"x": [2, 14], "y": [24, 26], "area_sqft": 24.0,
-                         "kind": "border", "usable_depth_ft": 2.0,
+                         "kind": "border", "usable_depth_ft": 3.2,
                          "style": "bed"},
         "raised": {"x": [26, 34], "y": [10, 14], "area_sqft": 32.0,
                    "kind": "grid", "usable_depth_ft": 4.0, "style": "bed",

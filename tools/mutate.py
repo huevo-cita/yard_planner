@@ -11,8 +11,9 @@ mutation.
 Each mutation names its own suite, because the behaviours covered here are owned
 by different files: the reconciliation between `lib.schedule` and `tasks.json`
 by `tools/test_reconcile.py`, the no-build week's visibility on the calendar by
-`tools/test_blackout.py`, and layered soil — which layer rules a plant's pH and
-which layer rules the water — by `tools/test_layers.py`. Running the whole repo
+`tools/test_blackout.py`, layered soil — which layer rules a plant's pH and
+which layer rules the water — by `tools/test_layers.py`, and a bed's depth
+against the rows it is offered by `tools/test_rows.py`. Running the whole repo
 against every
 mutation would be slower and would also let a mutation be "caught" by a suite
 that has no business knowing about it.
@@ -363,6 +364,95 @@ MUTATIONS = [
         "            continue",
         "        pass",
     ),
+
+    # ---- a bed has a depth, and rows add up ----
+    (
+        "stack-is-the-widest-rank",
+        "rows",
+        "lib/design.py",
+        "the depth a layered bed consumes becomes its deepest rank instead of "
+        "the sum of them, which is the shape of somebody quietening a check "
+        "that objected to four beds at once. It is also exactly the blindness "
+        "that let g05 be offered 6.5 ft of rows in 3.708 ft of bed",
+        "    return sum(float(s) for s in spreads)",
+        "    return max([float(s) for s in spreads] or [0])",
+    ),
+    (
+        "stack-arm-dropped",
+        "rows",
+        "lib/design.py",
+        "`check_space` stops taking the depth arm at all and goes back to "
+        "judging a border on area alone. This is the state the linter was in, "
+        "and it read as a yard with four fewer problems",
+        "        out += _check_row_depth(z, plants, site, key)",
+        "        out += []",
+    ),
+    (
+        "overhang-assumed",
+        "rows",
+        "lib/design.py",
+        "an undeclared canopy overhang becomes a foot of assumed apron, so "
+        "every front rank may lean out over ground nobody has said is there. "
+        "The friendly direction of the same error, and it silences g01 and g04",
+        "    return float(depth) + z_overhang(site, key)",
+        "    return float(depth) + (z_overhang(site, key) or 1.0)",
+    ),
+    (
+        "unranked-layer-skipped",
+        "rows",
+        "lib/design.py",
+        "a plant whose `layer` is not one of the three ranks is dropped from "
+        "the stack rather than counted and named. g01's yucca is filed "
+        "`accent`, so the bed goes quiet — and this is the `hardscape[\"kind\"]` "
+        "bug arriving one file along: a guard skipping what it does not "
+        "recognise",
+        '        key = layer if layer in ROWS else "other"',
+        "        if layer not in ROWS:\n            continue\n        key = layer",
+    ),
+    (
+        "niches-budgets-no-depth",
+        "rows",
+        "lib/niches.py",
+        "the row budget stops spending depth and goes back to picking the "
+        "largest class that fits the bed on its own. This reproduces g05's "
+        "original slate exactly — three rows of 2.5, 2.5 and 1.5 — and it "
+        "still passes the coverage band, because the band was never the "
+        "constraint",
+        "            if headroom is not None and rep > headroom + 1e-9:",
+        "            if False:",
+    ),
+    (
+        "rows-thresholded-again",
+        "rows",
+        "lib/niches.py",
+        "how many ranks a bed holds goes back to two hard-coded depths instead "
+        "of the sum of the size classes. The numbers even look reasonable, and "
+        "they hand a 3.0 ft bed three ranks that need 3.5",
+        "    for rows in _ROW_SETS:",
+        "    if float(room) >= 3.0:\n        return [lay for lay, _ in LAYERS]\n"
+        "    for rows in _ROW_SETS:",
+    ),
+    (
+        "audit-trusts-the-file",
+        "rows",
+        "lib/niches.py",
+        "the read-back audit takes the bed's depth from niches.json's own "
+        "cached copy rather than from site.json. It then agrees with the file "
+        "by construction and can never contradict it — which is the whole bug "
+        "this suite is about, rebuilt inside the check written to catch it",
+        "        depth = measured or cached",
+        "        depth = cached or measured",
+    ),
+    (
+        "run-cap-dropped",
+        "rows",
+        "lib/niches.py",
+        "the count stops being capped by the bed's own length, so g05's front "
+        "rank is paid 9.3 sq ft of area share at 0.196 sq ft a plant and "
+        "offered 47 edging plants for an 8.7 ft line with room for 17",
+        "        tight = \"\"\n        if along is not None:",
+        "        tight = \"\"\n        if False:",
+    ),
 ]
 
 
@@ -370,7 +460,7 @@ MUTATIONS = [
 #: suite that is supposed to know about it, so "caught" means the right file
 #: noticed rather than something downstream tripping over the wreckage.
 SUITES = {"reconcile": "test_reconcile.py", "blackout": "test_blackout.py",
-          "layers": "test_layers.py"}
+          "layers": "test_layers.py", "rows": "test_rows.py"}
 
 
 def run_suite(suite, timeout=300):
