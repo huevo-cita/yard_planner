@@ -318,12 +318,37 @@ def can_do(cond, task):
     return "guide", f"not on the {level} list, so write the how-to in"
 
 
-def hours_available(cond, weeks):
+def weekly_hours(cond):
+    """Working hours a week as one number, from either shape the record uses.
+
+    `person.hours_per_week` is written as a figure by some yards and as a
+    `{"low": 1, "high": 6}` band by others, because "one to six" is what a
+    person actually says about their own Saturdays. Both are legitimate and
+    `lib.niches` already reads either, so a caller that assumes the scalar
+    crashes on a perfectly well-formed yard.
+
+    The two ends of a band are not interchangeable to a caller sizing a build.
+    The low end stretches a sixty-hour job over sixty weekends; the high end
+    books every weekend of the autumn at a ceiling the record generally only
+    claims for the good ones. So a band reads as its midpoint, which is the
+    figure it is a band around, and callers that want either end can ask.
+    """
     per = (cond.get("person") or {}).get("hours_per_week")
+    if isinstance(per, dict):
+        ends = [v for v in (per.get("low"), per.get("high"))
+                if isinstance(v, (int, float))]
+        if ends:
+            return sum(ends) / len(ends)
+        per = per.get("value")
+    return float(per) if isinstance(per, (int, float)) else None
+
+
+def hours_available(cond, weeks):
+    per = weekly_hours(cond)
     if not per:
         return None
     gaps = len((cond.get("person") or {}).get("travel_gaps", []))
-    return max(weeks - gaps, 0) * float(per)
+    return max(weeks - gaps, 0) * per
 
 
 # --------------------------------------------------------------------- report

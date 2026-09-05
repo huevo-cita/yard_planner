@@ -432,8 +432,7 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
         return {"error": "no design.json to schedule"}
 
     person = cond.get("person") or {}
-    per_week = person.get("hours_per_week")
-    per_weekend = hours_per_weekend or per_week or 6
+    per_weekend = hours_per_weekend or cond_mod.weekly_hours(cond) or 6
     away = _away_ranges(person)
     start_no_earlier = _date(start_from or datetime.date.today())
 
