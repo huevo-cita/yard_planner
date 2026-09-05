@@ -8,10 +8,12 @@ the suite that is supposed to own that behaviour, and reports which named checks
 died. A mutation nothing catches is a hole in the suite, not a bug in the
 mutation.
 
-Each mutation names its own suite, because the two behaviours covered here are
-owned by different files: the reconciliation between `lib.schedule` and
-`tasks.json` by `tools/test_reconcile.py`, and the no-build week's visibility on
-the calendar by `tools/test_blackout.py`. Running the whole repo against every
+Each mutation names its own suite, because the behaviours covered here are owned
+by different files: the reconciliation between `lib.schedule` and `tasks.json`
+by `tools/test_reconcile.py`, the no-build week's visibility on the calendar by
+`tools/test_blackout.py`, and layered soil — which layer rules a plant's pH and
+which layer rules the water — by `tools/test_layers.py`. Running the whole repo
+against every
 mutation would be slower and would also let a mutation be "caught" by a suite
 that has no business knowing about it.
 
@@ -30,8 +32,9 @@ Three outcomes, not two, and the third is the reason this file exists
     SURVIVED    the suite ran green over a deliberately broken check. A real
                 hole, and the only outcome that says something about coverage
 
-**It edits the working tree.** `lib/reconcile.py`, `lib/schedule.py` and
-`lib/week.py` are rewritten in place for the length of one test run each — under
+**It edits the working tree.** `lib/reconcile.py`, `lib/schedule.py`,
+`lib/week.py`, `lib/design.py`, `lib/conditions.py` and `lib/doubts.py` are
+rewritten in place for the length of one test run each — under
 a second — and put back in a `finally`. A `SIGKILL` or a `git commit -a` from
 another terminal inside that window will catch a deliberately broken module.
 `git diff` after a crash says what happened.
@@ -236,13 +239,138 @@ MUTATIONS = [
         '        if True:\n            tail.append("everything below is work '
         'it allows")',
     ),
+
+    # ---- soil in layers, and which layer is allowed to rule what ----
+    (
+        "native-never-consulted",
+        "layers",
+        "lib/design.py",
+        "the depth-aware pH check reads only the layer the roots start in, so "
+        "the twelve plantings that root straight through six inches into clay "
+        "go quiet with the shallow annuals. This is the shape of the fix "
+        "working too well, and it is the failure the whole suite is aimed at",
+        "    certain, possible = conditions.reached(layers, rooting_depth(plant))",
+        "    certain, possible = layers[:1], []",
+    ),
+    (
+        "missing-depth-defaulted",
+        "layers",
+        "lib/design.py",
+        "a plant with no researched rooting depth is given six inches so the "
+        "check has something to run on. That is the original bug one field "
+        "along: an assumed number applied to ground it does not describe",
+        "    v = plant.get(\"rooting_depth_in\")\n"
+        "    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:\n"
+        "        return None",
+        "    v = plant.get(\"rooting_depth_in\")\n"
+        "    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:\n"
+        "        return 6.0",
+    ),
+    (
+        "band-quoted-as-a-reading",
+        "layers",
+        "lib/design.py",
+        "the plausible band is consulted even where the layer carries a value, "
+        "so the native 8.2 becomes the 7.8-8.3 interval its own note quotes "
+        "and every remaining pH objection drops to a shrug",
+        "    ph = layer.get(\"ph\")\n    if ph is not None:",
+        "    ph = layer.get(\"ph\")\n    if ph is not None and not "
+        "layer.get(\"ph_plausible\"):",
+    ),
+    (
+        "unmeasured-reads-as-fine",
+        "layers",
+        "lib/design.py",
+        "a layer nobody has tested passes everything, which is the friendly "
+        "direction of the same error: nineteen plantings that cannot be ruled "
+        "on read as nineteen that are fine",
+        "        return PH_DEPENDS\n    return PH_UNKNOWN",
+        "        return PH_OK\n    return PH_OK",
+    ),
+    (
+        "boundary-inclusive",
+        "layers",
+        "lib/conditions.py",
+        "`bottom_in` becomes inclusive, so a six-inch root zone is judged to "
+        "enter the layer starting at six. Off by one here refuses the entire "
+        "shallow palette against caliche again, and reads identically in prose",
+        "        elif top < float(depth_in):",
+        "        elif top <= float(depth_in):",
+    ),
+    (
+        "drainage-follows-ph",
+        "layers",
+        "lib/design.py",
+        "drainage is made depth-aware like pH, so a shallow-rooted plant is "
+        "judged to escape the clay by staying above it. Water perches at the "
+        "interface and stands upward from it; this would silence four real "
+        "objections and the four grit mounds already funded to answer them",
+        "def _sharp_by_depth(plant, layers):",
+        "def _sharp_by_depth(plant, layers):\n"
+        "    layers, _ = conditions.reached(layers, rooting_depth(plant) or 4.0)",
+    ),
+    (
+        "limiting-layer-is-deepest",
+        "layers",
+        "lib/conditions.py",
+        "the limiting layer becomes the deepest slow one rather than the "
+        "shallowest, which is where the water table would perch if water ran "
+        "uphill",
+        "    for layer in layers or []:\n"
+        "        drain = str(layer.get(\"drainage\") or \"\").lower()\n"
+        "        if any(w in drain for w in SLOW_WORDS):\n"
+        "            return layer\n"
+        "    return None",
+        "    found = None\n"
+        "    for layer in layers or []:\n"
+        "        drain = str(layer.get(\"drainage\") or \"\").lower()\n"
+        "        if any(w in drain for w in SLOW_WORDS):\n"
+        "            found = layer\n"
+        "    return found",
+    ),
+    (
+        "gaps-not-reported",
+        "layers",
+        "lib/design.py",
+        "the coverage notes are dropped. Everything the narrower pH check "
+        "stops saying then lands nowhere, and a check that answers fewer "
+        "questions looks exactly like a yard with fewer problems",
+        "    out += check_layer_coverage(plants, site, cond)",
+        "    out += []",
+    ),
+    (
+        "boundary-halves-not-compared",
+        "layers",
+        "lib/conditions.py",
+        "the contiguity check stops comparing the two halves of each boundary, "
+        "so a profile can say the imported layer stops at 3 in while the "
+        "native layer starts at 6 and the three inches between belong to "
+        "neither. Nothing objects, because every verdict is decided from "
+        "`top_in` alone",
+        "        elif abs(float(bottom) - top) > 1e-9:",
+        "        elif False:",
+    ),
+    (
+        "unprobeable-priced-anyway",
+        "layers",
+        "lib/doubts.py",
+        "`--price` goes back to probing a path that is not in site.json, so a "
+        "doubt light cannot measure settles itself `probed-immaterial` on a "
+        "spread of zero — a number closing a question it never looked at",
+        "        unmeasurable = _unprobeable(site, probe)\n"
+        "        if unmeasurable:\n"
+        "            results.append((c, None, unmeasurable))\n"
+        "            continue",
+        "        pass",
+    ),
 ]
 
 
 #: Which suite owns which behaviour. A mutation is measured only against the
 #: suite that is supposed to know about it, so "caught" means the right file
 #: noticed rather than something downstream tripping over the wreckage.
-SUITES = {"reconcile": "test_reconcile.py", "blackout": "test_blackout.py"}
+SUITES = {"reconcile": "test_reconcile.py", "blackout": "test_blackout.py",
+          "layers": "test_layers.py"}
 
 
 def run_suite(suite, timeout=300):

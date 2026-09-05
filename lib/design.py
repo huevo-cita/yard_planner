@@ -83,7 +83,7 @@ import datetime
 import json
 import re
 
-from . import doubts, solar, vision as vision_mod, yards
+from . import conditions, doubts, solar, vision as vision_mod, yards
 
 # Hours of direct sun each nursery label actually needs, and what it looks like
 # when it is short. These are the thresholds sunmodel reports against.
@@ -569,6 +569,139 @@ def check_water(plant, cond, site):
     return out
 
 
+def rooting_depth(plant):
+    """How deep this plant's feeding roots go, in inches, or None.
+
+    A researched per-plant fact carried exactly like `light`, `ph_range` and
+    `soil_drainage`, with a `rooting_depth_source` beside it. None where nobody
+    has looked it up, which is a third answer and not a shallow one: a check
+    that picks a depth in order to have one is the same bug as the yard-wide pH
+    it exists to replace, one field along.
+
+    A scalar rather than a range, and that is a deliberate narrowing. Roots vary
+    with soil, season and how the plant was raised, and the honest interval for
+    most of these is wide. But the question every caller asks is *which layers
+    does this plant occupy*, the layers here are inches thick, and a range would
+    put half the yard permanently in the maybe column while reading as more
+    precise than the source it came from. The uncertainty goes where it can be
+    argued with: `rooting_depth_source` says what the figure is, whose class it
+    came from, and what claim the design is actually leaning on.
+    """
+    v = plant.get("rooting_depth_in")
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        return None
+    return float(v)
+
+
+# What one layer says about one plant's pH range.
+#
+#   ok        this layer suits it, whatever else does
+#   out       this layer does not, and the record is definite about that
+#   depends   the layer's pH has never been measured, and the plant's range
+#             covers part of what it plausibly is and not the rest
+#   unknown   the layer's pH has never been measured and nothing says what it
+#             plausibly is, so there is nothing to compare
+#
+# `depends` and `unknown` are separated from `out` because they are not
+# findings about the plant, they are findings about the record, and
+# `check_coverage` owns those. Rolling them into an objection would put a
+# sentence about a plant in front of somebody when the thing that is wrong is
+# that nobody has tested the soil.
+PH_OK, PH_OUT, PH_DEPENDS, PH_UNKNOWN = "ok", "out", "depends", "unknown"
+
+
+def ph_verdict(layer, rng):
+    """Whether one layer suits a plant's pH range.
+
+    A plausible band is consulted **only** where the layer carries no reading of
+    its own, and never in place of one. That line is the difference between this
+    and softening every objection on the yard: the native layer here has a
+    value — an assumed, map-derived 8.2, but a value the whole plant palette was
+    chosen against — and turning it into the 7.8-8.3 interval its own note
+    quotes would drop every remaining pH objection to a shrug. A layer with
+    nothing recorded is a different case, because the alternative there is not a
+    weaker objection, it is no information at all.
+    """
+    if not rng or len(rng) != 2:
+        return PH_OK
+    lo, hi = float(rng[0]), float(rng[1])
+    ph = layer.get("ph")
+    if ph is not None:
+        return PH_OK if lo <= float(ph) <= hi else PH_OUT
+    band = layer.get("ph_plausible")
+    if isinstance(band, (list, tuple)) and len(band) == 2:
+        blo, bhi = float(band[0]), float(band[1])
+        if lo <= blo and bhi <= hi:
+            return PH_OK           # anything it plausibly is suits this plant
+        if bhi < lo or blo > hi:
+            return PH_OUT          # nothing it plausibly is would
+        return PH_DEPENDS
+    return PH_UNKNOWN
+
+
+def ph_by_layer(plant, layers):
+    """Every layer this plant's roots reach, with its verdict and how sure.
+
+    Returns a list of `(layer, verdict, certain)`. Shared with `check_coverage`
+    so that the objection and the report of what could not be checked are two
+    readings of one computation rather than two implementations of one rule.
+    """
+    rng = plant.get("ph_range")
+    if not rng:
+        return []
+    certain, possible = conditions.reached(layers, rooting_depth(plant))
+    return ([(l, ph_verdict(l, rng), True) for l in certain]
+            + [(l, ph_verdict(l, rng), False) for l in possible])
+
+
+def _layer_name(layer):
+    return str(layer.get("name") or layer.get("material") or "that layer")
+
+
+def _layer_where(layer, depth):
+    """`the native layer, from 6 in down` — with the share of the root zone."""
+    top = float(layer.get("top_in") or 0)
+    bottom = layer.get("bottom_in")
+    span = (f"the top {bottom:g} in" if top <= 0 and bottom
+            else f"the top of the bed" if top <= 0
+            else f"from {top:g} in down")
+    share = conditions.share_of_root_zone(layer, depth)
+    if share is None:
+        return f"the {_layer_name(layer)} layer, {span}"
+    return (f"the {_layer_name(layer)} layer, {span}, which holds "
+            f"{share * 100:.0f} percent of a {depth:g} in root zone")
+
+
+def _ph_by_depth(plant, layers):
+    """The pH objection, judged against the layers the roots are actually in.
+
+    Only a `certain` verdict of `out` raises an objection here. Where the layer
+    that does not suit the plant is one the roots *might* reach and nobody has
+    researched the depth, the finding is that the depth is unresearched, and
+    that belongs to `check_coverage` — an objection resting on a rooting depth
+    this module chose for itself would be the yard-wide 8.2 all over again.
+    """
+    rng = plant.get("ph_range")
+    bad = [(l, c) for l, v, c in ph_by_layer(plant, layers) if v == PH_OUT]
+    if not any(c for _, c in bad):
+        return []
+    depth = rooting_depth(plant)
+    where = "; ".join(_layer_where(l, depth) for l, c in bad if c)
+    reads = "; ".join(
+        (f"{l['ph']}" if l.get("ph") is not None
+         else f"plausibly {l['ph_plausible'][0]}-{l['ph_plausible'][1]}")
+        for l, c in bad if c)
+    rooted = (f"roots {depth:g} in" if depth else "roots into the surface layer")
+    return [_obj("serious", plant["name"],
+                 f"wants pH {rng[0]}-{rng[1]} and {rooted}, which puts it in "
+                 f"{where} — reading {reads}. The imported soil above is not "
+                 f"the whole of what this plant is standing in",
+                 "amending pH is a losing fight in open ground and a deeper "
+                 "imported layer only postpones it. Either choose something "
+                 "suited to the layer the roots reach, or grow this one in a "
+                 "container where the medium is yours")]
+
+
 def check_soil(plant, cond, site=None):
     """Whether the soil suits the plant — where the plant is in soil at all.
 
@@ -576,26 +709,74 @@ def check_soil(plant, cond, site=None):
     holding a potted plant to the yard's pH refuses it for a reason that does
     not apply — and this function's own advice for a pH mismatch is to *grow it
     in a container where the medium is yours*, which it then objected to.
+
+    Where the bed has a layered record the checks run against the layers, and
+    the two arms deliberately part company. pH is asked of the layers the roots
+    are in; drainage is asked of the profile, because water leaves through the
+    slowest layer whatever the rooting depth. See `lib.conditions`.
     """
     out = []
-    if site is not None and plant.get("zone"):
-        key = resolve_site_zone(site, plant["zone"]) or plant["zone"]
+    key = plant.get("zone")
+    if site is not None and key:
+        key = resolve_site_zone(site, key) or key
         if zone_kind(site, key) == "container":
             return out
     soil = (cond or {}).get("soil") or {}
-    ph = soil.get("ph")
-    rng = plant.get("ph_range")
-    if ph is not None and rng and not (rng[0] <= ph <= rng[1]):
-        out.append(_obj("serious", plant["name"],
-                        f"wants pH {rng[0]}-{rng[1]} and the soil reads {ph}",
-                        "amending pH is a losing fight in open ground. Either "
-                        "choose something suited to the soil, or grow this one "
-                        "in a container where the medium is yours"))
-    drain = (soil.get("drainage") or "").lower()
-    if plant.get("soil_drainage") == "sharp" and \
-            ("slow" in drain or "poor" in drain):
-        out += _sharp_drainage(plant, drain)
+    layers = conditions.bed_layers(cond, key)
+
+    if layers:
+        out += _ph_by_depth(plant, layers)
+    else:
+        ph = soil.get("ph")
+        rng = plant.get("ph_range")
+        if ph is not None and rng and not (rng[0] <= ph <= rng[1]):
+            out.append(_obj("serious", plant["name"],
+                            f"wants pH {rng[0]}-{rng[1]} and the soil reads "
+                            f"{ph}",
+                            "amending pH is a losing fight in open ground. "
+                            "Either choose something suited to the soil, or "
+                            "grow this one in a container where the medium is "
+                            "yours"))
+
+    if plant.get("soil_drainage") == "sharp":
+        if layers:
+            out += _sharp_by_depth(plant, layers)
+        else:
+            drain = (soil.get("drainage") or "").lower()
+            if "slow" in drain or "poor" in drain:
+                out += _sharp_drainage(plant, drain)
     return out
+
+
+def _sharp_by_depth(plant, layers):
+    """A sharp-drainage plant over a layered profile.
+
+    Depth is asked and deliberately does not change the answer, which is the
+    whole content of this function. Six inches of good soil over group D clay
+    does not drain: the clay is where the water has to go, it cannot, and the
+    water stands upward from that interface. A plant rooting entirely in the
+    imported layer is therefore inside the perched zone rather than above it,
+    and reading across from the pH rule — shallow roots, imported soil, no
+    objection — would be exactly wrong. What depth buys is a better sentence,
+    not a different verdict.
+    """
+    lim = conditions.limiting_layer(layers)
+    if lim is None:
+        return []
+    drain = str(lim.get("drainage") or "").lower()
+    top = float(lim.get("top_in") or 0)
+    depth = rooting_depth(plant)
+    above = [l for l in layers if float(l.get("top_in") or 0) < top]
+    over = (f"{top:g} in of {_layer_name(above[0])} soil over "
+            f"{_layer_name(lim)}" if above and top > 0
+            else f"{_layer_name(lim)} from the surface")
+    where = (f", and it roots {depth:g} in, so it is "
+             + ("inside" if depth <= top else "through")
+             + " the layer that perches" if depth else "")
+    ground = (f"this bed is {over}, which drains {drain}. Water leaves through "
+              f"the slowest layer whatever the rooting depth, and it stands "
+              f"upward from that interface{where}")
+    return _sharp_drainage(plant, drain, ground=ground)
 
 
 def drainage_amendment(plant):
@@ -607,7 +788,7 @@ def drainage_amendment(plant):
     return a if isinstance(a, dict) and a.get("describe") else None
 
 
-def _sharp_drainage(plant, drain):
+def _sharp_drainage(plant, drain, ground=None):
     """A sharp-drainage plant in slow ground, and whether the plan answers it.
 
     Without this the objection is unanswerable, which is a specific and bad
@@ -637,11 +818,17 @@ def _sharp_drainage(plant, drain):
                  than believed.
       note       an amendment with a source. The design is answered; what is
                  left is doing it.
+
+    `ground` is the sentence describing what is wrong with the soil. It is a
+    parameter so that a layered bed can say which layer perches and how deep it
+    is, through the same three levels rather than a second copy of them; the
+    default is the flat reading every yard had before profiles existed.
     """
     a = drainage_amendment(plant)
+    ground = ground or f"the soil drains {drain}"
     if not a:
         return [_obj("blocking", plant["name"],
-                     f"needs sharp drainage and the soil drains {drain}. This "
+                     f"needs sharp drainage and {ground}. This "
                      f"is the classic way to kill rosemary and lavender, and "
                      f"it takes two years so nobody connects it to the soil",
                      "plant it on a mound or in a raised pocket with grit, "
@@ -651,7 +838,7 @@ def _sharp_drainage(plant, drain):
     src = [s for s in (a.get("source") or []) if str(s).strip()]
     if not src:
         return [_obj("serious", plant["name"],
-                     f"needs sharp drainage, the soil drains {drain}, and the "
+                     f"needs sharp drainage, {ground}, and the "
                      f"planting claims {a['describe']} — but nothing says "
                      f"where that is written down, so there is no way to tell "
                      f"whether it is a plan or a hope. An amendment nobody has "
@@ -660,7 +847,7 @@ def _sharp_drainage(plant, drain):
                      "plan line that builds it, or drop the claim and let the "
                      "drainage objection stand")]
     return [_obj("note", plant["name"],
-                 f"needs sharp drainage and the soil drains {drain}, and it is "
+                 f"needs sharp drainage and {ground}, and it is "
                  f"planted on {a['describe']} — {', '.join(str(s) for s in src)}"
                  + (f". {a['why']}" if a.get("why") else "")
                  + f". The soil objection is answered by the planting position "
@@ -1005,7 +1192,20 @@ def check_coverage(design, site, cond, sun):
                           "verdict nobody can disagree with",
                         "add `winter_active_why` naming the evidence"))
 
-    # --- soil
+    # --- soil, layer by layer
+    #
+    # Three silences, and they are the ones this whole mechanism creates. The
+    # depth-aware pH check is quieter than the yard-wide one it replaces, and
+    # most of that quiet is correct — a viola rooting five inches into imported
+    # garden soil was never in the caliche. But some of it is a check that could
+    # not run, and if that is invisible then the yard has traded a confidently
+    # wrong answer for a confidently blank one, which is the worse trade.
+    #
+    # Aggregated per finding rather than per plant, the same as everything else
+    # here. Nineteen lines saying "nobody has measured the imported soil" is
+    # nineteen ways of not reading it once.
+    out += check_layer_coverage(plants, site, cond)
+
     soil = (cond or {}).get("soil") or {}
     fussy = [p for p in plants if p.get("ph_range")]
     if soil.get("ph") is None and fussy:
@@ -1041,6 +1241,123 @@ def check_coverage(design, site, cond, sun):
                         "set `water.rain_shadow_zones` in conditions.json, to "
                         "an empty list if genuinely none — which is a different "
                         "statement from saying nothing"))
+    return out
+
+
+def _bed_key(site, zone):
+    """The site's own key for a design zone, or the design's key unchanged.
+
+    `site` is optional here for the same reason it is optional on `check_soil`:
+    the layered record is keyed by bed and a caller that only has beds should
+    not have to fabricate a site to ask about them.
+    """
+    if site is None:
+        return zone
+    return resolve_site_zone(site, zone) or zone
+
+
+def check_layer_coverage(plants, site, cond):
+    """What the depth-aware soil check could not settle, said out loud.
+
+    The pH arm of `check_soil` now answers a narrower question than the yard-wide
+    scalar did, and it answers it correctly for far fewer plants. Everything it
+    stops saying has to land somewhere, and there are exactly three places it
+    can land: the layer suits the plant (silence is right), the layer's pH has
+    never been measured (nobody knows), or the plant's rooting depth has never
+    been researched (nobody looked). Only the first of those is a pass.
+    """
+    out = []
+    unmeasured, no_depth, blank_layer, unprofiled = [], [], [], []
+    discontinuous = {}
+    any_profile = bool(((cond or {}).get("soil", {}).get("layers") or {})
+                       .get("profiles"))
+
+    for p in plants:
+        zone = p.get("zone")
+        if not zone:
+            continue
+        key = _bed_key(site, zone)
+        if site is not None and zone_kind(site, key) == "container":
+            continue
+        layers = conditions.bed_layers(cond, key)
+        if layers is None:
+            if any_profile and p.get("ph_range"):
+                unprofiled.append(key)
+            continue
+        if key not in discontinuous:
+            gaps = conditions.layer_gaps(layers)
+            if gaps:
+                discontinuous[key] = gaps
+        for layer, verdict, certain in ph_by_layer(p, layers):
+            if verdict == PH_DEPENDS:
+                unmeasured.append(p["name"])
+            elif verdict == PH_UNKNOWN:
+                blank_layer.append(p["name"])
+            elif verdict == PH_OUT and not certain:
+                no_depth.append(p["name"])
+
+    if unmeasured:
+        names = sorted(set(unmeasured))
+        out.append(_obj("note", "soil",
+                        f"{len(unmeasured)} plantings root in an imported "
+                        f"layer whose "
+                        f"pH has never been measured, and their own range "
+                        f"covers part of what that layer plausibly is and not "
+                        f"the rest — {', '.join(names[:6])}"
+                        + (" and others" if len(names) > 6 else "")
+                        + ". They are not passing the pH check; the pH check "
+                          "cannot run on them. A bagged garden soil at the acid "
+                          "end of its plausible band sits under the floor these "
+                          "state",
+                        "one lab test settles the whole list. Sample the "
+                        "imported layer separately from the native one, or the "
+                        "blend destroys the distinction that makes this "
+                        "answerable"))
+    if blank_layer:
+        names = sorted(set(blank_layer))
+        out.append(_obj("note", "soil",
+                        f"{len(blank_layer)} plantings root in a layer that "
+                        f"records "
+                        f"neither a pH nor a plausible range, so nothing could "
+                        f"be compared at all — {', '.join(names[:6])}"
+                        + (" and others" if len(names) > 6 else ""),
+                        "set `ph` on the layer where it has been measured, or "
+                        "`ph_plausible` with a source where it has not. A layer "
+                        "with neither disables the check silently"))
+    if no_depth:
+        names = sorted(set(no_depth))
+        out.append(_obj("note", "soil",
+                        f"{len(no_depth)} plantings would be refused by a "
+                        f"layer their "
+                        f"roots may or may not reach, and no `rooting_depth_in` "
+                        f"is on record for them — {', '.join(names[:6])}"
+                        + (" and others" if len(names) > 6 else "")
+                        + ". The objection was not raised, because raising one "
+                          "on a depth this module picked for itself is the same "
+                          "fault as the yard-wide pH it replaced",
+                        "set `rooting_depth_in` and `rooting_depth_source` on "
+                        "each, from an effective-root-zone table rather than "
+                        "from the plant's height"))
+    for bed, gaps in sorted(discontinuous.items()):
+        out.append(_obj("note", "soil",
+                        f"{bed}'s profile does not join up: {'; '.join(gaps)}. "
+                        f"Every verdict here is decided from `top_in`, so this "
+                        f"changes no objection and is reported for that reason "
+                        f"— the boundary is stated twice and only one of the "
+                        f"two is being believed",
+                        "make each layer's `bottom_in` the next layer's "
+                        "`top_in`, and leave the deepest layer's `bottom_in` "
+                        "null so it runs past anything that will be planted"))
+    if unprofiled:
+        beds = sorted(set(unprofiled))
+        out.append(_obj("note", "soil",
+                        f"{', '.join(beds)} carries plants that state a pH "
+                        f"range and has no entry in `soil.layers.beds`, so it "
+                        f"was judged on the yard-wide scalar while the other "
+                        f"beds were judged layer by layer. Two rules on one "
+                        f"yard is worse than either",
+                        "add the bed to `soil.layers.beds`, naming the profile "
+                        "it actually has"))
     return out
 
 

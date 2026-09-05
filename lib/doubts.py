@@ -335,6 +335,39 @@ def _mutator(probe):
     return None
 
 
+def _unprobeable(site, probe):
+    """Why this probe cannot be measured by the shade model, or None.
+
+    `--price` answers one question — how far does the yard's LIGHT move across
+    the plausible range of this unknown — and it answers it by writing the value
+    into a copy of `site.json` and re-running the model. A probe naming a path
+    that is not in `site.json` is therefore not merely useless: `set_path`
+    creates the key, the model runs identically for every value in the range,
+    the spread comes back as 0.00 h/day, and the card settles itself
+    `probed-immaterial` carrying a measurement that never looked at the thing in
+    question. An unanswerable doubt would be closed by a number, with the number
+    on the record as the evidence.
+
+    This came up filing the imported soil's unmeasured pH. pH does not cast a
+    shadow; there is no honest probe for it, and the right answer is a card with
+    no probe rather than a probe that returns zero. But nothing stopped the
+    other one, so nothing was stopping it on any other yard either.
+    """
+    from . import siteschema
+    path = probe.get("path")
+    if not path:
+        return None
+    sentinel = object()
+    if siteschema.get_path(site, path, sentinel) is sentinel:
+        return (f"probe names {path}, which is not in site.json. The shade "
+                f"model would run unchanged across every value and report a "
+                f"spread of zero, settling this card on a measurement that "
+                f"never looked at it. Either the path is a typo, or this "
+                f"unknown is not one light can price and the card wants no "
+                f"probe at all")
+    return None
+
+
 def price(slug, settle_immaterial=True):
     """Probe every `fact` card that says how, and settle the ones that do not matter.
 
@@ -360,6 +393,10 @@ def price(slug, settle_immaterial=True):
         mutate = _mutator(probe)
         if mutate is None:
             results.append((c, None, "probe names neither a path nor a tree field"))
+            continue
+        unmeasurable = _unprobeable(site, probe)
+        if unmeasurable:
+            results.append((c, None, unmeasurable))
             continue
         spread = gaps.light_spread(site, mutate, probe["values"],
                                    zone=probe.get("zone"))

@@ -397,6 +397,152 @@ def record_test(slug, result, where=None):
     return cond
 
 
+# ---------------------------------------------------------- the soil profile
+#
+# A bed is not one soil. Almost every worked garden is imported material sitting
+# on whatever was underneath, and the two disagree — about pH, about how fast
+# water leaves, about what will grow. `soil.ph` and `soil.drainage` are one
+# scalar each for the whole yard, which is the right shape for a lot nobody has
+# touched and the wrong shape for one where six inches of bagged garden soil
+# went into every bed. On this yard that single assumed 8.2 was generating
+# twenty-six refusals against ground the plants are not growing in.
+#
+# So `soil.layers` records the profile per bed. The two things worth being
+# precise about, because they are the reason this is not one function:
+#
+#   pH is a property of the MATERIAL a root is in. Which layers matter therefore
+#   depends on how deep the plant roots, and a shallow annual living entirely in
+#   the imported six inches must not be judged against the clay below it.
+#
+#   Drainage is a property of the PROFILE. Water has to leave through the
+#   slowest layer whatever the rooting depth, and it perches upward from that
+#   layer's top — so six inches of good soil over group D clay does not drain,
+#   and the plant rooting only in those six inches is sitting in the perched
+#   zone rather than above it. Depth does not rescue a drainage objection, and a
+#   check that applied the pH rule to drainage would quietly say it does.
+
+#: A layer's own `drainage` reading counts as limiting when it says one of these.
+#: Matched inside whatever prose the yard recorded, exactly as `design.check_soil`
+#: has always matched the flat reading, so the two cannot disagree about the word.
+SLOW_WORDS = ("slow", "poor")
+
+
+def bed_profile(cond, bed):
+    """The named soil profile for one bed, or None if the bed has no record.
+
+    None is a real answer and not an empty profile: a bed nobody has described
+    falls back to the flat `soil.ph` and `soil.drainage`, which is the behaviour
+    every yard had before this existed and is still right for undisturbed ground.
+    `design.check_coverage` reports the fallback rather than letting it pass as
+    a description.
+    """
+    layers = (cond or {}).get("soil", {}).get("layers") or {}
+    name = (layers.get("beds") or {}).get(bed)
+    if not name:
+        return None
+    prof = (layers.get("profiles") or {}).get(name)
+    if not isinstance(prof, dict) or not prof.get("layers"):
+        return None
+    return prof
+
+
+def bed_layers(cond, bed):
+    """The layers of one bed, shallowest first, or None."""
+    prof = bed_profile(cond, bed)
+    if prof is None:
+        return None
+    return sorted(prof["layers"], key=lambda l: float(l.get("top_in") or 0))
+
+
+def layer_gaps(layers):
+    """Where a profile's own boundaries disagree with each other.
+
+    `reached` decides everything from `top_in`, so a `bottom_in` that has
+    drifted out of step changes no verdict and reads as authoritative anyway —
+    a profile could say the imported layer stops at 3 in while the native layer
+    starts at 6, and nothing would object while the three inches between them
+    belonged to neither. Perturbing `bottom_in` was measured as inert against
+    every objection on cloverleaf-austin, which is exactly the "believed but
+    never computed" quadrant `tools/influence.py` exists to find. So the
+    redundant half of each boundary is checked against the other half rather
+    than deleted: two statements of one fact are worth keeping when something
+    compares them, and worth nothing when nothing does.
+
+    `design.check_layer_coverage` reports what comes back.
+    """
+    out = []
+    order = sorted(layers or [], key=lambda l: float(l.get("top_in") or 0))
+    for a, b in zip(order, order[1:]):
+        bottom, top = a.get("bottom_in"), float(b.get("top_in") or 0)
+        if bottom is None:
+            out.append(f"{a.get('name')} runs to no depth at all and "
+                       f"{b.get('name')} starts at {top:g} in beneath it")
+        elif abs(float(bottom) - top) > 1e-9:
+            out.append(f"{a.get('name')} stops at {float(bottom):g} in and "
+                       f"{b.get('name')} starts at {top:g} in")
+    last = order[-1] if order else None
+    if last is not None and last.get("bottom_in") is not None:
+        out.append(f"the deepest layer, {last.get('name')}, stops at "
+                   f"{float(last['bottom_in']):g} in and nothing is recorded "
+                   f"below it, so a root passing that depth is in no layer")
+    return out
+
+
+def reached(layers, depth_in):
+    """Which layers a root zone of `depth_in` occupies: (certain, possible).
+
+    Three-valued on purpose, because the alternative is the bug this whole file
+    is about. With a researched depth every layer whose top the roots pass is
+    `certain` and nothing is `possible`. With no depth on record the surface
+    layer is still `certain` — everything roots in the top of the bed — and every
+    layer below it is `possible`, which is what lets a caller say "this would be
+    an objection if it roots that deep, and nobody has looked it up" instead of
+    picking a depth and asserting.
+    """
+    certain, possible = [], []
+    for layer in layers or []:
+        top = float(layer.get("top_in") or 0)
+        if top <= 0:
+            certain.append(layer)
+        elif depth_in is None:
+            possible.append(layer)
+        elif top < float(depth_in):
+            certain.append(layer)
+    return certain, possible
+
+
+def share_of_root_zone(layer, depth_in):
+    """What fraction of a root zone of `depth_in` lies inside this layer.
+
+    Reported rather than thresholded. Four inches of clay at the bottom of an
+    eighteen-inch root zone is a real thing to know about and a poor thing to
+    decide on: a cut-off here would be a policy number invented to make a
+    particular plant pass, and it would be the first thing to drift. The
+    objection fires on reach and states the share, and a person decides.
+    """
+    if not depth_in:
+        return None
+    top = float(layer.get("top_in") or 0)
+    bottom = layer.get("bottom_in")
+    bottom = float(depth_in) if bottom is None else min(float(bottom),
+                                                        float(depth_in))
+    return max(0.0, bottom - top) / float(depth_in)
+
+
+def limiting_layer(layers):
+    """The shallowest layer that water has to get through and cannot, or None.
+
+    Shallowest rather than deepest, because a perched water table stands on the
+    first slow layer it meets and everything above that interface is wet. The
+    clay under a raised box still governs the box.
+    """
+    for layer in layers or []:
+        drain = str(layer.get("drainage") or "").lower()
+        if any(w in drain for w in SLOW_WORDS):
+            return layer
+    return None
+
+
 def soil_summary(cond):
     """The best answer available, and how much weight it can carry."""
     soil = cond.get("soil") or {}
