@@ -40,6 +40,12 @@ of the item's price class, or the national ballpark — and never returns nothin
 The total then carries `firm_usd` and `estimated_usd` separately, plus the range,
 so the uncertainty is visible instead of being subtracted.
 
+A price nobody can walk in and pay climbs none of those rungs. A members-only
+sale price used to be averaged into the class median, which put a $60 membership
+and one particular Friday morning inside the budget with only a clause at the
+end of a basis line to say so. Every figure here is retail, and the sale comes
+back as `upside_usd` beside the total with its conditions named.
+
 Volume, and the thing everyone gets wrong
 -----------------------------------------
 Bulk material is sold by the cubic yard and bags by the cubic foot, and there are
@@ -390,6 +396,12 @@ def _price_each(item, unit, overlay, merged, src, index, order, design_usd=None)
                              order=order)
     if got and got.get("firm"):
         return got
+    # Below here the ladder's `upside` is deliberately dropped along with its
+    # figure. A conditional price rides on the rung it would have set, and no
+    # further: the sale prices on file are for a class — "native plant sale
+    # stock, any species" — and carrying a native-plant-sale saving across onto
+    # a figure the design put on a viola by name would be claiming a discount
+    # on something that sale does not sell.
     each = sourcing._entry(overlay, item).get("unit_usd")
     if each is not None:
         return {"usd": float(each), "low": float(each), "high": float(each),
@@ -530,6 +542,18 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
            "low_usd": round(low_total, 2), "high_usd": round(high_total, 2),
            "saved_by_using_what_is_here_usd": round(saved, 2),
            "prices": "local" if local else "national ballpark"}
+    # The sale, as money saved off a total that does not assume it. Reported
+    # apart from the total for exactly that reason: fold it in and the budget is
+    # back to resting on a discount nobody has announced.
+    upside = sum(ln["upside"]["saves_usd"] for ln in lines if ln.get("upside"))
+    if upside:
+        conds = []
+        for ln in lines:
+            for c in (ln.get("upside") or {}).get("conditional") or []:
+                if c not in conds:
+                    conds.append(c)
+        out["upside_usd"] = round(upside, 2)
+        out["upside_conditions"] = conds
     if caveats:
         out["caveats"] = caveats
     if provisional:
@@ -553,6 +577,13 @@ def _stamp(ln, got, qty):
     ln["high_usd"] = round(qty * got["high"], 2)
     if not got["firm"]:
         ln["estimated"] = True
+    # What a sale price would have made this line, kept beside the figure the
+    # line is actually budgeted at rather than instead of it.
+    up = got.get("upside")
+    if up:
+        ln["upside"] = {"usd": round(qty * up["usd"], 2),
+                        "saves_usd": round(qty * up["saves_usd"], 2),
+                        "conditional": up["conditional"], "basis": up["basis"]}
 
 
 def _rough_unit_cost(item, unit, prices):
@@ -706,6 +737,9 @@ def report(slug, prices=None, force=False):
                   f"netted out")
         if ln.get("estimated"):
             print(f"      ~ estimated: {ln['pricing']['basis']}")
+        if ln.get("upside"):
+            print(f"      ${ln['upside']['saves_usd']:,.2f} off if "
+                  f"{'; '.join(ln['upside']['conditional'])}")
         if ln.get("note"):
             print(f"      {ln['note']}")
 
@@ -719,6 +753,11 @@ def report(slug, prices=None, force=False):
     if bom["saved_by_using_what_is_here_usd"]:
         print(f"  about ${bom['saved_by_using_what_is_here_usd']:,.0f} of that "
               f"avoided by using what was already on site")
+    if bom.get("upside_usd"):
+        print(f"  every figure above is retail. About "
+              f"${bom['upside_usd']:,.0f} comes off it if "
+              f"{'; and '.join(bom['upside_conditions'])} — money saved, not "
+              f"money budgeted")
     if bom["prices"] != "local":
         print("  nothing local on file, so every figure above is a national "
               "ballpark. Run the sourcing-scout subagent for real numbers")
