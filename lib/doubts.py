@@ -802,11 +802,39 @@ def renew_clearance(slug, jobs, entries=None, note=None):
     out = {}
     for job in jobs:
         plan = plans[job]
+        kept = _not_superseded(plan["carry"], entries, plan["soft"])
         written, _ = file_clearance(
-            slug, [job], plan["carry"] + entries,
+            slug, [job], kept + entries,
             note=note or plan["filed"].get("note"))
-        out[job] = dict(written[job], carried=len(plan["carry"]),
-                        answered=len(entries), moved=len(plan["moved"]))
+        out[job] = dict(written[job], carried=len(kept),
+                        answered=len(entries), moved=len(plan["moved"]),
+                        replaced=len(plan["carry"]) - len(kept))
+    return out
+
+
+def _not_superseded(carry, entries, soft):
+    """Carried lines that the command line has not already answered for.
+
+    A reason can go false without its value moving, which is the one kind of rot
+    the fingerprints cannot see: `features.trees.*.height` was accepted partly
+    because t11 "was confirmed by the owner", and then t11 was the tree the tape
+    caught out. Nothing moved — t11's height is still 600 in — so `--renew`
+    carries the sentence, and a `--because` aimed at the same glob used to be
+    filed *beside* it. The record then asserted two contradictory reasons for
+    the same thirteen values with no way to tell which was current, which is
+    worse than the stale sentence on its own.
+
+    So an explicit line replaces a carried one when it covers every path the
+    carried one did. Partial overlap is not enough: a line still speaking for
+    ground the new one does not reach is still the only thing speaking for it.
+    """
+    out = []
+    for e in carry:
+        touched = [s["path"] for s in soft if _covers(e, s["path"])]
+        if touched and all(any(_covers(n, p) for n in entries)
+                           for p in touched):
+            continue
+        out.append(e)
     return out
 
 
@@ -1400,7 +1428,9 @@ def main():
                 print(f"all-clear renewed for {job} on {args.slug} "
                       f"({w['carried']} line"
                       f"{'s' if w['carried'] != 1 else ''} carried forward, "
-                      f"{w['answered']} answered again, {len(w['covered'])} "
+                      f"{w['answered']} answered again, "
+                      + (f"{w['replaced']} replaced, " if w['replaced'] else "")
+                      + f"{len(w['covered'])} "
                       f"value{'s' if len(w['covered']) != 1 else ''} "
                       f"re-fingerprinted, digest {w['digest']})")
         else:

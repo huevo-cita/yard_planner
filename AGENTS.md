@@ -207,6 +207,15 @@ python3 -m lib.doubts <slug> --clear sunmodel --renew
 carry one whose value has, naming it so it gets a fresh answer. Whatever moved
 takes a new `--because` on the same command; the rest is kept.
 
+A reason can also go false while its value sits perfectly still, and that is the
+one kind of rot the fingerprints cannot see. The tree-height line here was
+accepted partly because "the one tree that dominates the back garden was
+confirmed by the owner" — and then that tree was the one the tape caught out, by
+nine feet of crown radius. Its *height* never moved, so nothing went stale. Give
+`--because` the same glob and it replaces the line rather than filing beside it;
+a carried line still speaking for ground the new one does not reach survives,
+because partial overlap is not supersession.
+
 What this honestly does *not* solve: nothing stops
 `--because '*=fine, I looked'`. The gain is that the omission becomes a dated
 artifact making specific claims, which a person can disagree with, rather than a
