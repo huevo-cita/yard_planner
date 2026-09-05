@@ -131,10 +131,16 @@ SITE = {
         "dark_bed": {"style": "bed", "kind": "border", "area_sqft": 30.0,
                      "usable_depth_ft": 3.5},
     },
-    # The scorch branch needs a hot climate to fire at all. Austin's own figure,
-    # so the false objections this file is about are reproduced rather than
+    # The scorch branch needs a hot climate to fire at all, and it needs to know
+    # WHICH MONTHS are hot — an annual count cannot tell a July claim from a
+    # January one, which is what d33 was about. Austin's own ERA5 figures, so the
+    # false objections this file is about are reproduced rather than
     # approximated.
-    "climate": {"heat": {"days_over_95f_per_year": 45.8}},
+    "climate": {"heat": {"days_over_95f_per_year": 45.8,
+                         "days_over_95f_by_month": {
+                             "Jan": 0.0, "Feb": 0.0, "Mar": 0.0, "Apr": 0.2,
+                             "May": 1.6, "Jun": 7.1, "Jul": 14.1, "Aug": 18.2,
+                             "Sep": 4.3, "Oct": 0.2, "Nov": 0.0, "Dec": 0.0}}},
 }
 
 # Sown in September, cut until March. Seven months, and it crosses New Year,
@@ -187,10 +193,11 @@ def run():
 
     head("the fault, reproduced: a winter crop judged over the summer")
     objs = light(crop("veg_bed"))
-    ok("with no months it is told it will scorch in July",
+    ok("with no months it is told it will scorch in the heat",
        len(scorch(objs)) == 1, show(objs))
-    ok("on the summer figure, which is the one it should not be judged on",
-       objs and f"{mean(VEG_BED, solar.GROWING_SEASON)} h" in objs[0]["say"],
+    ok("on a summer figure, for a month it is not in the ground for",
+       objs and f"{VEG_BED[solar.MONTHS.index('Aug')]} h in Aug" in objs[0]["say"]
+       and f"{mean(VEG_BED, AUTUMN_TO_SPRING)} h" not in objs[0]["say"],
        show(objs))
 
     head("and the fix: its own months, spanning the year boundary")

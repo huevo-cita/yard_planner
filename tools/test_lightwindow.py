@@ -160,6 +160,78 @@ def yard_table(hours):
                            for m, h in zip(solar.MONTHS, hours)}}
 
 
+# ----------------------------------------- which months the scorch branch means
+
+# The same fault as the rest of this file, one level down and found after it was
+# fixed. `check_light` learned to judge a plant over its own window; the scorch
+# branch underneath it did not follow. It kept reading
+# `climate.heat.days_over_95f_per_year`, an ANNUAL count, and kept asserting "it
+# will scorch in July whatever the watering" under an hour figure that was a mean
+# over whatever window the plant happened to name. A cyclamen lifted in March was
+# told that 5.45 h of December-to-March sun proved it would burn in July.
+#
+# Austin's own monthly series, from thirty years of ERA5 daily maxima. Jun, Jul
+# and Aug clear the six-day bar; September's 4.3 does not, and neither does May.
+AUSTIN_HEAT = {"Jan": 0.0, "Feb": 0.0, "Mar": 0.0, "Apr": 0.2, "May": 1.6,
+               "Jun": 7.1, "Jul": 14.1, "Aug": 18.2, "Sep": 4.3, "Oct": 0.2,
+               "Nov": 0.0, "Dec": 0.0}
+
+# A climate with MORE days over 95 F in the year than Austin and not one hot
+# month in it — four a month, every month, which is a place with no summer and no
+# winter. The old branch fired here, because 48 > 20 was the whole of its test.
+# Anything still reading the annual count passes every fixture below except this
+# one.
+EVEN_HEAT = {m: 4.0 for m in solar.MONTHS}
+
+# Three beds, each shaped to break a different plausible version of the fix.
+#
+#   blazing       hot all summer and blazing in August. The plain case, and the
+#                 bed the winter annual stands in — so a silence here has to come
+#                 from the plant's window and cannot come from the bed.
+#   june_peak     brightest in June at 9.0 h and hottest in August at 5.0 h. An
+#                 implementation that picks the brightest hot month quotes 9.0 h
+#                 and names June, in a month with 7.1 hot days rather than 18.2.
+#   august_only   June 3.8, July 4.2, August 5.2. The mean of its hot months is
+#                 4.4 h, under the 4.5 h line a shade plant draws, and August is
+#                 over it. Averaging the hot months together lets this bed off,
+#                 and the plant still burns in August.
+BLAZING = [5.6, 6.0, 4.6, 6.9, 8.8, 9.0, 8.9, 8.0, 5.4, 3.7, 3.5, 5.6]
+JUNE_PEAK = [3.0, 3.2, 6.0, 6.0, 7.0, 9.0, 6.0, 5.0, 4.0, 3.0, 2.8, 2.9]
+AUGUST_ONLY = [2.0, 2.2, 2.4, 3.0, 3.4, 3.8, 4.2, 5.2, 3.6, 2.6, 2.0, 1.9]
+
+SCORCH_SUN = {"by_zone_and_month": {"blazing": zone(BLAZING),
+                                    "june_peak": zone(JUNE_PEAK),
+                                    "august_only": zone(AUGUST_ONLY)}}
+
+
+def scorch_site(heat=None):
+    return {
+        "yard": "fixture",
+        "zones": {k: {"style": "bed", "kind": "border", "area_sqft": 60.0,
+                      "usable_depth_ft": 3.5}
+                  for k in ("blazing", "june_peak", "august_only")},
+        "climate": {"heat": dict({"days_over_95f_per_year": 45.8},
+                                 **({"days_over_95f_by_month": heat}
+                                    if heat is not None else {}))},
+    }
+
+
+SCORCH_SITE = scorch_site(AUSTIN_HEAT)
+
+
+def shade_plant(zone_key, light="shade", **kw):
+    p = {"name": "Texas sedge", "zone": zone_key, "count": 5, "light": light,
+         "water": "low", "mature_spread_ft": 1.0, "mature_height_ft": 0.8,
+         "source": "test fixture"}
+    p.update(kw)
+    return p
+
+
+def burns(p, site=None):
+    return [o for o in design.check_light(p, SCORCH_SUN, site or SCORCH_SITE)
+            if "scorch" in o["say"]]
+
+
 # ---------------------------------------------- a season written out somewhere else
 
 _MONTH_LITERAL = re.compile(
@@ -352,6 +424,116 @@ def run():
     ok("and winter stays a separate claim rather than being averaged in",
        not set(niches.WINTER) & set(niches.GROWING),
        f"{niches.WINTER!r} overlaps {niches.GROWING!r}")
+
+    head("the fixtures disagree about which month is worst, or prove nothing")
+    ok("the June-peak bed is brightest in June and hottest in August",
+       max(solar.MONTHS, key=lambda m: JUNE_PEAK[solar.MONTHS.index(m)]) == "Jun"
+       and max(AUSTIN_HEAT, key=lambda m: AUSTIN_HEAT[m]) == "Aug",
+       f"June {JUNE_PEAK[5]} h, August {JUNE_PEAK[7]} h")
+    ok("and the August-only bed clears the shade line on the mean of Jun-Aug",
+       mean(AUGUST_ONLY, ["Jun", "Jul", "Aug"]) < 4.5 <= AUGUST_ONLY[7],
+       f"mean {mean(AUGUST_ONLY, ['Jun', 'Jul', 'Aug'])}, "
+       f"August {AUGUST_ONLY[7]}")
+    ok("the even climate has more hot days a year than Austin",
+       sum(EVEN_HEAT.values()) > sum(AUSTIN_HEAT.values()),
+       f"{sum(EVEN_HEAT.values())} against {sum(AUSTIN_HEAT.values())}")
+    ok("and not one month in it clears the bar Austin's June clears",
+       design.hot_months(scorch_site(EVEN_HEAT)) == []
+       and design.hot_months(SCORCH_SITE) == ["Jun", "Jul", "Aug"],
+       f"{design.hot_months(scorch_site(EVEN_HEAT))!r} vs "
+       f"{design.hot_months(SCORCH_SITE)!r}")
+
+    head("a winter annual is not told it will scorch in the summer")
+    winter_bulb = shade_plant("blazing", annual=True,
+                              months=["Dec", "Jan", "Feb", "Mar"],
+                              bloom=["Dec", "Jan", "Feb", "Mar"])
+    ok("it says nothing at all, in the brightest bed on the fixture",
+       not burns(winter_bulb),
+       show(design.check_light(winter_bulb, SCORCH_SUN, SCORCH_SITE)))
+    ok("and the bed itself would still scorch something that stayed in it",
+       burns(shade_plant("blazing")),
+       "if this were quiet too, the silence above would be the bed and not "
+       "the window, and the fixture would be proving nothing")
+    ok("the annual's own window is over the line, so it is not passing on hours",
+       design.zone_hours(SCORCH_SUN, SCORCH_SITE, "blazing",
+                         ["Dec", "Jan", "Feb", "Mar"]) > 4.5,
+       design.zone_hours(SCORCH_SUN, SCORCH_SITE, "blazing",
+                         ["Dec", "Jan", "Feb", "Mar"]))
+
+    head("an evergreen judged on a spring bloom is judged on August instead")
+    spring_bloom = shade_plant("june_peak", evergreen=True,
+                               bloom=["Mar", "Apr"])
+    objs = burns(spring_bloom)
+    ok("it still objects, because it is standing in the bed all summer",
+       len(objs) == 1, show(objs))
+    ok("and the figure is August's, not the bloom window's",
+       objs and f"{JUNE_PEAK[7]} h in Aug" in objs[0]["say"]
+       and f"{mean(JUNE_PEAK, ['Mar', 'Apr'])} h" not in objs[0]["say"],
+       show(objs))
+    ok("bloom is not consulted for presence at all: Mar-Apr is not hot here",
+       design.standing_months(spring_bloom) == list(design.MONTHS),
+       design.standing_months(spring_bloom))
+    ok("and the month the sentence names is the month it measured",
+       objs and objs[0]["say"].count("Aug") >= 2
+       and "Jun," in objs[0]["say"] and " in Jun " not in objs[0]["say"],
+       show(objs))
+    ok("so the brightest hot month, June at 9.0 h, is not what it quotes",
+       objs and f"{JUNE_PEAK[5]} h" not in objs[0]["say"], show(objs))
+
+    head("a plant whose own window already contains the summer is unchanged")
+    long_bloom = shade_plant("blazing", light="part shade",
+                             bloom=["Apr", "May", "Jun", "Jul", "Aug", "Sep",
+                                    "Oct", "Nov"])
+    ok("it objects, as it did before any of this",
+       len(burns(long_bloom)) == 1, show(burns(long_bloom)))
+    ok("at the part shade threshold rather than the shade one",
+       burns(long_bloom) and "3.0 h its part shade rating" in
+       burns(long_bloom)[0]["say"], show(burns(long_bloom)))
+
+    head("the hot months are not averaged together")
+    objs = burns(shade_plant("august_only", evergreen=True))
+    ok("a bed under the line on the mean of Jun-Aug still objects on August",
+       len(objs) == 1, show(objs))
+    ok("quoting August's own 5.2 h and not the 4.4 h mean of the three",
+       objs and f"{AUGUST_ONLY[7]} h in Aug" in objs[0]["say"]
+       and f"{mean(AUGUST_ONLY, ['Jun', 'Jul', 'Aug'])} h" not in objs[0]["say"],
+       show(objs))
+
+    head("the hot months come from the yard, and an annual count is not one")
+    even = scorch_site(EVEN_HEAT)
+    ok("a climate with no hot month scorches nothing, at 48 hot days a year",
+       not burns(shade_plant("blazing"), even),
+       show(design.check_light(shade_plant("blazing"), SCORCH_SUN, even)))
+    ok("and the same plant in the same bed burns under Austin's months",
+       burns(shade_plant("blazing")),
+       "if both were quiet the fixture would not separate the two climates")
+    ok("September is not a hot month here, at 4.3 days",
+       "Sep" not in design.hot_months(SCORCH_SITE),
+       design.hot_months(SCORCH_SITE))
+    ok("the threshold is a policy constant and the series is per-yard data",
+       isinstance(design.HOT_MONTH_DAYS, float)
+       and design.hot_months({"climate": {}}) is None,
+       "a yard that has never been asked answers None, not an empty list")
+
+    head("and a yard with no monthly series says so instead of going quiet")
+    blind = scorch_site(None)
+    ok("no scorch objection is raised, because none can be honestly made",
+       not burns(shade_plant("blazing"), blind),
+       show(design.check_light(shade_plant("blazing"), SCORCH_SUN, blind)))
+    cov = design.check_coverage(
+        {"plants": [shade_plant("blazing"),
+                    shade_plant("june_peak", name="Cyclamen")]},
+        blind, {}, SCORCH_SUN)
+    heat = [o for o in cov if o["about"] == "heat"]
+    ok("but the objection list names what that disabled, and for how many",
+       len(heat) == 1 and "2 shade-rated plants" in heat[0]["say"], show(cov))
+    ok("and the fix says how to derive it rather than what to guess",
+       heat and "--heat-months" in (heat[0].get("fix") or ""), show(heat))
+    ok("a yard that HAS the series says nothing about it",
+       not [o for o in design.check_coverage(
+           {"plants": [shade_plant("blazing")]}, SCORCH_SITE, {}, SCORCH_SUN)
+            if o["about"] == "heat"],
+       "a note that never goes away is one nobody reads")
 
     head("nowhere else in the engine spells a season out")
     libdir = os.path.join(ROOT, "lib")

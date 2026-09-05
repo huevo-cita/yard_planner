@@ -100,6 +100,20 @@ LIGHT_ORDER = ["deep shade", "shade", "part shade", "part sun", "full sun"]
 # nobody thinks of sun as something a plant can have too much of.
 SCORCH_MARGIN = 3.0
 
+# What makes a month hot enough for a scorch objection to be allowed to name it:
+# the mean number of days in it that top 95 F, from the yard's own weather
+# record. Six days is about one day in five, and the bar is there because a
+# shade plant does not burn on a single hot afternoon — the claim the objection
+# makes is about sustained heat, and a month with four hot days in it cannot
+# support one.
+#
+# This is a policy threshold and not a fact about a yard, which is why it is
+# here and why the series it is applied to is in `site.json`. `climate.heat`
+# carried only an annual count, and an annual count cannot answer which months
+# are hot: it was being quoted at a cyclamen lifted in March to prove it would
+# scorch in July.
+HOT_MONTH_DAYS = 6.0
+
 WATER_NEED = {"low": 0, "moderate": 1, "high": 2}
 
 MONTHS = list(solar.MONTH_DOY.keys()) if hasattr(solar, "MONTH_DOY") else \
@@ -241,6 +255,119 @@ def zone_best(sun, site, zone, months=None):
     return round(max(vals), 2) if vals else None
 
 
+def hot_months(site):
+    """The months this yard's own record says top 95 F often enough to burn.
+
+    Returns None where the yard has never been asked, which is a third answer
+    and not an empty list: a record with no monthly heat series cannot say
+    whether July is hot here, and a coastal yard whose every month comes back
+    under the bar genuinely has nothing to scorch anything. `check_coverage`
+    reports the first case rather than letting the scorch check disappear.
+
+    The fact lives in `site.json` because it is a fact about a place, and it is
+    `derived` rather than assumed — `lib.climate --heat-months` decomposes the
+    same thirty years of ERA5 daily maxima the annual count already came from,
+    and prints the annual figure recomputed beside the stored one so the two can
+    be seen to agree.
+    """
+    by_month = ((site.get("climate") or {}).get("heat") or {}) \
+        .get("days_over_95f_by_month")
+    if not isinstance(by_month, dict) or not by_month:
+        return None
+    return [m for m in MONTHS
+            if (by_month.get(m) or 0) >= HOT_MONTH_DAYS]
+
+
+def standing_months(plant):
+    """The months the plant is physically in the ground, which is not its window.
+
+    `check_light` judges a plant over `months`, else `bloom`, else the growing
+    season, and that is the right window for asking whether it gets enough light
+    to grow. It is the wrong window for asking whether it burns, and the two
+    came apart in both directions at once on one yard:
+
+      the cyclamen    lifted in March, judged over Dec-Mar, and told that
+                      5.45 h of winter sun meant it would scorch in July
+      the sedge       evergreen, judged over a Mar-Apr bloom, standing in the
+                      bed all summer with nothing looking at August at all
+
+    So `bloom` is not consulted here for anything perennial. A bloom list says
+    when a plant flowers; it says nothing about when it is present, and using it
+    as a proxy for presence is what hid August from an evergreen. `months` IS
+    consulted, for annual and perennial alike, because a planting that states
+    its own months has answered this question directly.
+    """
+    if plant.get("months"):
+        return list(plant["months"])
+    if plant.get("annual"):
+        return list(plant.get("bloom") or DEFAULT_LIGHT_MONTHS)
+    return list(MONTHS)
+
+
+def _scorch(plant, want, need, sun, site):
+    """A shade plant burning in the months it is standing through the heat.
+
+    Two things were wrong with the version of this that read
+    `climate.heat.days_over_95f_per_year`, and they compounded. The heat figure
+    was annual, so it said "45.8 days over 95 F a year" for a plant that would
+    be composted before the first of them; and the hour figure beside it was a
+    mean over the plant's own window, so the sentence "it will scorch in July"
+    was printed under a number that had never looked at July. Three of the four
+    objections this raised on one yard were about plants that were either not
+    there in summer or had been measured somewhere else in the calendar.
+
+    The window is now the overlap of two things: the months the plant is
+    standing in the ground, and the months this yard is hot. Where that overlap
+    is empty the check says nothing, which is the whole of the cyclamen case.
+
+    Where it is not empty the objection is decided on ONE month — the hottest
+    the plant stands through — and it is the same month the sentence names. That
+    identity is the point of the fix rather than a detail of it. The old message
+    said July because July is when things burn, and measured whatever window the
+    light check happened to be using, so the month in the claim and the month in
+    the number had nothing to do with each other. Any version of this that
+    triggers on one month and reports another brings the same bug back with
+    better wording.
+
+    Hottest rather than brightest, and that is a real choice with a real cost.
+    Averaging the hot months together is out for the reason `_winter_light`
+    gives: a mean over June, July and August dilutes the month that does the
+    damage, and on one real bed it reports 4.48 h where August is 4.91. Taking
+    the brightest instead is defensible and was tried, and it reads badly on the
+    ground — g01 runs 8.96 h in June against 8.00 in August, so the objection
+    came out naming June, a month with 7.1 days over 95 F, in preference to
+    August's 18.2. Sun is what the bed has too much of and heat is what turns it
+    into scorch, so the month worth judging is the one where the heat is worst
+    and the sun figure is that month's own. What this gives up is the bed that is
+    blazing in June and shaded by August; nothing on this yard is shaped that
+    way, and an objection quoting June in Austin is one nobody would act on.
+    """
+    hot = hot_months(site)
+    if not hot:
+        return []
+    by_month = ((site.get("climate") or {}).get("heat") or {}) \
+        .get("days_over_95f_by_month", {})
+    burn = [m for m in standing_months(plant) if m in hot]
+    if not burn:
+        return []
+    zone = plant["zone"]
+    worst = max(burn, key=lambda m: (by_month.get(m) or 0,
+                                     zone_hours(sun, site, zone, [m]) or 0))
+    have, days = zone_hours(sun, site, zone, [worst]), by_month.get(worst)
+    if have is None or have <= need + SCORCH_MARGIN:
+        return []
+    return [_obj("serious", plant["name"],
+                 f"is a {want} plant and it is standing in this bed through "
+                 f"{worst}, the hottest month it is here for — {days} days over "
+                 f"95 F in an average year, on a lot whose hot months are "
+                 f"{', '.join(hot)}. Zone {zone} averages {have} h in {worst} "
+                 f"against the {need} h its {want} rating wants. It will scorch "
+                 f"in {worst} whatever the watering",
+                 "move it to the shaded end, or give it afternoon "
+                 "shade specifically — morning sun of the same length "
+                 "is a different thing entirely")]
+
+
 def winter_active(plant):
     """Whether this plant is working through the dark months, or just standing.
 
@@ -350,18 +477,8 @@ def check_light(plant, sun, site):
                         fix or f"move it to a brighter zone, or swap for "
                                f"something rated {_label_for(have)}"))
     out += _winter_light(plant, want, need, sun, site, already_short=have < need)
-    if want in ("shade", "part shade") and have > need + SCORCH_MARGIN:
-        hot = (site.get("climate") or {}).get("heat", {}) \
-            .get("days_over_95f_per_year")
-        if hot and hot > 20:
-            out.append(_obj("serious", plant["name"],
-                            f"is a {want} plant in a zone averaging {have} h "
-                            f"over {window}, in "
-                            f"a climate with {hot} days over 95 F a year. It will "
-                            f"scorch in July whatever the watering",
-                            "move it to the shaded end, or give it afternoon "
-                            "shade specifically — morning sun of the same length "
-                            "is a different thing entirely"))
+    if want in ("shade", "part shade"):
+        out += _scorch(plant, want, need, sun, site)
     return out
 
 
@@ -821,6 +938,28 @@ def check_coverage(design, site, cond, sun):
                         "set `months` on each from whatever document owns its "
                         "dates, listing the months one by one so a season that "
                         "crosses New Year does not come out empty"))
+
+    # --- heat, and whether the scorch check could run at all
+    #
+    # The same silence as the section above, and this one used to be worse than
+    # silence: the check ran on an annual hot-day count, which every hot climate
+    # has, and so it never went quiet and never named a month. Requiring a
+    # monthly series means a yard that has not got one gets no scorch objections
+    # at all, and that has to be said out loud or the check has simply vanished.
+    tender = [p for p in plants
+              if p.get("zone") and (p.get("light") or "").lower()
+              in ("shade", "part shade")]
+    if hot_months(site) is None and tender:
+        out.append(_obj("note", "heat",
+                        f"no monthly hot-day series on record, so nothing "
+                        f"checked whether {len(tender)} shade-rated plants are "
+                        f"standing in too much sun in the months this yard is "
+                        f"actually hot. An annual count of days over 95 F "
+                        f"cannot answer that: it is the same figure in a yard "
+                        f"whose plant is lifted in March",
+                        "run `python3 -m lib.climate " + (site.get("yard") or
+                        "<slug>") + " --heat-months`, which derives it from the "
+                        "same thirty years the annual count came from"))
 
     # --- winter, and which plants nobody has decided about
     #

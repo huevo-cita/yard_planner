@@ -56,7 +56,7 @@ import json
 import urllib.parse
 import urllib.request
 
-from . import siteschema, yards
+from . import siteschema, solar, yards
 
 ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 PHZM = "https://phzmapi.org/{}.json"
@@ -65,6 +65,7 @@ UA = {"User-Agent": "yard-survey/1.0 (personal garden planning)"}
 FROST = 32.0
 HARD_FREEZE = 28.0
 GDD_BASE = 50.0                          # the usual base for warm-season crops
+SCORCH_F = 95.0                          # the threshold the heat counts use
 
 
 def _get(url, params=None, timeout=180):
@@ -159,6 +160,32 @@ def frost_dates(rows, threshold=FROST):
     return out
 
 
+def heat_by_month(rows, threshold=SCORCH_F):
+    """Days a month tops `threshold`, per month, averaged over the years.
+
+    The annual count beside this one — 45.8 days over 95 F at the Austin test
+    coordinate — answers "is this a hot climate" and cannot answer "is this a
+    hot month", which is a different question and the one a plant standing in a
+    bed actually poses. Anything judged over a window that excludes summer got
+    the annual figure quoted at it: a winter cyclamen was told that 5.45 h of
+    December-to-March sun meant it would scorch in July.
+
+    Averaged over the years each month was actually observed rather than over
+    the span, so a record that starts in March or ends in October does not
+    quietly halve January. Every month is present in the output even where the
+    count is zero, because a month absent from a series and a month that never
+    tops 95 F are different claims and the reader cannot tell them apart.
+    """
+    hits, seen = {m: 0 for m in solar.MONTHS}, {m: set() for m in solar.MONTHS}
+    for d, _, hi in rows:
+        m = solar.MONTHS[d.month - 1]
+        seen[m].add(d.year)
+        if hi >= threshold:
+            hits[m] += 1
+    return {m: round(hits[m] / len(seen[m]), 1) if seen[m] else None
+            for m in solar.MONTHS}
+
+
 def summarize(lat, lon, years=30, zip_code=None):
     rows, meta = daily(lat, lon, years)
     if not rows:
@@ -193,7 +220,8 @@ def summarize(lat, lon, years=30, zip_code=None):
             "mildest_year": round(mins[-1], 1),
             "zone_from_data": zone_of(mean_extreme_min)},
         "heat": {"days_over_95f_per_year": round(hot95 / n_years, 1),
-                 "days_over_100f_per_year": round(hot100 / n_years, 1)},
+                 "days_over_100f_per_year": round(hot100 / n_years, 1),
+                 "days_over_95f_by_month": heat_by_month(rows)},
         "growing_degree_days_base_50f": int(
             sum(gdd_by_year.values()) / len(gdd_by_year)),
         "known_bias": ("ERA5 does not resolve the shallow cold layer that forms "
@@ -278,6 +306,11 @@ def report(c):
     h = c["heat"]
     L.append(f"  heat                {h['days_over_95f_per_year']} days over 95 F "
              f"a year, {h['days_over_100f_per_year']} over 100 F")
+    if h.get("days_over_95f_by_month"):
+        by = h["days_over_95f_by_month"]
+        hot = [m for m in solar.MONTHS if (by.get(m) or 0) > 0]
+        L.append("  and by month        "
+                 + ", ".join(f"{m} {by[m]:g}" for m in hot))
     L.append(f"  GDD base 50 F       {c['growing_degree_days_base_50f']} a year")
     if c.get("local"):
         for k, v in c["local"].items():
@@ -299,6 +332,9 @@ def main():
     ap.add_argument("--local-first-frost")
     ap.add_argument("--local-source", default="county extension office")
     ap.add_argument("--write", action="store_true")
+    ap.add_argument("--heat-months", action="store_true",
+                    help="add the monthly hot-day series to a yard that "
+                         "already has a climate block, and touch nothing else")
     args = ap.parse_args()
 
     def add_local(c):
@@ -323,17 +359,73 @@ def main():
 
     site = yards.load_site(args.slug)
     lat, lon = yards.latlon(site)
+    if args.heat_months:
+        print(heat_months(args.slug, site, lat, lon, args.years))
+        return
+
     zc = args.zip or site.get("address", {}).get("zip")
     c = add_local(summarize(lat, lon, args.years, zc))
     print(f"{args.slug} — climate at {lat:.4f}, {lon:.4f}")
     print(report(c))
     if args.write:
+        # A refetch that does not supply the county figure keeps the one already
+        # on record. `local` is the only part of this block that does not come
+        # out of the archive, so replacing the whole thing silently threw away
+        # the published extension date the planting recommendation rests on.
+        held = (site.get("climate") or {}).get("local")
+        if held and not c.get("local"):
+            c["local"] = held
         site["climate"] = c
         siteschema.set_provenance(site, "climate", "derived",
                                   note=f"ERA5 {c.get('span')} via Open-Meteo, "
                                        f"~9 km grid")
         yards.save(args.slug, "site.json", site)
         print(f"\n  wrote {yards.path(args.slug, 'site.json')}")
+
+
+def heat_months(slug, site, lat, lon, years=30):
+    """Add the monthly hot-day series to a climate block that predates it.
+
+    A full `--write` would answer this too, and it would also refetch and
+    rewrite thirty other numbers that the whole record — a schedule, two
+    all-clears, a set of doubt cards — is currently quoting. So this asks the
+    archive the same question over the same span and writes one key.
+
+    The annual figure already on record is recomputed from the same rows and
+    printed beside the stored one, because that is the only available check
+    that the refetch is looking at the same weather: if the two agree, the
+    monthly series is a decomposition of a number the yard already believes,
+    and if they do not, that is worth seeing before anything reads it.
+    """
+    old = ((site.get("climate") or {}).get("heat") or {})
+    rows, meta = daily(lat, lon, years)
+    if not rows:
+        return "no daily data returned; nothing written"
+    by_month = heat_by_month(rows)
+    n_years = len({d.year for d, _, _ in rows})
+    again = round(sum(1 for _, _, hi in rows if hi >= SCORCH_F) / n_years, 1)
+
+    L = [f"{slug} — days over {SCORCH_F:g} F by month, {meta['span']}, "
+         f"{meta['days']} days"]
+    L.append("  " + "  ".join(f"{m} {by_month[m]:g}" for m in solar.MONTHS
+                              if by_month.get(m)))
+    stored = old.get("days_over_95f_per_year")
+    L.append(f"  annual, recomputed  {again}   on record {stored}   "
+             + ("agrees" if stored == again else
+                "DISAGREES — the archive has moved under the record"))
+
+    siteschema.set_path(site, "climate.heat.days_over_95f_by_month", by_month)
+    siteschema.set_provenance(
+        site, "climate.heat.days_over_95f_by_month", "derived",
+        date=dt.date.today().isoformat(),
+        note=f"ERA5 {meta['span']} via Open-Meteo, ~9 km grid, the same rows "
+             f"and the same span the annual count beside it was computed from; "
+             f"the annual figure recomputes to {again} against {stored} on "
+             f"record. Mean days a month tops {SCORCH_F:g} F, which is what "
+             f"lets an objection about scorching name the months it means")
+    yards.save(slug, "site.json", site)
+    L.append(f"  wrote {yards.path(slug, 'site.json')}")
+    return "\n".join(L)
 
 
 if __name__ == "__main__":
