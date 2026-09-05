@@ -36,13 +36,28 @@ import sys
 
 import numpy as np
 
-from . import conditions, doubts, siteschema, solar, sunmodel, yards
+from . import (conditions, doubts, inputs, siteschema, solar,
+               sunmodel, yards)
 
 # the stated exchange rate: how much one unit of each is worth, on one scale
 WEIGHTS = {"hours_per_day": 10.0, "usd": 0.04, "decisions": 2.5}
 
 PROBE_CELL = 12.0                       # coarse grid; this is a sensitivity, not a map
-PROBE_MONTHS = ("Apr", "Jun", "Aug")    # the growing season, where light is worth most
+
+# Three months sampled across the growing season, NOT the growing season. The
+# comment here used to call it "the growing season", which is a sample being
+# passed off as a window, and the two are 0.28 h apart on cloverleaf-austin -
+# enough to move a bed across a `LIGHT_NEED` boundary if anybody ever quoted
+# this figure as a bed's light.
+#
+# Nobody should. Everything this module publishes from it is a DIFFERENCE: the
+# spread between the brightest and darkest plausible value of an unknown, which
+# is what prices a gap. A constant bias cancels out of a spread and does not
+# cancel out of a level, so the sample is honest for what it is used for and
+# wrong for what its old comment implied. `solar.GROWING_SEASON` is the window;
+# this is a sample of it, and `solar.SEASON_SAMPLE` is where that is written
+# down.
+PROBE_MONTHS = solar.SEASON_SAMPLE
 
 
 # ------------------------------------------------------------------ the probe
@@ -575,11 +590,20 @@ def audit(slug, quick=False):
 
     known = {}
     if site:
+        # Read twice is a different and stronger fact than measured, so it is
+        # counted separately rather than folded into measured_fraction, which
+        # cannot tell the two apart.
+        twice = siteschema.confirmed_paths(site)
         known["site"] = {
             "measured_fraction": round(siteschema.measured_fraction(site), 3),
             "provenance_entries": len(site.get("provenance", {})),
             "trees": len(siteschema.trees(site)),
             "zones": len(site.get("zones") or {}),
+            "read_more_than_once": len(twice),
+            "reproduced": sum(1 for _, c in twice if c["reproduced"]),
+            "corrected_on_re_read": sum(1 for _, c in twice
+                                        if c["reproduced"] is False),
+            "confirmed_paths": {p: c for p, c in twice},
         }
     if cond:
         known["conditions"] = conditions.soil_summary(cond)
@@ -602,6 +626,11 @@ def audit(slug, quick=False):
         "exchange_rate": WEIGHTS,
         "gaps": gaps,
     }
+    # See `inputs.ARTIFACTS` for why the ranked gap report is stamped against
+    # the shade model's declared input set rather than one of its own.
+    if site is not None:
+        coverage["inputs"] = inputs.stamp(
+            site, inputs.ARTIFACTS["coverage.json"])
     yards.save(slug, "coverage.json", coverage)
     return coverage
 
@@ -616,6 +645,10 @@ def report(coverage, limit=12):
     if site:
         print(f"  {site['measured_fraction'] * 100:.0f}% of recorded site values "
               f"were measured rather than assumed")
+        if site.get("read_more_than_once"):
+            print(f"  {site['read_more_than_once']} of them read a second time: "
+                  f"{site['reproduced']} reproduced, "
+                  f"{site['corrected_on_re_read']} corrected")
     soil = (coverage.get("known") or {}).get("conditions")
     if soil:
         print(f"  soil confidence: {soil['confidence']}"

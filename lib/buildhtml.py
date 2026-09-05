@@ -35,6 +35,8 @@ import re
 
 import markdown as md_lib
 
+from . import yards
+
 IMG_RE = re.compile(r'<img\s+([^>]*?)src="([^"]+)"([^>]*?)/?>', re.I)
 
 CSS = """
@@ -114,6 +116,9 @@ nav.toc a:hover { text-decoration: underline; }
 
 footer { margin-top: 4rem; padding-top: 1.2em; border-top: 1px solid var(--rule);
          color: var(--muted); font-size: .82rem; }
+
+p.sandbox { margin: 0 0 2rem; padding: .8em 1em; border-left: 4px solid #b45309;
+            background: #fef3c7; color: #78350f; font-size: .95rem; }
 
 @media (max-width: 640px) {
   .wrap { padding: 2rem 1rem 4rem; }
@@ -255,9 +260,22 @@ def convert(md_path, out_path=None, link_images=False):
     if m:
         title = re.sub(r'<[^>]+>', '', m.group(1)).strip()
 
+    # A page published out of a sandbox has to say so on its face. Every other
+    # generated artifact carries the stamp and this one did not, which is the
+    # one place it matters most: an HTML file is the thing that gets sent to
+    # somebody, opened on a phone, and found again in six months with no shell
+    # around it to ask. Put it at the top of the body, not only in the footer,
+    # because a footer is what a reader skips.
+    stamp = yards.sandbox_stamp(
+        os.path.basename(os.path.dirname(os.path.abspath(md_path))))
+    if stamp:
+        html = (f'<p class="sandbox"><strong>{stamp}</strong> — a rehearsal '
+                f'copy. Nothing here describes the real yard.</p>' + html)
+
     out = out_path or os.path.splitext(os.path.abspath(md_path))[0] + '.html'
     page = PAGE.format(
-        title=title, css=CSS, toc=build_toc(entries), body=html, source=name,
+        title=title, css=CSS, toc=build_toc(entries), body=html,
+        source=name + (f' &middot; {stamp}' if stamp else ''),
         stamp=__import__('datetime').date.today().isoformat())
     with open(out, 'w', encoding='utf-8') as fh:
         fh.write(page)

@@ -32,6 +32,75 @@ MONTH_DOY = {
 }
 MONTHS = list(MONTH_DOY)
 
+# The months a light figure describes when nothing names its own, and the one
+# place this window is written down. It lives here rather than in the module
+# that reads it because two modules read it, and the first version of this had
+# each of them decide separately: `lib.sunmodel` classed the yard on the
+# growing season while `lib.design` judged every plant against a twelve-month
+# mean, so the same 6.0 h threshold meant two different things depending on
+# which output you were looking at.
+#
+# April to October, because that is what a nursery tag means by "6-8 hours" -
+# the season the plant is in leaf and growing, not a mean taken over a year it
+# spends part of dormant. The gap is not a rounding error: a twelve-month mean
+# includes the shortest days of the year, so it reads well over an hour lower
+# than the summer one on open sky alone, before a single fence or tree is
+# counted against the bed.
+#
+# It is a convention rather than a measurement, and a northern-hemisphere one.
+# A yard's own frost dates describe a different and much longer window - the
+# stretch in which planting is safe - and are not a substitute for this.
+GROWING_SEASON = ("Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct")
+
+# Three months spread across `GROWING_SEASON`, for the jobs that step the sun
+# every five minutes and cannot afford to do it seven times. This is a SAMPLE
+# and not a window, and the distinction is the whole reason it has its own
+# name: it is honest for a difference - how far an answer moves when an unknown
+# is varied, which is what `lib.gaps` measures - and it is not the figure to
+# publish as a bed's growing-season light, because it omits the two shoulder
+# months that pull a mean down. On cloverleaf-austin the sample reads 6.46 h
+# whole-yard against 6.18 h over the full window, which is 0.28 h of flattery.
+#
+# It was previously written out twice, in `lib.gaps` and in
+# `sunmodel.zone_timing`, and the copy in `lib.gaps` carried a comment calling
+# itself "the growing season" - which is how a sample gets quoted as a window.
+SEASON_SAMPLE = ("Apr", "Jun", "Aug")
+
+# The other half of the year: the months a plant is standing in the ground and
+# not growing. Not a second season written out by hand — it is the complement
+# of `GROWING_SEASON`, computed, so that no month can fall in both and no month
+# can fall in neither. A hand-written winter would be the fourth spelling of a
+# season this repo has had, and the reason the other three were merged is that
+# they drifted.
+#
+# November to March on a yard whose growing season is April to October. Two
+# narrower windows were in use before this and both lose:
+#
+#   Nov-Feb   the window d29 measured the four-nerve daisy over. A defensible
+#             "dark months", but it is a fourth independent literal and it has
+#             to answer why March - which grows nothing here either - is out.
+#   Dec-Jan   what `lib.niches` reported a bed's winter light over. Two months
+#             either side of the solstice is the darkest POINT of the year and
+#             not the season, and it misses November entirely, which on
+#             cloverleaf-austin is the darkest of the five in five of the
+#             seven planted zones.
+#
+# The claim this makes is narrow and worth stating, because the constant will
+# be argued with. It is not the frost window, not a hardiness statement, and
+# not "when it is cold". It says only: over these months nothing here is
+# growing, so a light figure averaged across them answers "can this stand the
+# dark half of the year", where the growing-season figure answers "will this
+# grow". A plant that keeps its leaves has to survive both.
+#
+# Rotated to start after the growing season rather than at January, so a window
+# crossing New Year reads in the order somebody lives it, and computed by
+# filtering rather than slicing so a non-contiguous growing season would still
+# come out right.
+STANDING_SEASON = tuple(
+    m for m in (MONTHS[(MONTHS.index(GROWING_SEASON[-1]) + 1 + k) % 12]
+                for k in range(len(MONTHS)))
+    if m not in GROWING_SEASON)
+
 
 # ------------------------------------------------------------------ astronomy
 

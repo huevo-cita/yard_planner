@@ -28,7 +28,10 @@ point sampling, so a fence six inches away produces no aliasing gaps.
 Tree crowns cannot go in that horizon, because light passes underneath them
 through the bare trunks. They are modelled as ellipsoids and tested with an exact
 ray-ellipsoid intersection at every time step, which is what makes crown base
-height matter in the results rather than being quietly averaged away.
+height matter in the results rather than being quietly averaged away. Trunks
+close enough that their crowns grew together are declared one mass in
+`features.canopy_groups` and attenuate a beam once between them, because the
+record holds two circles where the yard holds one canopy.
 
 Horizontal planes — eaves, awnings, pergolas, carports — cannot go in that
 horizon either, and for the same reason. They are held separately and tested at
@@ -66,7 +69,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Polygon as MplPolygon, Circle
 
-from . import doubts, siteschema, solar, yards
+from . import doubts, inputs, siteschema, solar, yards
 
 AZ_BINS = 360
 EYE = 2.0                       # inches above grade: a seedling's point of view
@@ -80,12 +83,145 @@ CLOCK_CMAP = LinearSegmentedColormap.from_list(
     "clock", ["#39424f", "#8d9482", "#f2d94e"])
 
 
+def canopy_groups(site):
+    """Tree id -> the id of the fused mass it belongs to, from site.json.
+
+    Two trunks close enough that their crowns grew into each other are one
+    canopy, and a beam crossing the join passes through one mass of leaves, not
+    two. The ray-ellipsoid test cannot know that: it sees two crowns because the
+    record holds two circles, and under `multiply` it charges the beam for both.
+
+    Whether a pair is fused is a fact about the planting, which is why it is
+    declared per yard in `features.canopy_groups` rather than guessed from a
+    distance threshold in here. A threshold would also have to be a 3D one —
+    crowns that overlap in plan can sit at completely different heights and
+    share no volume at all — and it would silently reclassify pairs as the
+    record was corrected. A declaration is auditable and a threshold is not.
+
+        "canopy_groups": [{"id": "front-pecans", "trees": ["t02", "t03"],
+                           "note": "why these are one canopy"}]
+
+    A free function as well as a `Model` attribute because the drawings need the
+    map to caption a crown, and building a grid and an obstruction horizon to
+    read six characters out of a dict is a ten-second answer to a free question.
+    """
+    out = {}
+    for i, g in enumerate((site.get("features", {}) or {}).get(
+            "canopy_groups") or []):
+        gid = g.get("id") or f"group{i}"
+        for tid in g.get("trees") or []:
+            out[tid] = gid
+    return out
+
+
 def sun_vector(alt, az, x_axis_bearing):
     """Unit vector toward the sun, in yard coordinates."""
     th = math.radians(az - x_axis_bearing)
     ca = math.cos(math.radians(alt))
     return np.array([ca * math.cos(th), ca * math.sin(th),
                      math.sin(math.radians(alt))])
+
+
+RAY_EPS = 1e-12
+
+
+def _quadratic(origin, d, centre, radii):
+    """The ray-ellipsoid quadratic, elementwise over however many origins.
+
+    `origin` may be (M, 3) for a grid of cells or (3,) for one point, and every
+    return has the leading shape of `origin`. The arithmetic is exactly what
+    `crown_hits` and `crown_blocks_point` have always done, kept in one place so
+    the wedge test below cannot drift from the circular test beside it.
+    """
+    q = (origin - centre) / radii
+    e = d / radii
+    a = float((e * e).sum())
+    bq = 2.0 * (q * e).sum(axis=-1)
+    c = (q * q).sum(axis=-1) - 1.0
+    return a, bq, c, bq * bq - 4.0 * a * c
+
+
+class Crown:
+    """One tree's crown volume, and whether a ray reaches it.
+
+    An ellipsoid, as it has always been — or, where the tree carries a
+    `crown_plan`, a set of ellipsoid wedges sharing one vertical axis and one
+    height band, each with its own horizontal radius. The wedges tile the circle
+    exactly once, so a crown is still one object: it holds one entry in
+    `Model.crowns`, contributes one transmissivity to `canopy`, and belongs to
+    one `features.canopy_groups` entry. A fused pair stays a fused pair whether
+    or not either of them is round.
+
+    Testing a wedge is the ellipsoid test plus two half-planes through the
+    trunk. The ray's ellipsoid interval [t0, t1] is clipped by each half-plane —
+    both are linear in t — and the wedge is hit if what survives is non-empty.
+    No angle is ever computed, which is the property `tools/verify_crowns.py`
+    leans on: it answers the same question by marching the ray and taking an
+    `atan2` bearing at each sample, so the two implementations share no algebra.
+
+    Unpacks as `(centre, radii, tree)` so that everything reading crowns for a
+    caption, a drawing or a distance goes on working. `radii` is the BOUNDING
+    ellipsoid, the largest radius on any bearing, so a caller that ignores the
+    wedges over-states the crown rather than losing the limb.
+    """
+
+    __slots__ = ("centre", "radii", "tree", "wedges", "_parts")
+
+    def __init__(self, centre, radii, tree, wedges=None):
+        self.centre = np.asarray(centre, float)
+        self.radii = np.asarray(radii, float)
+        self.tree = tree
+        self.wedges = wedges
+        self._parts = None
+        if wedges:
+            self._parts = [
+                (np.array([r, r, self.radii[2]], float),
+                 ((-math.sin(lo), math.cos(lo)),
+                  (math.sin(hi), -math.cos(hi))))
+                for lo, hi, r in wedges]
+
+    def __iter__(self):
+        return iter((self.centre, self.radii, self.tree))
+
+    def __getitem__(self, i):
+        return (self.centre, self.radii, self.tree)[i]
+
+    def __len__(self):
+        return 3
+
+    def hits(self, origin, d):
+        """Whether the ray from each origin toward `d` meets this crown.
+
+        The circular case is the three conditions the model has always applied:
+        the discriminant positive, the origin outside the ellipsoid, and the
+        beam pointing at it rather than away.
+        """
+        if self._parts is None:
+            _, bq, c, disc = _quadratic(origin, d, self.centre, self.radii)
+            return (disc > 0.0) & (bq < 0.0) & (c > 0.0)
+
+        rel_x = origin[..., 0] - self.centre[0]
+        rel_y = origin[..., 1] - self.centre[1]
+        out = None
+        for radii, normals in self._parts:
+            a, bq, c, disc = _quadratic(origin, d, self.centre, radii)
+            ok = (disc > 0.0) & (bq < 0.0) & (c > 0.0)
+            root = np.sqrt(np.maximum(disc, 0.0))
+            lo = (-bq - root) / (2.0 * a)
+            hi = (-bq + root) / (2.0 * a)
+            for nx, ny in normals:
+                # the half-plane n . (p - centre) >= 0, along p = origin + t d
+                A = rel_x * nx + rel_y * ny
+                B = float(d[0]) * nx + float(d[1]) * ny
+                if B > RAY_EPS:
+                    lo = np.maximum(lo, -A / B)
+                elif B < -RAY_EPS:
+                    hi = np.minimum(hi, -A / B)
+                else:
+                    ok = ok & (A >= 0.0)
+            hit = ok & (lo < hi)
+            out = hit if out is None else (out | hit)
+        return out
 
 
 class Model:
@@ -115,6 +251,7 @@ class Model:
         self.trees = siteschema.trees(site)
         self.stacking = (site.get("features", {}) or {}).get(
             "canopy_stacking", "single")
+        self.canopy_group = self._canopy_groups()
         self.segments = self._base_segments()
         self.horizon = self._horizon(self.segments)
         self.crowns = self._crowns()
@@ -258,29 +395,46 @@ class Model:
 
     # ------------------------------------------------------------------ crowns
     def _crowns(self, override=None):
-        """Each crown as (centre, radii, tree). Ray-ellipsoid rather than a
-        horizon entry, because light passes under a crown through bare trunks."""
+        """Each crown as a `Crown`. Ray-ellipsoid rather than a horizon entry,
+        because light passes under a crown through bare trunks.
+
+        A `radius` override collapses every crown to that one circle, so it also
+        drops any `crown_plan`: the two callers of `set_crowns` are the
+        sensitivity sweep, which asks what the yard would look like if every
+        crown were the same size, and the open-sky probe, which shrinks them all
+        to nothing. Keeping a 22 ft limb on a crown the caller has just set to a
+        hundredth of an inch would answer neither question.
+        """
         out = []
         for t in self.trees:
             base = t["crown_base_height"]
             radius = t["crown_radius"]
             cx = t["crown_center_x"]
             cy = t["crown_center_y"]
+            overridden = False
             if override:
                 base = override.get("base", base)
-                radius = override.get("radius", radius)
                 cx = override.get("centre_x", cx)
+                if "radius" in override:
+                    radius = override["radius"]
+                    overridden = radius is not None
             if radius is None or base is None or t.get("height") is None:
                 continue
+            wedges = (None if overridden
+                      else siteschema.crown_wedges(t, self.x_axis_bearing))
             top = t["height"]
             rz = max((top - base) / 2.0, 1e-6)
-            out.append((np.array([cx, cy, (base + top) / 2.0], float),
-                        np.array([radius, radius, rz], float), t))
+            reach = max([radius] + [r for _, _, r in wedges or []])
+            out.append(Crown(np.array([cx, cy, (base + top) / 2.0], float),
+                             np.array([reach, reach, rz], float), t, wedges))
         return out
 
     def set_crowns(self, base=None, radius=None, centre_x=None):
         self.crowns = self._crowns({"base": base, "radius": radius,
                                     "centre_x": centre_x})
+
+    def _canopy_groups(self):
+        return canopy_groups(self.S)
 
     # --------------------------------------------------------------- overheads
     def _overheads(self):
@@ -377,26 +531,12 @@ class Model:
         operator, which raises spurious floating-point flags under Accelerate.
         """
         origin = np.stack([self.px, self.py, np.full(self.M, EYE)], axis=1)
-        hits = []
-        for centre, radii, tree in self.crowns:
-            q = (origin - centre) / radii
-            e = d / radii
-            a = float((e * e).sum())
-            bq = 2.0 * (q * e).sum(axis=1)
-            c = (q * q).sum(axis=1) - 1.0
-            disc = bq * bq - 4.0 * a * c
-            hits.append(((disc > 0.0) & (bq < 0.0) & (c > 0.0), tree))
-        return hits
+        return [(crown.hits(origin, d), crown.tree) for crown in self.crowns]
 
     def crown_blocks_point(self, point, d):
         p = np.asarray(point, float)
-        for centre, radii, _ in self.crowns:
-            q = (p - centre) / radii
-            e = d / radii
-            a = float((e * e).sum())
-            bq = 2.0 * float((q * e).sum())
-            c = float((q * q).sum()) - 1.0
-            if bq * bq - 4.0 * a * c > 0.0 and bq < 0.0 and c > 0.0:
+        for crown in self.crowns:
+            if crown.hits(p, d):
                 return True
         return False
 
@@ -501,17 +641,46 @@ class Model:
             single    the most opaque crown in the way wins. The default, and
                       right for a row of the same species grown together
             multiply  every crown attenuates in turn, for genuinely separate trees
+
+        Most yards are neither, all over. A lot can hold one fused pair and six
+        trees standing apart, and picking one rule for the whole record gets the
+        other case wrong everywhere. So the rule is applied per *group*: the
+        crowns in a `features.canopy_groups` entry are one mass and take the
+        `single` rule between them, and the groups then multiply against each
+        other as separate trees. A tree in no group is its own group, so a
+        record that declares none behaves exactly as `multiply` always did.
+
+        What this still gets wrong, and in which direction. A ray crossing the
+        27 ft where two fused crowns overlap really does pass through more leaf
+        than a ray crossing one crown alone — a fused canopy is denser at the
+        join, just nothing like tau squared. Taking the minimum therefore
+        under-attenuates there, so the model now runs slightly too *bright*
+        under a declared group, where before it ran far too dark. The truth sits
+        between the two and much nearer this end: on cloverleaf-austin the whole
+        span between the treatments is 0.08 h a day annual in the front yard,
+        0.15 h across June to August, and nothing outside the front yard moves.
         """
-        mult = np.ones(self.M)
+        per_group = {}
+        order = []
         any_hit = np.zeros(self.M, dtype=bool)
-        for hit, tree in self.crown_hits(d):
+        for i, (hit, tree) in enumerate(self.crown_hits(d)):
             tau = (tau_override if tau_override is not None
                    else siteschema.tree_transmissivity(tree, doy)[0])
-            if self.stacking == "multiply":
-                mult = np.where(hit, mult * tau, mult)
+            # `single` is one group holding the whole yard. `multiply` puts each
+            # ungrouped tree in a group of its own, keyed by position so that
+            # two trees sharing an id — or carrying none — stay separate.
+            key = ("all" if self.stacking != "multiply"
+                   else self.canopy_group.get(tree.get("id")) or i)
+            if key in per_group:
+                per_group[key] = np.where(hit, np.minimum(per_group[key], tau),
+                                          per_group[key])
             else:
-                mult = np.where(hit, np.minimum(mult, tau), mult)
+                per_group[key] = np.where(hit, tau, 1.0)
+                order.append(key)
             any_hit |= hit
+        mult = np.ones(self.M)
+        for key in order:
+            mult = mult * per_group[key]
         # An awning is not foliage and does not share the stacking rule: it
         # attenuates whatever the leaves already did.
         omult, ohit = self.overhead_mult(d)
@@ -1062,7 +1231,7 @@ def zone_table(m):
     return table
 
 
-def zone_timing(m, months=("Apr", "Jun", "Aug")):
+def zone_timing(m, months=solar.SEASON_SAMPLE):
     """When each zone's sun arrives, not just how much of it there is.
 
     Two beds can both read four hours a day and be entirely different places to
@@ -1072,6 +1241,14 @@ def zone_timing(m, months=("Apr", "Jun", "Aug")):
     share of each zone's direct sun that falls after solar noon and after one
     o'clock, plus the clock time it starts and stops, so a design check can see
     the difference.
+
+    The default months are `solar.SEASON_SAMPLE`, three points across the
+    growing season rather than the whole of it, because every month here costs a
+    five-minute march from sunrise to sunset over every cell. A share is a ratio
+    of one zone's own sun to itself, which is what makes the sample defensible
+    where publishing its mean as a bed's light would not be. The months used are
+    written into the output beside the shares, so nothing downstream has to
+    assume which ones they were.
     """
     out = {}
     for z in m.zone_order():
@@ -1123,6 +1300,37 @@ def light_category(hours):
     return "deep shade"
 
 
+def zone_mean(table, zone, months):
+    """Mean effective hours for one zone over named months."""
+    return float(np.mean([table[zone][mon]["effective"] for mon in months]))
+
+
+def summary(table, zone="Whole yard"):
+    """The headline figures, and the window each is a mean of.
+
+    A free function rather than eight lines inside `run` because it is the one
+    number in this file anybody quotes, and until it was lifted out the only
+    way to check which months it averaged was to run the whole model for three
+    minutes and read the answer. It had been averaging April to September, spelt
+    out here and again in `print_markdown`, while `design.check_light` compared
+    the same 6.0 h threshold against April to October - so a yard had two
+    published growing-season figures and no way to tell them apart. They were
+    6.41 h and 6.18 h on cloverleaf-austin, both landing on "full sun", which is
+    why nobody noticed.
+
+    `growing_season_months` goes out with the figure so that a reader of
+    sun-hours.json never has to know which module wrote it.
+    """
+    return {
+        "annual_mean_hours": round(zone_mean(table, zone, solar.MONTHS), 2),
+        "growing_season_months": list(solar.GROWING_SEASON),
+        "growing_season_mean_hours": round(
+            zone_mean(table, zone, solar.GROWING_SEASON), 2),
+        "light_category": light_category(
+            zone_mean(table, zone, solar.GROWING_SEASON)),
+    }
+
+
 def print_markdown(m, table, clocks):
     months = solar.MONTHS
     print("\n### Effective direct sun, hours per day\n")
@@ -1145,11 +1353,11 @@ def print_markdown(m, table, clocks):
     for k, v in clocks.items():
         print(f"| {k} | {v['yard_mean_sun_hours']:.1f} h | "
               f"{v['first_sun_clock']} | {v['last_sun_clock']} |")
-    whole = np.mean([table["Whole yard"][mon]["effective"] for mon in months])
-    growing = np.mean([table["Whole yard"][mon]["effective"]
-                       for mon in ("Apr", "May", "Jun", "Jul", "Aug", "Sep")])
-    print(f"\n**{whole:.1f} h a day annual mean, {growing:.1f} h in the growing "
-          f"season — {light_category(growing)}.**")
+    s = summary(table)
+    print(f"\n**{s['annual_mean_hours']:.1f} h a day annual mean, "
+          f"{s['growing_season_mean_hours']:.1f} h over the growing season, "
+          f"{s['growing_season_months'][0]}-{s['growing_season_months'][-1]} "
+          f"— {s['light_category']}.**")
 
 
 PROVISIONAL = "PROVISIONAL - run against an unwalked record"
@@ -1245,21 +1453,21 @@ def run(slug, cell=6.0, outdir=None, quick=False, force=False):
         result["barrier_scenarios"] = barrier_scenarios(m, outdir)
 
     months = solar.MONTHS
-    whole = [table["Whole yard"][mon]["effective"] for mon in months]
-    growing = [table["Whole yard"][mon]["effective"]
-               for mon in ("Apr", "May", "Jun", "Jul", "Aug", "Sep")]
-    result["summary"] = {
-        "annual_mean_hours": round(float(np.mean(whole)), 2),
-        "growing_season_mean_hours": round(float(np.mean(growing)), 2),
-        "light_category": light_category(float(np.mean(growing))),
+    result["summary"] = dict(summary(table), **{
         "sunniest_zone": max(
             (z for z in table if z != "Whole yard"),
-            key=lambda z: np.mean([table[z][mon]["effective"] for mon in months])),
+            key=lambda z: zone_mean(table, z, months)),
         "best_cell_hours": round(max(table["Whole yard"][mon]["best_cell"]
                                      for mon in months), 2),
-    }
+    })
     if provisional:
         result["provenance"] = "; ".join(provisional)
+    # What geometry this run actually read, so that `tools/recompute.py` can
+    # answer "have the inputs changed" instead of "is this file older than
+    # site.json". A note or a provenance string being corrected moves no ray and
+    # now moves no digest either, which matters because the remedy a staleness
+    # finding recommends is another run of this gated job.
+    result["inputs"] = inputs.stamp(m.S, "sunmodel")
     yards.save(slug, "sun-hours.json", result)
     print("wrote", yards.path(slug, "sun-hours.json"))
     print_markdown(m, table, clocks)

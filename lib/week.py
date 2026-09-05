@@ -53,7 +53,7 @@ import json
 import os
 import re
 
-from . import yards
+from . import conditions, yards
 
 MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
@@ -63,9 +63,27 @@ DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
-#: Documents whose dated sections tasks.json is allowed to be extracted from.
-#: Anything else cited on a task is reference material and is linked, not hashed.
-SOURCE_DOCS = ("PLAN.md", "SOWING-CALENDAR.md", "SOURCING.md", "SCHEDULE.md")
+#: An anchor that names a numbered section rather than a slug: `4`, `4.1`, `3.9a`.
+SECTION_NO = re.compile(r"^\d+(?:\.\d+)*[a-z]?$")
+
+#: A task's `source` is where it was extracted from, and everything named there
+#: has to carry a digest. `reference` and `technique` are the link fields, and
+#: they are not hashed.
+#:
+#: This used to be a whitelist of plan documents, on the reading that anything
+#: else was reference material. Two files walked through the gap it left.
+#: `ANT-PLAN.md` carried a dated table of seven jobs, one of them on a Saturday
+#: no calendar in the yard had heard of, and was added by name. Then the whole
+#: g05 gutter programme took its content from `research-guttering.md`, cited it
+#: under `source`, and got no digest because the name was not on the list — and
+#: when the document's section 5 turned out to rest on a driveway that is at the
+#: other corner of the house, nothing anywhere noticed that seven tasks were
+#: still running off it.
+#:
+#: So the rule is the schema's own distinction rather than a list of filenames:
+#: a document a task says it came from is a source, and a source is hashed. The
+#: cost is that a research file cited under `source` now has to be stamped, which
+#: is the work the two failures above were the price of skipping.
 
 
 # ------------------------------------------------------------------ the record
@@ -124,9 +142,14 @@ def sections(path):
 def resolve(root, ref):
     """A `FILE.md#anchor` reference to the one section it names.
 
-    A numeric anchor matches a heading numbered that way — `#2` is `## 2.
-    Weekend by weekend`. Anything else matches on the heading's slug containing
-    it, which keeps the reference readable rather than a forty-character slug.
+    A section-number anchor matches a heading numbered that way — `#2` is `## 2.
+    Weekend by weekend`, and `#4.1` is `### 4.1 Read this table`. The number may
+    be dotted, because a long reference document numbers its subsections that
+    way, and the `.` or `)` after it is optional, because most of them do not
+    write one. `#4` still does not match `4.1`: the separator after the anchor
+    has to be whitespace, so a parent number cannot swallow its own children.
+    Anything else matches on the heading's slug containing it, which keeps the
+    reference readable rather than a forty-character slug.
     Returns (section, error); exactly one of them is None.
     """
     if "#" not in ref:
@@ -136,8 +159,9 @@ def resolve(root, ref):
     if not os.path.exists(path):
         return None, f"{name} does not exist"
     secs = sections(path)
-    if anchor.isdigit():
-        hits = [s for s in secs if re.match(rf"^{anchor}[.)]\s", s["text"])]
+    if SECTION_NO.match(anchor):
+        pattern = rf"^{re.escape(anchor)}[.)]?\s"
+        hits = [s for s in secs if re.match(pattern, s["text"])]
     else:
         hits = [s for s in secs if anchor in s["slug"]]
     if not hits:
@@ -227,16 +251,12 @@ def check(slug):
 
     # Every section a task or a purchase leans on has to be one of the sections
     # under a digest, or a change to it goes unnoticed by the layer above.
-    cited = set()
-    for t in data.get("tasks", []):
-        cited.update(t.get("source", []))
-    for b in data.get("shopping", []):
-        cited.update(b.get("source", []))
-    for ref in sorted(cited - set(declared)):
-        if ref.split("#", 1)[0] in SOURCE_DOCS:
-            add("uncited", ref,
-                f"{pretty(ref)} is cited but carries no digest, so a change to "
-                f"it would go unnoticed. Add it to `sources` and `--restamp`")
+    for ref in sorted(cited_sources(data) - set(declared)):
+        add("uncited", ref,
+            f"{pretty(ref)} is cited as a source but carries no digest, so a "
+            f"change to it would go unnoticed. Add it to `sources` and "
+            f"`--restamp`, or move it to `reference` if the task did not "
+            f"actually come from it")
 
     for t in data.get("tasks", []):
         if t.get("date_inferred"):
@@ -254,6 +274,285 @@ def check(slug):
                     f"`date_inferred` and a note saying where its date came from")
                 break
     return out
+
+
+#: Worst first. A task hitting two blackouts, or one span on several days,
+#: answers for the strongest thing any of those days says about it.
+_VERDICT_ORDER = (conditions.BARRED, conditions.UNSCOPED, conditions.PERMITTED)
+
+
+def blackout_conflicts(slug):
+    """Dated work that falls inside a blackout, and what the blackout says of it.
+
+    Kept out of `check()` deliberately. `check()` asks one question — do
+    `tasks.json` and the plan documents still say the same thing — and it is
+    wired to refuse a render when the answer is no. This asks a different
+    question, about the world rather than about two files, and the honest
+    response to it is usually a conversation rather than an edit: a freeze watch
+    inside a blackout cannot simply be moved to a week when there is no freeze.
+    So it reports and does not block.
+
+    Every task that falls inside is returned, carrying a `verdict` from
+    `conditions.blackout_bars`, and the reason it is all of them rather than only
+    the barred ones is that the audit question is "what is in this week". Eleven
+    permitted jobs inside a blackout and eleven unexamined ones look identical
+    from outside, and the second is the thing worth catching. The caller decides
+    what to shout about; a `permitted` verdict is a recorded decision, not a find.
+
+    A repeating job is reported by the occurrences that land inside, not by its
+    span, because a weekly bowl scrub that runs through a blackout is one
+    missed refill and a planting session inside one is a lost weekend.
+    """
+    data = load(slug)
+    cond = yards.load_conditions(slug) or {}
+    spans = conditions.blackouts(cond)
+    if not data or not spans:
+        return []
+    out = []
+    for t in data.get("tasks", []):
+        hits, verdicts, said = [], set(), []
+        for a, z in spans:
+            for d in _occurrences(t, a, z):
+                hits.append(d)
+                verdicts.add(conditions.blackout_bars(cond, d, t.get("kind")))
+                inside = conditions.in_blackout(cond, d)
+                if not inside:
+                    # A day `_occurrences` called a hit and no blackout claims.
+                    # Reported rather than raised or dropped: it is a bug in the
+                    # occurrence arithmetic, and a bug that empties this report is
+                    # worse than one that shows a line nobody can rule on
+                    said.append(f"{d} is not in any blackout, so nothing here "
+                                f"can rule on it")
+                    continue
+                scope = inside.get("scope") or {}
+                phrase = (f"the {_date(inside['from']):%-d %b}-"
+                          f"{_date(inside['to']):%-d %b} blackout "
+                          + (f"bars {scope.get('bars', 'work it has not named')}"
+                             if scope else "bars all work"))
+                if phrase not in said:
+                    said.append(phrase)
+        if hits:
+            # None is reachable only if a hit day lands outside every span, which
+            # is a bug in `_occurrences` rather than a state to reason about. It
+            # is carried through as the verdict rather than raised, so the check
+            # reports a task it cannot rule on instead of taking the whole run down
+            worst = next((v for v in _VERDICT_ORDER if v in verdicts), None)
+            out.append({"id": t["id"], "title": t["title"],
+                        "minutes": t.get("minutes", 0),
+                        "critical": bool(t.get("critical")),
+                        "repeat": bool(t.get("repeat")),
+                        "kind": t.get("kind"),
+                        "verdict": worst,
+                        "blackout": "; ".join(said),
+                        "dates": sorted(d.isoformat() for d in set(hits))})
+    return out
+
+
+def _report_blackout(clashes, records):
+    """Read the blackout board out, loudest thing first.
+
+    Barred and unscoped work is named task by task. Work the blackout's own
+    record permits is counted and listed by id on one line, and not itemised,
+    because a check that prints eleven paragraphs about eleven jobs somebody has
+    already ruled on is the check that gets switched off inside a week. It is
+    still printed: "eleven tasks inside a blackout" is the shape of an oversight,
+    and the answer to it has to be visible from the same place the shape is.
+    """
+    def days(c):
+        out = ", ".join(f"{_date(d):%-d %b}" for d in c["dates"][:6])
+        return out + (f" and {len(c['dates']) - 6} more"
+                      if len(c["dates"]) > 6 else "")
+
+    flagged = [c for c in clashes if c["verdict"] != conditions.PERMITTED]
+    allowed = [c for c in clashes if c["verdict"] == conditions.PERMITTED]
+
+    if flagged:
+        print(f"\n  and {len(flagged)} task{'s' if len(flagged) > 1 else ''} "
+              f"ask{'' if len(flagged) > 1 else 's'} for work inside a blackout "
+              f"that the blackout does not allow:\n")
+        for c in flagged:
+            why = (f"{c['blackout']}" if c["verdict"] == conditions.BARRED else
+                   f"{c['blackout']}, and its scope neither bars nor permits "
+                   f"{c['kind'] or 'a task with no kind'} — so nobody has ruled "
+                   f"on this one")
+            print(f"      {c['id']} \"{c['title']}\" — {days(c)}"
+                  + ("  CANNOT SLIP" if c["critical"] else ""))
+            print(f"          {c['kind'] or 'no kind'}: {why}")
+
+    if allowed:
+        print(f"\n  {len(allowed)} task{'s' if len(allowed) > 1 else ''} fall "
+              f"inside a blackout and {'are' if len(allowed) > 1 else 'is'} work "
+              f"its own record permits: "
+              f"{', '.join(c['id'] for c in allowed)}")
+        for rec in records:
+            scope = rec.get("scope") or {}
+            if not scope:
+                continue
+            settled = f" [{scope['settled']}]" if scope.get("settled") else ""
+            print(f"      {rec['from']:%-d %b}-{rec['to']:%-d %b} bars "
+                  f"{scope.get('bars', 'work it has not named')}{settled}. "
+                  f"Permitted inside it: "
+                  f"{'; '.join(scope.get('permits') or ['nothing recorded'])}")
+
+    print("\n  These do not block a render. Moving one is a decision, "
+          "not an edit.")
+
+
+def _permit_headline(text):
+    """A permitted activity's name, without the paragraph defending it.
+
+    A `scope.permits` entry is written to be argued with and runs to forty
+    words: "keep-alive watering, including the 60-day establishment regime the
+    October plantings are on days 50-57 of, and the bird bath, mammal bowl and
+    Bti that keep the water features usable". Three of those on the calendar is
+    a plan document again, and there is already one of those.
+
+    The clause before the first dash or `, including` is the name of the thing.
+    The rest is the reason, and the reason stays in conditions.json, behind the
+    changelog reference printed on the same line.
+    """
+    s = re.split(r"\s+[-\u2013\u2014]\s+|,\s+including\b|;\s+", str(text), 1)[0]
+    s = s.strip().rstrip(".,")
+    if len(s) <= 64:
+        return s
+    return s[:61].rsplit(" ", 1)[0] + "..."
+
+
+def _settled_ref(slug, doubt_id):
+    """The changelog entry that settled a doubt, as a bare `cNN`, or None.
+
+    Looked up from the doubt id the scope already carries rather than written
+    into the calendar, because a reference typed into a generated document is
+    the one that goes stale without anything noticing. `--from-doubts` files one
+    entry per settled card, so this is one-to-one in the normal case; where a
+    card has several the most recent wins, and where it has none the calendar
+    simply carries no reference.
+    """
+    if not doubt_id:
+        return None
+    from . import changelog
+    hits = [e["id"] for e in changelog.load(slug).get("entries", [])
+            if e.get("from_doubt") == doubt_id]
+    return hits[-1] if hits else None
+
+
+def week_blackout(data, cond, monday):
+    """What a blackout says about this week, for the person reading the page.
+
+    The December scope was legible to every tool in the repo and invisible to a
+    person: this module printed the week's 2 h 35 min with no sign it was a
+    no-build week, and `CALENDAR.md` said nothing either. A decision recorded
+    where only code can see it is the failure AGENTS.md is about, one file
+    along.
+
+    Deliberately not `blackout_conflicts`, which answers the audit question —
+    what is in this blackout, across the whole record — and is read by
+    `--check`. This answers the door-handle question: is this week a no-build
+    week, what does it still allow, and is anything on it that the record does
+    not allow. A task the scope permits is not named, because eleven permitted
+    jobs listed one by one is the paragraph nobody reads twice; the count of
+    what is *not* permitted is the thing worth interrupting somebody with.
+    """
+    sunday = monday + datetime.timedelta(days=6)
+    out = []
+    for rec in conditions.blackout_records(cond or {}):
+        a, z = max(rec["from"], monday), min(rec["to"], sunday)
+        if a > z:
+            continue
+        flagged = []
+        for t in (data or {}).get("tasks", []):
+            verdicts = {conditions.blackout_bars(cond, d, t.get("kind"))
+                        for d in _occurrences(t, a, z)}
+            worst = next((v for v in _VERDICT_ORDER if v in verdicts), None)
+            if worst in (conditions.BARRED, conditions.UNSCOPED):
+                flagged.append({"id": t["id"], "title": t["title"],
+                                "kind": t.get("kind"), "verdict": worst})
+        scope = rec.get("scope") or {}
+        out.append({
+            "from": rec["from"], "to": rec["to"], "covers": (a, z),
+            "all_week": a == monday and z == sunday,
+            "scoped": bool(scope),
+            "bars": scope.get("bars") if scope else "all work",
+            "permits": [_permit_headline(p) for p in scope.get("permits") or []],
+            "settled": scope.get("settled"),
+            "flagged": flagged,
+        })
+    return out
+
+
+def _blackout_banner(blocks, slug=None):
+    """The no-build week, as the two or three lines a calendar can afford."""
+    lines = []
+    for b in blocks:
+        a, z = b["covers"]
+        when = f"{b['from']:%-d %b}-{b['to']:%-d %b}"
+        part = "" if b["all_week"] else f", and it covers {a:%a %-d} to {z:%a %-d}"
+        head = (f"**NO-BUILD WEEK · the {when} blackout bars "
+                f"{b['bars'] or 'work it has not named'}{part}.**")
+        ref = _settled_ref(slug, b["settled"]) if slug else None
+        tail = []
+        if b["permits"]:
+            tail.append("Permitted: " + " · ".join(b["permits"]))
+        elif b["scoped"]:
+            tail.append("It names nothing it permits")
+        else:
+            tail.append("It names no exception, so it bars everything")
+        if not b["flagged"]:
+            tail.append("everything below is work it allows")
+        said = ". ".join(s[0].upper() + s[1:] for s in tail) + "."
+        if ref:
+            said += f" [{ref}]"
+        lines += [f"{head} {said}", ""]
+        if b["flagged"]:
+            named = "; ".join(
+                f"{f['id']} \"{f['title']}\" ({f['kind'] or 'no kind'}, "
+                f"{'barred' if f['verdict'] == conditions.BARRED else 'nobody has ruled on it'})"
+                for f in b["flagged"])
+            lines += [f"**Still on this week and not permitted:** {named}.", ""]
+    return lines
+
+
+def _occurrences(t, a, z):
+    """Every day this task actually asks for work between a and z inclusive."""
+    r = t.get("repeat")
+    if r:
+        start, end = _date(r["from"]), _date(r["to"])
+        step = _step_days(r.get("every"))
+        if not step:
+            return [d for d in (start,) if a <= d <= z]
+        out, d = [], start
+        while d <= end:
+            if a <= d <= z:
+                out.append(d)
+            d += datetime.timedelta(days=step)
+        return out
+    if t.get("window"):
+        lo, hi = _date(t["window"][0]), _date(t["window"][1])
+        # A window overlapping the span asks for work on some day inside it, and
+        # which day is not knowable from the record. The first day of the overlap
+        # is the honest stand-in: the window's own start can be weeks outside the
+        # span, and reporting that day as one inside it is a wrong date.
+        return [max(lo, a)] if lo <= z and hi >= a else []
+    d = _date(t["date"])
+    return [d] if a <= d <= z else []
+
+
+#: `repeat.every` is written the way a person says a cadence, so the unit has to
+#: be read as well as the number. "6 months" is not six days, and reading it that
+#: way puts a twice-yearly gutter clean inside every week it is asked about.
+_UNITS = {"day": 1, "days": 1, "week": 7, "weeks": 7, "month": 30,
+          "months": 30, "year": 365, "years": 365}
+
+
+def _step_days(every):
+    every = str(every or "").strip().lower()
+    if every in _UNITS:
+        return _UNITS[every]
+    m = re.match(r"^(\d+)\s*(\w*)$", every)
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    return n * _UNITS.get(unit, 1)
 
 
 def stamp(findings):
@@ -274,10 +573,35 @@ def stamp(findings):
     return "; ".join(parts)
 
 
+def cited_sources(data):
+    """Every section a task or a purchase says it was extracted from."""
+    cited = set()
+    for t in data.get("tasks", []):
+        cited.update(t.get("source", []))
+    for b in data.get("shopping", []):
+        cited.update(b.get("source", []))
+    return cited
+
+
 def restamp(slug):
+    """Stamp every declared source, adopting any a task cites and none declares.
+
+    Adopting rather than only stamping is what makes the `uncited` finding
+    actionable in one command. It is safe in the direction that matters: a ref
+    that appears here is one a task already claims to have come from, and the
+    alternative to hashing it is the status quo, which is not hashing it.
+    """
     data = load(slug)
     root = yards.yard_dir(slug)
     today = datetime.date.today().isoformat()
+    declared = data.setdefault("sources", {})
+    adopted = sorted(cited_sources(data) - set(declared))
+    for ref in adopted:
+        declared[ref] = {}
+    if adopted:
+        print(f"  adopted {len(adopted)} cited section"
+              f"{'s' if len(adopted) > 1 else ''} that carried no digest: "
+              + ", ".join(pretty(r) for r in adopted))
     changed = []
     for ref, rec in data.get("sources", {}).items():
         sec, err = resolve(root, ref)
@@ -533,7 +857,7 @@ def _buy_table(data, buys):
     return out
 
 
-def render_week(data, monday, heading=None):
+def render_week(data, monday, heading=None, cond=None, slug=None):
     days, starting, running = placed(data, monday)
     buys = buys_for(data, monday)
     if not days and not starting and not running and not buys:
@@ -558,6 +882,11 @@ def render_week(data, monday, heading=None):
         banner.append(f"Cannot slip: {shown}")
     out.append("**" + ". ".join(b[0].upper() + b[1:] for b in banner) + ".**")
     out.append("")
+
+    # Before the buying and before the days, because it changes what the rest of
+    # the week means. An hours figure over a no-build week reads as an ordinary
+    # light week, and the person acting on it is on the way out of the door.
+    out += _blackout_banner(week_blackout(data, cond, monday), slug)
 
     if buys:
         out += _buy_table(data, buys)
@@ -647,6 +976,7 @@ def calendar(slug, today=None, force=False):
     today = today or datetime.date.today()
     this = monday_of(today)
     first, last = span_of(data)
+    cond = yards.load_conditions(slug) or {}
 
     out = [HEADER.format(name=yard_name(slug))]
     if problems:
@@ -667,12 +997,12 @@ def calendar(slug, today=None, force=False):
         sun = mon + datetime.timedelta(days=6)
         head = (f"## This week — {mon:%a %-d %b} to {sun:%a %-d %b}" if i == 0
                 else f"## Week of {mon:%a %-d %B}")
-        body += render_week(data, mon, head)
+        body += render_week(data, mon, head, cond=cond, slug=slug)
 
     if past:
         done = []
         for mon in past:
-            done += render_week(data, mon)
+            done += render_week(data, mon, cond=cond, slug=slug)
         if done:
             body.append("## Weeks already gone")
             body.append("")
@@ -753,6 +1083,16 @@ def publish(slug):
 TICKED = re.compile(r"^[>\s]*[-*]\s*\[[xX]\]\s*(.+?)\s*$")
 UNTICKED = re.compile(r"^[>\s]*[-*]\s*\[\s\]\s*(.+?)\s*$")
 
+# What the publish step above turns "- [x] " into, because a .docx checkbox
+# cannot carry a ticked state through the Docs import: doneness is encoded as
+# text and the box goes out empty. Reading it back therefore has to undo that,
+# and both halves matter. The prefix has to come off before the title is taken
+# or every done task keys on the word DONE and they collide with each other,
+# and the prefix has to count as ticked or a task that is finished comes back
+# through UNTICKED and gets marked undone — which silently erases the record of
+# what was actually done, the one thing this file exists to keep.
+DONE_MARK = re.compile(r"^DONE\s*·\s*")
+
 
 def _title_of(line):
     """The bold title out of a rendered checkbox line, however Docs mangled it.
@@ -781,7 +1121,11 @@ def sync(slug, exported):
         for rx, value in ((TICKED, True), (UNTICKED, False)):
             m = rx.match(line)
             if m:
-                state[_title_of(m.group(1))] = value
+                body = re.sub(r"\\([-_*\[\]()#.!`~])", r"\1", m.group(1).strip())
+                marked = DONE_MARK.match(body)
+                if marked:
+                    body, value = body[marked.end():], True
+                state[_title_of(body)] = value
                 break
     changed, unmatched = [], []
     seen = set()
@@ -813,6 +1157,29 @@ def report(slug, when=None):
     total = minutes_in(days, starting)
 
     print(f"{slug} — {mon:%a %-d %b} to {sun:%a %-d %b}   {hours(total)}\n")
+    # Above the work, for the same reason the calendar carries it above the
+    # days: an hours figure over a no-build week reads as an ordinary quiet one.
+    for b in week_blackout(data, yards.load_conditions(slug) or {}, mon):
+        a, z = b["covers"]
+        print(f"  NO-BUILD WEEK   the {b['from']:%-d %b}-{b['to']:%-d %b} "
+              f"blackout bars {b['bars'] or 'work it has not named'}"
+              + ("" if b["all_week"] else f", {a:%a %-d} to {z:%a %-d} of this "
+                                          f"week")
+              + (f"  [{b['settled']}]" if b.get("settled") else ""))
+        if b["permits"]:
+            print(f"      permitted: {'; '.join(b['permits'])}")
+        elif b["scoped"]:
+            print("      it names nothing it permits")
+        else:
+            print("      it names no exception, so it bars everything")
+        for f in b["flagged"]:
+            print(f"      NOT PERMITTED  {f['id']} {f['title']} "
+                  f"({f['kind'] or 'no kind'}) — "
+                  + ("barred" if f["verdict"] == conditions.BARRED
+                     else "nobody has ruled on this kind"))
+        if not b["flagged"]:
+            print("      everything below is work it allows")
+        print()
     if not days and not starting and not running and not buys:
         print("  nothing dated this week")
     for b in buys:
@@ -882,15 +1249,19 @@ def main():
 
     if args.check:
         problems = check(args.slug)
-        if not problems:
+        clashes = blackout_conflicts(args.slug)
+        if problems:
+            print(f"  {len(problems)} disagreement"
+                  f"{'s' if len(problems) > 1 else ''} between tasks.json and "
+                  f"the documents it was built from:\n")
+            for p in problems:
+                print(f"      {p['message']}")
+        else:
             print("  tasks.json agrees with every section it was built from")
-            return
-        print(f"  {len(problems)} disagreement"
-              f"{'s' if len(problems) > 1 else ''} between tasks.json and the "
-              f"documents it was built from:\n")
-        for p in problems:
-            print(f"      {p['message']}")
-        raise SystemExit(1)
+        if clashes:
+            _report_blackout(clashes, conditions.blackout_records(
+                yards.load_conditions(args.slug) or {}))
+        raise SystemExit(1 if problems else 0)
 
     if args.restamp:
         restamp(args.slug)

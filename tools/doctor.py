@@ -218,6 +218,56 @@ def check_calendar():
     return ok
 
 
+def check_reconcile():
+    """Per yard: do `lib.schedule` and `tasks.json` still tell the same story.
+
+    Reported here because `lib.reconcile` needs a reader that already runs, and
+    a check nobody runs is the failure it was written to fix. This is the sweep
+    that touches every yard without anyone asking it to.
+
+    A warning rather than a failure, always. Some of the gap between a
+    feasibility estimate derived from a design and a hand-curated calendar is
+    legitimate — `tasks.json` holds real work `build()` has no archetype for —
+    and telling drift from known asymmetry is a judgement somebody makes after
+    reading the pair. A machine-readiness check is not the place to make it.
+    """
+    from lib import reconcile, yards
+
+    slugs = [s for s in yards.list_yards()
+             if all(os.path.exists(os.path.join(yards.yard_dir(s), f))
+                    for f in ("tasks.json", "design.json"))]
+    if not slugs:
+        print("  ok    no yard has both a design and a tasks.json yet")
+        return True
+
+    for slug in slugs:
+        r = reconcile.compare(slug)
+        blocked = [f for f in r["findings"] if f["kind"] == "blocked"]
+        if blocked:
+            print(f"  warn  {slug}: no second derivation to compare against — "
+                  f"{blocked[0]['message'].split('. ', 1)[-1][:90]}")
+            continue
+        stages = [s["stage"] for s in r["findings"] if s.get("stage")]
+        vocab = [f for f in r["findings"] if f["kind"].startswith("unmapped")]
+        if not r["findings"]:
+            print(f"  ok    {slug}: lib.schedule and tasks.json agree on all "
+                  f"{len(reconcile.STAGES)} stages, inside the "
+                  f"{r['schedule']['hours_per_weekend']} h weekend the plan "
+                  f"is built in")
+            continue
+        parts = []
+        if stages:
+            parts.append(f"{', '.join(stages)} diverge"
+                         f"{'' if len(stages) > 1 else 's'}")
+        if vocab:
+            parts.append(f"{len(vocab)} undeclared in the bridge")
+        print(f"  warn  {slug}: {'; '.join(parts)}. "
+              f"{len(r['agreements'])} axis agreement"
+              f"{'s' if len(r['agreements']) != 1 else ''}. "
+              f"`yard reconcile {slug}` says which work and in which direction")
+    return True
+
+
 def check_sourcing():
     """Per yard: is the supplier evidence dated, placed and still current.
 
@@ -277,6 +327,8 @@ def main():
     f = check_gate()
     print("\n dated tasks")
     g = check_calendar()
+    print("\n schedule against tasks.json")
+    check_reconcile()
     print("\n sourcing")
     check_sourcing()
     print("\n data")

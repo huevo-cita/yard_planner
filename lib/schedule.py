@@ -7,11 +7,21 @@
     python3 -m lib.schedule <slug> --harvest-by 2027-06-01 --crop "bush bean"
 
 Counts backwards from the target date in weekends, checks the plan against the
-hours the person actually has, and refuses to put heavy work in a week they said
-they are away.
+hours the person actually has, and refuses to put heavy work in a week the record
+says is unavailable.
 
-The three kinds of deadline arithmetic
---------------------------------------
+What `build()` does and does not do
+-----------------------------------
+`build()` places archetype tasks into weekends and nothing else. In particular it
+does **no frost arithmetic**: `frost_dates()` is called after the plan is already
+assembled, only to print alongside it, and the two functions below that do the
+real counting are reachable from the command line and from `raised-bed-rotation`,
+never from `build()`. So a plan from this module is fitted to the hours and to the
+calendar, and is not checked against a planting window. Read the dates as "this
+much work fits before that date", not as "this is when to plant".
+
+The deadline arithmetic, which lives here but runs on its own
+-------------------------------------------------------------
     seed start      tomatoes and peppers want 6-8 weeks indoors before the last
                     frost; brassicas 5-6; cucurbits 3-4 and they resent being
                     started earlier. Counting backwards from the frost date is
@@ -19,9 +29,41 @@ The three kinds of deadline arithmetic
     days to matu-   a harvest date minus days to maturity gives a sow-by date,
     rity            plus a fortnight because catalogue figures assume ideal
                     conditions and nobody has those
-    bloom window    a date the yard has to look right sets which plants can
-                    possibly be in flower, and that is a design constraint that
-                    has to travel backwards into the plant list
+
+A third kind is named in the design skill and is not implemented here: a bloom
+window, where the date the yard has to look right decides which plants can
+possibly be in flower. That constraint travels backwards into the plant list
+rather than into this schedule.
+
+Three things a date can mean, and why they are separate
+-------------------------------------------------------
+    display         the garden has to LOOK right on this day. Work may run past
+    milestone       it, and the project does not end there
+    blackout        the period is spoken for. Read from `constraints.blackouts`
+                    alongside `person.travel_gaps`. A blackout may narrow itself
+                    to a kind of work; every weekend here is emptied either way,
+                    because everything this module places is build work
+    project end     when the work stops, if it ever does. Usually it does not
+
+Where the archetypes come from
+------------------------------
+`tasks_from_design` reads `design.json` and `conditions.json` and nothing else,
+and every archetype it emits carries a `because` naming the fact that put it
+there. That line is not decoration: an archetype is a flat label with a flat
+number of hours on it, so "lay a path (10 h)" reads identically over a patio and
+over fifteen square feet of cobble on filter fabric, and the record of which it
+is has to travel with the task.
+
+Two things the guards ask that they used to not. First, they read the fields
+`design.json` writes — `item` for a hardscape line, `pot_size` in whatever
+spacing and case somebody typed — rather than fields nobody writes. Second, they
+ask the ground record whether the thing is already there, so a design mentioning
+a raised bed does not schedule the building of one that has stood for eighteen
+months. `UNREACHABLE` below names the one archetype no guard can emit.
+
+`vision.target_date` is the first of these. Back-planning up to a display date as
+though it were the last day work is allowed is what packs a planting into the
+three weeks before a party, and it is the reason those three are kept apart.
 
 Why weekends
 ------------
@@ -117,6 +159,27 @@ ORDER = ["measure and mark out", "kill turf", "sheet mulch", "dig and edge a bed
          "plant shrubs", "plant perennials", "stake and trellis", "mulch",
          "water in", "grooming and gap-fill"]
 
+#: Archetypes in `ORDER` that no guard in `tasks_from_design` can emit, and why.
+#:
+#: This is dead vocabulary and it is declared rather than deleted, because the
+#: two available fixes are both worse. Deleting it narrows the archetype table
+#: silently, and the entry is not wrong — sheet mulching is the real low-labour
+#: way to take turf out, and `kill turf` is the archetype for the other way.
+#: Making it reachable needs a rule for when a yard sheet-mulches instead of
+#: digging, and nobody has stated one; inventing a policy to give a guard
+#: something to fire on is how a plan acquires work nobody asked for.
+#:
+#: `tools/test_schedule.py` asserts this dict both ways — every other entry in
+#: `ORDER` is reachable from some design, and everything named here is not — so
+#: the list cannot quietly grow and a new archetype cannot be wired in and left
+#: unreachable.
+UNREACHABLE = {
+    "sheet mulch": "no guard adds it. It is an alternative technique for the "
+                   "job `kill turf` already covers, and choosing between them "
+                   "needs a stated rule about the person's labour and time "
+                   "that no yard file holds.",
+}
+
 WATERING_DECAY = [
     (7, "every day"),
     (21, "every other day"),
@@ -156,23 +219,68 @@ def _saturdays_back(target, count):
     return [d - datetime.timedelta(weeks=i) for i in range(count)]
 
 
-def _away_ranges(person):
-    """Travel gaps, as date ranges. Accepts a bare date or {"from", "to"}."""
+def _away_ranges(cond):
+    """Every weekend the yard gets no hours, as (from, to, why, scope).
+
+    Two sources, because they are two different facts. `person.travel_gaps` says
+    where somebody is. `constraints.blackouts` says only that a period is spoken
+    for, whatever the reason — and a week that is booked solid at home is not
+    travel, so recording it as travel to get it honoured would be the same class
+    of error this module was already making with the ground record.
+
+    A blackout may narrow itself to a kind of work — one yard's is "no BUILD
+    work, not no watering". Reading it as total here is still correct, and it is
+    worth saying why rather than leaving it to be rediscovered: every task this
+    module can place on a weekend comes out of `ORDER`, and all seventeen of them
+    are build work. Keep-alive watering leaves `build()` as `establishment_
+    watering`, a decay regime with no dates on it, which emptying a weekend
+    cannot touch. So a narrowed blackout and a total one empty the same weekends
+    here, for the right reason rather than by luck. The scope is carried through
+    only so the note can say what the record permits instead of guessing.
+    """
     out = []
-    for g in person.get("travel_gaps", []):
+    for g in (cond.get("person") or {}).get("travel_gaps", []):
         if isinstance(g, dict):
             a = _date(g.get("from") or g.get("start"))
             b = _date(g.get("to") or g.get("end") or a)
         else:
             a = b = _date(g)
-        out.append((a, b))
-    return out
+        out.append((a, b, "away", None))
+    return out + [(r["from"], r["to"], "blacked out", r.get("scope"))
+                  for r in cond_mod.blackout_records(cond)]
 
 
 def _is_away(sat, ranges):
-    """A weekend counts as lost if either of its days falls inside a gap."""
+    """Why this weekend is lost and what it still permits, or None.
+
+    Either of the weekend's two days falling inside is enough.
+    """
     sun = sat + datetime.timedelta(days=1)
-    return any(a <= d <= b for a, b in ranges for d in (sat, sun))
+    for a, b, why, scope in ranges:
+        if any(a <= d <= b for d in (sat, sun)):
+            return why, scope
+    return None
+
+
+def _away_note(why, scope):
+    """What a lost weekend says for itself.
+
+    A blackout that names what it bars gets that read back to it, because this
+    plan is one of the places somebody audits the week from. Without it the line
+    reads "nothing scheduled" over a week the record permits three kinds of work
+    in, which is how a decision starts looking like an omission.
+    """
+    if scope:
+        permits = "; ".join(scope.get("permits") or []) or "nothing recorded"
+        return (f"{why} — nothing scheduled. This period bars "
+                f"{scope.get('bars', 'work it has not named')}, which is all "
+                f"this module places. It permits {permits} — none of which is "
+                f"planned here, and keeping a planting alive is not work in the "
+                f"sense this weekend is lost for")
+    return (f"{why} — nothing scheduled. Anything already planted still needs "
+            f"water; leave a note for whoever is covering, scoped to keeping "
+            f"things alive. Keeping a planting alive is not work in the sense "
+            f"this weekend is lost for")
 
 
 # ------------------------------------------------------------------ deadlines
@@ -283,6 +391,11 @@ def _cautions(plan, cond):
     A rule like "never mulch the bluebonnet strip" is worthless sitting in a
     constraints list if the plan says "mulch (3 h)" and nothing connects the
     two. This pairs them by verb so the rule appears on the weekend it matters.
+
+    Reads `constraints.rules`, which `conditions.blank()` declares. It has to:
+    a reader pointed at a key the schema never creates cannot fire on any
+    conformant yard, and silently returning nothing looks exactly like a yard
+    with no standing rules.
     """
     scheduled = {t["task"] for w in plan for t in w.get("tasks", [])}
     verbs = {t: TASK_ALIASES.get(t, t).split()[0] for t in scheduled}
@@ -334,8 +447,175 @@ def _target_zones_established(design, site, cond):
     return True
 
 
+# ---------------------------------------------------- reading what a design says
+#
+# Four of the guards below used to read fields `design.json` does not write, and
+# so could not fire on any conformant yard. `h["name"]` is written by nothing at
+# all; `h["kind"]` is optional, present on about a third of a real yard's
+# hardscape lines, and has never held one of the four paving words the path guard
+# tested for. `p["needs_support"]` is written by no plant anywhere in this repo.
+# A guard reading a key nobody writes is indistinguishable from a guard that is
+# correctly quiet, which is how thirteen of seventeen archetypes came to be
+# unreachable without anybody noticing.
+#
+# What `design.json` actually writes for a hardscape line is `item`: a label,
+# then a comma or a dash, then the paragraph explaining it. So these read the
+# LABEL and not the whole entry, and that restraint is the whole care in it. One
+# of this yard's lines is "Frost cloth, 1.5 oz, plus pins, stored AT the raised
+# bed", and a full-text search for "raised" there schedules five hours of
+# building a bed that has stood for eighteen months.
+
+#: Words that name a hardscape element, matched against `kind` exactly or against
+#: the label on a word boundary. Each set is the vocabulary for one archetype.
+EDGING_WORDS = ("edging", "edger", "edgers", "edgestone", "bed border")
+RAISED_BED_WORDS = ("raised bed", "raised beds", "raised planter",
+                    "planter box", "planter boxes")
+PAVING_WORDS = ("path", "paths", "paving", "paver", "pavers", "flagstone",
+                "gravel", "decomposed granite", "river rock", "cobble",
+                "stepping stone", "stepping stones", "dry-laid")
+
+#: Matched against `extra_materials` keys, which are free text, not hardscape
+#: labels — "1/4 in drip tubing" and "drip line" are the same material.
+IRRIGATION_WORDS = ("drip", "emitter", "soaker", "irrigation", "tubing")
+
+#: Stock big enough that planting it is a different job from planting a
+#: perennial: a bigger hole, a rootball two people carry, and a stake. Below
+#: three gallons the act is the same and `plant perennials` covers it.
+SHRUB_POT_SIZES = ("3gal", "5gal", "7gal", "10gal", "15gal", "b&b", "bare root")
+SHRUB_ROLE_WORDS = ("shrub", "tree", "specimen")
+
+_SUPERSEDED = re.compile(r"\bsuperseded\b", re.I)
+_SOWN = re.compile(r"\b(direct[- ]sown|direct[- ]sow|sown|from seed|re-?sow"
+                   r"|seed[- ]grown)\b", re.I)
+_CLIMBER = re.compile(r"\b(vine|vines|climbing|climber|trellis|espalier"
+                      r"|pole bean|runner bean)\b", re.I)
+_LABEL_END = re.compile(r"\s+[-\u2013\u2014]\s+|,")
+
+
+def _pot_size(plant):
+    """A plant's stock size, normalised, or None.
+
+    A real yard writes "1 gal" and "4 in" with spaces where the guard tested for
+    "1gal"; the same field elsewhere in this repo holds "#5" and "b&b".
+    `lib.sourcing.normalize_size` is the fuller version of this and is
+    deliberately not imported: `lib.sourcing` reaches `lib.bom` and `lib.design`,
+    and pulling those into this module's import closure would make the narrow
+    input map declared for `schedule` in `lib/inputs.py` wrong.
+    """
+    s = str(plant.get("pot_size") or "").strip().lower().replace(" ", "")
+    if not s:
+        return None
+    m = re.fullmatch(r"#?(\d+)(?:gal|gallon|gallons|g)?", s)
+    if m and ("gal" in s or s.startswith("#")):
+        return f"{m.group(1)}gal"
+    m = re.fullmatch(r"(\d+)(?:in|inch|inches|\")", s)
+    if m:
+        return f"{m.group(1)}in"
+    return {"bb": "b&b", "balled": "b&b", "bareroot": "bare root",
+            "seeds": "seed"}.get(s, s)
+
+
+def _is_existing(plant):
+    """A plant already in the ground. Nothing here is planted, staked or sown."""
+    return bool(plant.get("existing")) or plant.get("role") == "existing"
+
+
+def _text_of(plant):
+    return f"{plant.get('name') or ''} {plant.get('role') or ''}"
+
+
+def _is_shrub(plant):
+    """Stock that makes planting a separate job from planting a perennial."""
+    if _pot_size(plant) in SHRUB_POT_SIZES:
+        return True
+    role = str(plant.get("role") or "").lower()
+    return any(re.search(r"\b" + w + r"\b", role) for w in SHRUB_ROLE_WORDS)
+
+
+def _is_sown(plant):
+    """Does this record arrive as seed rather than as a plant?
+
+    `pot_size: "seed"` is the field for it, and on a real yard twenty-two of
+    forty-four records leave `pot_size` empty and say it in the name instead —
+    `Carrots (direct sown)`, `Radish`, `Lettuce (mesclun and butterhead)`. The
+    third reading is the crop itself: `DIRECT_SOW` above is already this module's
+    authority on what cannot be transplanted, so it is reused rather than
+    restated. A record that names a pot is not sown here whatever else it says,
+    which is what keeps `Broccoli (transplants)` out.
+    """
+    pot = _pot_size(plant)
+    if pot == "seed":
+        return True
+    if _SOWN.search(_text_of(plant)):
+        return True
+    if pot:
+        return False
+    low = str(plant.get("name") or "").lower()
+    return any(re.search(r"\b" + re.escape(c) + r"s?\b", low)
+               for c in DIRECT_SOW)
+
+
+def _needs_support(plant):
+    """Does this planting need a stake or a trellis put up for it?
+
+    `needs_support` is the field for it and no plant in this repo has ever set
+    one. What a design does write is `layer: "vine"` and a name saying so, and
+    both are read here. Every climber on this yard is `existing` and already on
+    its trellis, which is why nothing is placed: a correct silence, arrived at by
+    reading the record rather than by reading a key that is never there.
+    """
+    if plant.get("needs_support"):
+        return True
+    if plant.get("layer") == "vine":
+        return True
+    return bool(_CLIMBER.search(_text_of(plant)))
+
+
+def hardscape_lines(design):
+    """Every live hardscape entry, as (label, kind, entry).
+
+    `label` is `item` up to the first comma or dash, which is where a design
+    stops naming the element and starts explaining it. A line carrying
+    `superseded_by`, or calling itself superseded, is dropped: the reasoning of
+    record for a decision that has been reversed is worth keeping in the file and
+    is not work anybody is going to do.
+    """
+    out = []
+    for h in design.get("hardscape") or []:
+        if not isinstance(h, dict):
+            continue
+        text = str(h.get("item") or h.get("name") or "")
+        if h.get("superseded_by") or _SUPERSEDED.search(text):
+            continue
+        label = _LABEL_END.split(text, 1)[0].strip().lower()
+        out.append((label, str(h.get("kind") or "").strip().lower(), h))
+    return out
+
+
+def hardscape_says(design, words):
+    """The hardscape lines whose `kind` or label names one of `words`."""
+    hits = []
+    for label, kind, h in hardscape_lines(design):
+        if kind in words or any(
+                re.search(r"\b" + re.escape(w) + r"\b", label) for w in words):
+            hits.append(str(h.get("item") or h.get("name") or label))
+    return hits
+
+
+def _ground_state_says(cond, *words):
+    """Areas the ground record already reports in one of these states."""
+    return [a for a in ((cond.get("ground") or {}).get("areas") or [])
+            if any(w in str(a.get("state") or "").lower() for w in words)]
+
+
 def tasks_from_design(slug):
-    """What the design implies has to happen, in the order it has to happen."""
+    """What the design implies has to happen, in the order it has to happen.
+
+    Each entry carries `because`, naming the fact in `design.json` or
+    `conditions.json` that put it there. An archetype is a flat label — "lay a
+    path (10 h)" reads the same over a patio and over fifteen square feet of
+    cobble — so the line saying which it is has to travel with it.
+    """
     design = yards.load(slug, "design.json") or {}
     cond = yards.load_conditions(slug)
     ground = (cond.get("ground") or {})
@@ -344,50 +624,78 @@ def tasks_from_design(slug):
     site = yards.load(slug, "site.json") or {}
     established = _target_zones_established(design, site, cond)
 
+    wanted = {}
+
+    def want(task, because):
+        wanted.setdefault(task, because)
+
     # A mature bed being added to does not get marked out, stripped of turf,
     # edged or tilled. Scheduling those anyway is how a plan loses its
     # credibility on the first line.
-    wanted = [] if established else ["measure and mark out"]
-    if not established and (
-            "turf" in done or
-            "lawn" in (ground.get("surface_note") or "").lower()):
-        wanted += ["kill turf"]
-    if not established and not any(
-            "edged" in str(a).lower() for a in ground.get("areas", [])):
-        wanted += ["dig and edge a bed"]
-    if any((h.get("kind") or "").lower() == "edging"
-           for h in design.get("hardscape", [])):
-        wanted += ["install edging"]
-    if any("raised" in str(h.get("name", "")).lower()
-           for h in design.get("hardscape", [])):
-        wanted += ["build a raised bed", "spread and grade soil"]
-    if any((h.get("kind") or "") in ("pavers", "flagstone", "gravel",
-                                     "decomposed granite")
-           for h in design.get("hardscape", [])):
-        wanted += ["lay a path"]
-    if (design.get("extra_materials") or {}).get("drip line") or \
-            not (cond.get("water") or {}).get("irrigation"):
-        wanted += ["run drip irrigation"]
     if not established:
-        wanted += ["amend and till"]
+        want("measure and mark out", "no zone being planted is a working bed "
+                                     "on the ground record")
+        if "turf" in done or "lawn" in (ground.get("surface_note") or "").lower():
+            want("kill turf", "the ground record calls this turf or lawn")
+        if not any("edged" in str(a).lower() for a in ground.get("areas", [])):
+            want("dig and edge a bed", "no area on the ground record is edged")
+        want("amend and till", "no zone being planted is a working bed on the "
+                               "ground record")
 
-    plants = design.get("plants", [])
-    if any(p.get("pot_size") in ("3gal", "5gal", "7gal", "15gal", "b&b")
-           or p.get("role") in ("structure", "tree") for p in plants):
-        wanted += ["plant shrubs"]
+    # Both of these ask the ground record whether the thing is already there,
+    # which the old guards did not. A design naming a raised bed in any of its
+    # hardscape lines used to schedule five hours of building one and five of
+    # filling it, on a yard whose ground record says a raised bed was built
+    # eighteen months ago.
+    edging = hardscape_says(design, EDGING_WORDS)
+    if edging and not _ground_state_says(cond, "edged"):
+        want("install edging", "; ".join(edging[:2]))
+
+    boxes = hardscape_says(design, RAISED_BED_WORDS)
+    if boxes and not _ground_state_says(cond, "built"):
+        want("build a raised bed", "; ".join(boxes[:2]))
+        want("spread and grade soil", "; ".join(boxes[:2]))
+
+    paving = hardscape_says(design, PAVING_WORDS)
+    if paving:
+        want("lay a path", "; ".join(paving[:2]))
+
+    # `extra_materials` is keyed by whatever the design called the material, so
+    # an exact `"drip line"` lookup is the same mistake as the hardscape guards
+    # above. `tools/influence.py --unwritten` caught this one in this file.
+    drip = [k for k in (design.get("extra_materials") or {})
+            if any(w in k.lower() for w in IRRIGATION_WORDS)]
+    if drip:
+        want("run drip irrigation",
+             "design.extra_materials lists " + "; ".join(sorted(drip)[:2]))
+    elif not (cond.get("water") or {}).get("irrigation"):
+        want("run drip irrigation", "conditions.water records no irrigation")
+
+    plants = [p for p in design.get("plants", []) if not _is_existing(p)]
+    shrubs = [p for p in plants if _is_shrub(p)]
+    if shrubs:
+        want("plant shrubs", f"{len(shrubs)} records at "
+                             f"{_pot_size(shrubs[0]) or 'shrub or tree'} or above")
     if plants:
-        wanted += ["plant perennials"]
-    if any(p.get("pot_size") == "seed" for p in plants):
-        wanted += ["sow seed"]
-    if any(p.get("needs_support") for p in plants):
-        wanted += ["stake and trellis"]
-    wanted += ["mulch", "water in", "grooming and gap-fill"]
+        want("plant perennials", f"{len(plants)} records that are not already "
+                                 f"in the ground")
+    sown = [p for p in plants if _is_sown(p)]
+    if sown:
+        want("sow seed", f"{len(sown)} records arrive as seed, from "
+                         f"{sown[0].get('name')!r} on")
+    staked = [p for p in plants if _needs_support(p)]
+    if staked:
+        want("stake and trellis", f"{len(staked)} records climb or need "
+                                  f"staking, from {staked[0].get('name')!r} on")
+    want("mulch", "every planting is mulched")
+    want("water in", "every planting is watered in")
+    want("grooming and gap-fill", "the last working weekend before the date")
 
-    seen, out = set(), []
+    out = []
     for t in ORDER:
-        if t in wanted and t not in seen:
-            seen.add(t)
-            out.append({"task": t, "hours": TASK_HOURS.get(t, 3)})
+        if t in wanted:
+            out.append({"task": t, "hours": TASK_HOURS.get(t, 3),
+                        "because": wanted[t]})
     return out
 
 
@@ -431,10 +739,17 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
     if not tasks:
         return {"error": "no design.json to schedule"}
 
-    person = cond.get("person") or {}
-    per_week = person.get("hours_per_week")
-    per_weekend = hours_per_weekend or per_week or 6
-    away = _away_ranges(person)
+    # Groundwork is the expensive half of a plan and the half most likely to be
+    # already done. Drawing it because the ground record is filed under a key
+    # nothing reads is the one failure here that costs whole weekends, so it is
+    # named rather than left to be noticed in the totals.
+    stray = cond_mod.unread_ground(cond)
+    groundwork = [t["task"] for t in tasks
+                  if t["task"] in ("measure and mark out", "kill turf",
+                                   "dig and edge a bed", "amend and till")]
+
+    per_weekend = hours_per_weekend or cond_mod.weekly_hours(cond) or 6
+    away = _away_ranges(cond)
     start_no_earlier = _date(start_from or datetime.date.today())
 
     total_hours = sum(t["hours"] for t in tasks)
@@ -453,10 +768,9 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
             break
         entry = {"weekend_of": sat.isoformat(), "tasks": [], "hours": 0}
 
-        if _is_away(sat, away):
-            entry["note"] = ("away — nothing scheduled. Anything already planted "
-                             "still needs water; leave a note for whoever is "
-                             "covering, scoped to keeping things alive")
+        lost = _is_away(sat, away)
+        if lost:
+            entry["note"] = _away_note(*lost)
             plan.append(entry)
             continue
         if not groomed:
@@ -521,6 +835,16 @@ def build(slug, target=None, hours_per_weekend=None, start_from=None,
                {"through_day": d, "frequency": how} for d, how in WATERING_DECAY],
            "cautions": _cautions(plan, cond),
            }
+    if stray and groundwork:
+        keys = ", ".join(f"ground.{s['key']} ({s['count']} records)"
+                         for s in stray)
+        out["ground_unread"] = (
+            f"{sum(TASK_HOURS.get(t, 3) for t in groundwork)} of these hours "
+            f"are groundwork — {', '.join(groundwork)} — and this yard records "
+            f"{keys}, which nothing reads. ground.areas is empty, so the plan "
+            f"above is a bare-lot plan. If those beds already exist, move the "
+            f"records onto `areas` with a `state` each and re-run; the "
+            f"groundwork will drop out on its own")
     if provisional:
         out["provenance"] = provisional
     restriction = ((cond.get("water") or {}).get("irrigation") or {}) \
@@ -556,6 +880,8 @@ def report(slug, target=None, hours=None, force=False):
     if p.get("provenance"):
         print(f"  {p['provenance']}: the dates below rest on assumptions still "
               f"in question\n")
+    if p.get("ground_unread"):
+        print(f"  {p['ground_unread']}\n")
     if p.get("warning"):
         print(f"  {p['warning']}\n")
     if p["last_frost"]:
@@ -576,6 +902,8 @@ def report(slug, target=None, hours=None, force=False):
             elif t.get("needs_how_to"):
                 line += f"   include the how-to — {t['needs_how_to']}"
             print(line)
+            if t.get("because"):
+                print(f"          from the record: {t['because']}")
             for key in ("note", "part_note"):
                 if t.get(key):
                     print(f"          {t[key]}")

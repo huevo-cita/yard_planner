@@ -20,7 +20,10 @@ Sections
     tools         what can be done without renting or buying
     person        experience, physical limits, hours a week, travel gaps
     budget        the ceiling, and whether it is a lump or a monthly trickle
-    constraints   HOA, landlord, pets, children, deer, deadlines
+    constraints   HOA, landlord, pets, children, deer, standing rules, and the
+                  three different things a date can mean here: the display
+                  milestone the garden has to look right on, the blackouts and
+                  what kind of work they bar, and whether the project ends at all
 
 Every section carries `last_verified`. Conditions decay: compost gets used, beds
 get weedy, a borrowed tiller goes home. Anything past its window is re-confirmed
@@ -142,8 +145,175 @@ def blank(slug):
                    "willing_to_phase": None},
         "constraints": {"last_verified": None, "hoa": None, "landlord": None,
                         "pets": [], "children": None, "wildlife": [],
-                        "deadlines": []},
+                        "deadlines": [], "rules": [],
+                        "display_milestone": None, "blackouts": [],
+                        "project_end": None},
     }
+
+
+#: The keys `blank()` declares under `ground`. See `unread_ground`.
+GROUND_SCHEMA = ("last_verified", "areas", "hardscape", "surface_note")
+
+
+def unread_ground(cond):
+    """Ground facts filed under a key nothing reads.
+
+    An empty `ground.areas` is read by `lib.schedule` as a bare lot — measure
+    it, mark it out, dig it, edge it, till it. That is the right reading of
+    "nothing is built here" and the wrong reading of "nobody wrote it down under
+    this key", and the two are indistinguishable from the key alone. One yard
+    recorded ten built features under `ground.already_built`, a spelling it
+    invented, and drew twelve hours of groundwork for four beds that were
+    already dug, edged and planted.
+
+    This deliberately does not read the stray key and carry on. An `areas` entry
+    turns on its `state`, which is what the schedule gates against, and reading
+    "edged" out of the sentence "Four in-ground beds, all edged" is a guess
+    rather than a rename. So this names the key and the count and stops, and the
+    migration onto the schema stays a written act with somebody's word behind
+    each state.
+
+    A note or a status string is prose and is not flagged; a non-empty list of
+    records is.
+    """
+    ground = cond.get("ground") or {}
+    out = []
+    for key, value in ground.items():
+        if key in GROUND_SCHEMA:
+            continue
+        if (isinstance(value, list) and value
+                and all(isinstance(v, dict) for v in value)):
+            out.append({"key": key, "count": len(value)})
+    return sorted(out, key=lambda r: r["key"])
+
+
+# ------------------------------------------------ what a date on a yard means
+
+def _as_date(v):
+    if isinstance(v, datetime.date):
+        return v
+    try:
+        return datetime.date.fromisoformat(str(v)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def display_milestone(cond):
+    """The date the garden has to *look* right on, or None.
+
+    Deliberately not called a deadline. A deadline is a date work runs up to,
+    and reading a display date that way is what put the largest planting of one
+    yard's autumn three weeks before the party it was meant to be settled for.
+    """
+    return (cond.get("constraints") or {}).get("display_milestone")
+
+
+def _spans(cond):
+    """Every blackout as (from, to, record), dropping the ones with no dates."""
+    out = []
+    for b in (cond.get("constraints") or {}).get("blackouts") or []:
+        a, z = _as_date(b.get("from")), _as_date(b.get("to") or b.get("from"))
+        if a and z:
+            out.append((a, z, b))
+    return out
+
+
+def blackouts(cond):
+    """Periods when the yard gets no work, as (from, to) inclusive.
+
+    Distinct from `person.travel_gaps`, which says where somebody is. A blackout
+    says only that a period is spoken for, whatever the reason, and a week that
+    is booked solid at home is not the same fact as a week spent away.
+
+    What kind of work a blackout bars is a second question, and it is
+    `blackout_bars` rather than this. A period being spoken for and every job in
+    it being off are the same sentence in the common case and come apart the
+    moment somebody says "I meant no building, not no watering".
+    """
+    return [(a, z) for a, z, _ in _spans(cond)]
+
+
+def blackout_records(cond):
+    """Every blackout, dates parsed, with whatever it says about its own scope.
+
+    For anything that has to *report* a blackout rather than test a day against
+    one. `blackouts` is the pair of dates and stays that, because most callers
+    only ever ask which days are gone.
+    """
+    return [{"from": a, "to": z, "kind": rec.get("kind"),
+             "scope": rec.get("scope") or None} for a, z, rec in _spans(cond)]
+
+
+def in_blackout(cond, day):
+    """Whether a date falls inside a blackout, and which one."""
+    day = _as_date(day)
+    for a, z, rec in _spans(cond):
+        if day and a <= day <= z:
+            return {"from": a.isoformat(), "to": z.isoformat(),
+                    "scope": rec.get("scope"), "kind": rec.get("kind")}
+    return None
+
+
+# The three answers `blackout_bars` can give. `UNSCOPED` is the whole reason
+# there are three: a scope that names what it bars and what it allows still says
+# nothing about the work nobody thought of, and folding that case into
+# `PERMITTED` would make the record's silence into its permission — the failure
+# AGENTS.md spends a section on, one level up.
+BARRED, PERMITTED, UNSCOPED = "barred", "permitted", "unscoped"
+
+
+def blackout_bars(cond, day, kind=None):
+    """Whether work of this `kind`, on this `day`, is what a blackout bars.
+
+    None if the day is outside every blackout. Otherwise `BARRED`, `PERMITTED`
+    or `UNSCOPED`.
+
+    A blackout with no `scope` bars everything. That is the reading every
+    blackout carried before scopes existed and it is the right default: a period
+    recorded as spoken for, with nothing said about exceptions, has no exceptions
+    on the record.
+
+    A `scope` narrows it, in the vocabulary the yard's own `tasks.json` uses for
+    `kind`:
+
+        "scope": {"bars": "build work",
+                  "barred_kinds": ["build", "prep", "plant", "sow"],
+                  "permitted_kinds": ["water", "protect", "event"],
+                  "permits": ["keep-alive watering", "party-eve setup"]}
+
+    `barred_kinds` wins a kind listed in both, because a bar is the stronger
+    statement and a record contradicting itself should refuse rather than allow.
+    """
+    day = _as_date(day)
+    if day is None:
+        return None
+    for a, z, rec in _spans(cond):
+        if not a <= day <= z:
+            continue
+        scope = rec.get("scope") or None
+        if not scope:
+            return BARRED
+        if kind in (scope.get("barred_kinds") or []):
+            return BARRED
+        if kind in (scope.get("permitted_kinds") or []):
+            return PERMITTED
+        return UNSCOPED
+    return None
+
+
+def project_end(cond):
+    """The date the project ends, and whether anybody has actually said.
+
+    Three-valued on purpose. A recorded `null` means somebody was asked and the
+    answer was that there is no end — which is not the same as nobody having
+    been asked, and the difference decides whether work after the display
+    milestone may be treated as out of scope. It may not, unless it says so.
+    """
+    rec = (cond.get("constraints") or {}).get("project_end")
+    if rec is None:
+        return {"stated": False, "date": None}
+    return {"stated": True, "date": _as_date(rec.get("date")),
+            "source": rec.get("source"), "note": rec.get("note")}
 
 
 # ------------------------------------------------------------------ freshness
@@ -225,6 +395,152 @@ def record_test(slug, result, where=None):
     verify(cond, "soil")
     yards.save(slug, "conditions.json", cond)
     return cond
+
+
+# ---------------------------------------------------------- the soil profile
+#
+# A bed is not one soil. Almost every worked garden is imported material sitting
+# on whatever was underneath, and the two disagree — about pH, about how fast
+# water leaves, about what will grow. `soil.ph` and `soil.drainage` are one
+# scalar each for the whole yard, which is the right shape for a lot nobody has
+# touched and the wrong shape for one where six inches of bagged garden soil
+# went into every bed. On this yard that single assumed 8.2 was generating
+# twenty-six refusals against ground the plants are not growing in.
+#
+# So `soil.layers` records the profile per bed. The two things worth being
+# precise about, because they are the reason this is not one function:
+#
+#   pH is a property of the MATERIAL a root is in. Which layers matter therefore
+#   depends on how deep the plant roots, and a shallow annual living entirely in
+#   the imported six inches must not be judged against the clay below it.
+#
+#   Drainage is a property of the PROFILE. Water has to leave through the
+#   slowest layer whatever the rooting depth, and it perches upward from that
+#   layer's top — so six inches of good soil over group D clay does not drain,
+#   and the plant rooting only in those six inches is sitting in the perched
+#   zone rather than above it. Depth does not rescue a drainage objection, and a
+#   check that applied the pH rule to drainage would quietly say it does.
+
+#: A layer's own `drainage` reading counts as limiting when it says one of these.
+#: Matched inside whatever prose the yard recorded, exactly as `design.check_soil`
+#: has always matched the flat reading, so the two cannot disagree about the word.
+SLOW_WORDS = ("slow", "poor")
+
+
+def bed_profile(cond, bed):
+    """The named soil profile for one bed, or None if the bed has no record.
+
+    None is a real answer and not an empty profile: a bed nobody has described
+    falls back to the flat `soil.ph` and `soil.drainage`, which is the behaviour
+    every yard had before this existed and is still right for undisturbed ground.
+    `design.check_coverage` reports the fallback rather than letting it pass as
+    a description.
+    """
+    layers = (cond or {}).get("soil", {}).get("layers") or {}
+    name = (layers.get("beds") or {}).get(bed)
+    if not name:
+        return None
+    prof = (layers.get("profiles") or {}).get(name)
+    if not isinstance(prof, dict) or not prof.get("layers"):
+        return None
+    return prof
+
+
+def bed_layers(cond, bed):
+    """The layers of one bed, shallowest first, or None."""
+    prof = bed_profile(cond, bed)
+    if prof is None:
+        return None
+    return sorted(prof["layers"], key=lambda l: float(l.get("top_in") or 0))
+
+
+def layer_gaps(layers):
+    """Where a profile's own boundaries disagree with each other.
+
+    `reached` decides everything from `top_in`, so a `bottom_in` that has
+    drifted out of step changes no verdict and reads as authoritative anyway —
+    a profile could say the imported layer stops at 3 in while the native layer
+    starts at 6, and nothing would object while the three inches between them
+    belonged to neither. Perturbing `bottom_in` was measured as inert against
+    every objection on cloverleaf-austin, which is exactly the "believed but
+    never computed" quadrant `tools/influence.py` exists to find. So the
+    redundant half of each boundary is checked against the other half rather
+    than deleted: two statements of one fact are worth keeping when something
+    compares them, and worth nothing when nothing does.
+
+    `design.check_layer_coverage` reports what comes back.
+    """
+    out = []
+    order = sorted(layers or [], key=lambda l: float(l.get("top_in") or 0))
+    for a, b in zip(order, order[1:]):
+        bottom, top = a.get("bottom_in"), float(b.get("top_in") or 0)
+        if bottom is None:
+            out.append(f"{a.get('name')} runs to no depth at all and "
+                       f"{b.get('name')} starts at {top:g} in beneath it")
+        elif abs(float(bottom) - top) > 1e-9:
+            out.append(f"{a.get('name')} stops at {float(bottom):g} in and "
+                       f"{b.get('name')} starts at {top:g} in")
+    last = order[-1] if order else None
+    if last is not None and last.get("bottom_in") is not None:
+        out.append(f"the deepest layer, {last.get('name')}, stops at "
+                   f"{float(last['bottom_in']):g} in and nothing is recorded "
+                   f"below it, so a root passing that depth is in no layer")
+    return out
+
+
+def reached(layers, depth_in):
+    """Which layers a root zone of `depth_in` occupies: (certain, possible).
+
+    Three-valued on purpose, because the alternative is the bug this whole file
+    is about. With a researched depth every layer whose top the roots pass is
+    `certain` and nothing is `possible`. With no depth on record the surface
+    layer is still `certain` — everything roots in the top of the bed — and every
+    layer below it is `possible`, which is what lets a caller say "this would be
+    an objection if it roots that deep, and nobody has looked it up" instead of
+    picking a depth and asserting.
+    """
+    certain, possible = [], []
+    for layer in layers or []:
+        top = float(layer.get("top_in") or 0)
+        if top <= 0:
+            certain.append(layer)
+        elif depth_in is None:
+            possible.append(layer)
+        elif top < float(depth_in):
+            certain.append(layer)
+    return certain, possible
+
+
+def share_of_root_zone(layer, depth_in):
+    """What fraction of a root zone of `depth_in` lies inside this layer.
+
+    Reported rather than thresholded. Four inches of clay at the bottom of an
+    eighteen-inch root zone is a real thing to know about and a poor thing to
+    decide on: a cut-off here would be a policy number invented to make a
+    particular plant pass, and it would be the first thing to drift. The
+    objection fires on reach and states the share, and a person decides.
+    """
+    if not depth_in:
+        return None
+    top = float(layer.get("top_in") or 0)
+    bottom = layer.get("bottom_in")
+    bottom = float(depth_in) if bottom is None else min(float(bottom),
+                                                        float(depth_in))
+    return max(0.0, bottom - top) / float(depth_in)
+
+
+def limiting_layer(layers):
+    """The shallowest layer that water has to get through and cannot, or None.
+
+    Shallowest rather than deepest, because a perched water table stands on the
+    first slow layer it meets and everything above that interface is wet. The
+    clay under a raised box still governs the box.
+    """
+    for layer in layers or []:
+        drain = str(layer.get("drainage") or "").lower()
+        if any(w in drain for w in SLOW_WORDS):
+            return layer
+    return None
 
 
 def soil_summary(cond):
@@ -318,12 +634,37 @@ def can_do(cond, task):
     return "guide", f"not on the {level} list, so write the how-to in"
 
 
-def hours_available(cond, weeks):
+def weekly_hours(cond):
+    """Working hours a week as one number, from either shape the record uses.
+
+    `person.hours_per_week` is written as a figure by some yards and as a
+    `{"low": 1, "high": 6}` band by others, because "one to six" is what a
+    person actually says about their own Saturdays. Both are legitimate and
+    `lib.niches` already reads either, so a caller that assumes the scalar
+    crashes on a perfectly well-formed yard.
+
+    The two ends of a band are not interchangeable to a caller sizing a build.
+    The low end stretches a sixty-hour job over sixty weekends; the high end
+    books every weekend of the autumn at a ceiling the record generally only
+    claims for the good ones. So a band reads as its midpoint, which is the
+    figure it is a band around, and callers that want either end can ask.
+    """
     per = (cond.get("person") or {}).get("hours_per_week")
+    if isinstance(per, dict):
+        ends = [v for v in (per.get("low"), per.get("high"))
+                if isinstance(v, (int, float))]
+        if ends:
+            return sum(ends) / len(ends)
+        per = per.get("value")
+    return float(per) if isinstance(per, (int, float)) else None
+
+
+def hours_available(cond, weeks):
+    per = weekly_hours(cond)
     if not per:
         return None
     gaps = len((cond.get("person") or {}).get("travel_gaps", []))
-    return max(weeks - gaps, 0) * float(per)
+    return max(weeks - gaps, 0) * per
 
 
 # --------------------------------------------------------------------- report
@@ -370,6 +711,27 @@ def report(slug, only_stale=False):
     if b.get("ceiling_usd"):
         print(f"  budget: ${b['ceiling_usd']:,.0f} {b.get('cadence') or ''}, "
               f"${b.get('spent_so_far_usd') or 0:,.0f} spent")
+
+    mile = display_milestone(cond)
+    if mile:
+        print(f"\n  display milestone: {mile.get('date')} — "
+              f"{mile.get('what') or 'the garden has to look right'}")
+    for a, z, rec in _spans(cond):
+        scope = rec.get("scope") or {}
+        print(f"  blackout: {a} to {z}, "
+              f"{'no work at all' if not scope else 'bars ' + scope.get('bars', 'unstated')}")
+        for line in scope.get("permits") or []:
+            print(f"      permitted inside it: {line}")
+    end = project_end(cond)
+    if end["stated"]:
+        print(f"  project end: {end['date'] or 'none — the project is open-ended'}")
+
+    stray = unread_ground(cond)
+    for s in stray:
+        print(f"\n  ground.{s['key']} holds {s['count']} records and nothing "
+              f"reads it.\n  Every tool sees ground.areas, which is empty, so "
+              f"this yard plans as a bare lot.\n  Move them to `areas` and "
+              f"`hardscape`, deciding each area's `state` as you go.")
 
     missing = [r["section"] for r in staleness(cond)
                if r["state"] == "never recorded"]

@@ -138,8 +138,17 @@ JOB_INPUTS = {
     },
     "schedule": {
         "sections": ["address", "climate", "zones"],
-        "why": "back-planning counts frost dates and heat windows out of "
-               "`climate`, and task sizing scales with bed area from `zones`.",
+        "why": "narrower than it looks, and worth stating exactly because the "
+               "obvious reading is wrong. `climate` is read once, by "
+               "`frost_dates`, which `build` calls after the plan is already "
+               "assembled and only to print beside it — no task is placed by "
+               "frost arithmetic, and the seed-start and days-to-maturity "
+               "helpers that do count backwards are reachable from the command "
+               "line and never from `build`. `zones` is read for bed LABELS, to "
+               "match a design zone against the ground record; task hours are "
+               "flat archetypes and do not scale with area. What actually sizes "
+               "a plan is `conditions.json` — the hours band, the travel gaps "
+               "and the blackouts — and that file is outside every all-clear.",
     },
 }
 
@@ -406,6 +415,136 @@ def census(site, job):
         if section in (site or {}):
             walk(site[section], section)
     return out
+
+
+# --------------------------------------------- staleness of derived artifacts
+
+#: Which job's declared input set governs each derived artifact. Taking the
+#: scope from `JOB_INPUTS` rather than writing a second list of paths is the
+#: whole point: `drift()`, `tools/doctor.py` and `tools/test_gate.py` already
+#: enforce that this map matches what the code reads, so the staleness question
+#: and the gate question cannot come apart.
+#:
+#: `coverage.json` is written by `lib.gaps`, which is deliberately *not* a gated
+#: job and has no entry of its own. It ranks every gap in the record by how much
+#: light the unknown is worth, so it depends on the same geometry the shade model
+#: does, and `sunmodel` is the widest declared set. Pointing it at a declared
+#: job's set keeps it inside the agreement `doctor.py` checks; giving it a set of
+#: its own would put it outside.
+#:
+#: `design.json` is deliberately absent, and used to be here. Nothing generates
+#: it — `lib.design` writes it once with `--init` and thereafter only lints it —
+#: so there is no run that could stamp it, and "the design was linted against a
+#: site record that has since changed" is the question `lib.doubts --clear
+#: design` already answers, by going stale and naming the value that moved.
+ARTIFACTS = {"sun-hours.json": "sunmodel", "coverage.json": "sunmodel"}
+
+#: Leaf keys holding prose *about* a value rather than a value the model
+#: consumes. A digest that covers these is the mtime check's false positive with
+#: extra steps: correcting a note or a citation rewrites nothing a ray traces.
+#:
+#: The direction of error here is worth stating, because this repo has been bitten
+#: by it. A prose key holding a number a scalar should hold — `"note": "call it 6
+#: ft"` where `height_in` is absent — is excluded from the digest, so editing it
+#: goes unnoticed. That is a real hole, and the answer to it is that the number
+#: belongs in a scalar, which is a separate check. `provenance` is not listed
+#: because it is a `META_SECTIONS` entry and no job declares it.
+PROSE_LEAVES = {"note", "notes", "comment", "comments", "why", "description",
+                "detail", "source", "sources", "citation", "cite", "verify",
+                "verify_on_site", "narrative", "caveat", "reasoning",
+                "last_verified", "read_on", "provenance_note"}
+
+
+def input_leaves(site, job):
+    """Every leaf under the sections this job declares, minus the prose."""
+    out = {}
+
+    def walk(node, path, key):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, f"{path}.{k}", str(k))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}.{i}", key)
+        elif key not in PROSE_LEAVES:
+            out[path] = node
+
+    for section in sorted(declared(job)):
+        if section in (site or {}) and section not in META_SECTIONS:
+            walk(site[section], section, section)
+    return out
+
+
+#: How deep the recorded fingerprints go. A subtree, not a leaf.
+#:
+#: `FIX-STALENESS-DIGEST.txt` asked for a finding naming
+#: `obstructions.fences[3].height_in`, and this names `obstructions.fences`.
+#: The reason is size: this yard's shade model declares 833 leaves, and a
+#: fingerprint each is 18 KB written into a `sun-hours.json` that is 26 KB of
+#: numbers somebody reads. The digest would be most of the file. At this depth
+#: it is 51 entries and 2 KB, the finding names the subtree, and
+#: `python3 -m lib.inputs sunmodel` gets from there to the value.
+#:
+#: This costs nothing in *detection* — a leaf moving changes its subtree's
+#: fingerprint either way — only in how precisely the finding can point.
+STAMP_DEPTH = 2
+
+
+def _hash(value):
+    body = json.dumps(value, sort_keys=True, default=str)
+    return hashlib.sha256(body.encode()).hexdigest()[:12]
+
+
+def _subtrees(site, job):
+    """The job's declared leaves, bucketed by subtree and fingerprinted."""
+    buckets = {}
+    for path, value in sorted(input_leaves(site, job).items()):
+        buckets.setdefault(".".join(path.split(".")[:STAMP_DEPTH]),
+                           []).append((path, value))
+    return {key: _hash(members) for key, members in buckets.items()}
+
+
+def stamp(site, job):
+    """What a derived artifact should record about the inputs it was built from.
+
+    Same shape as the all-clear in `lib.doubts` — a fingerprint per path, plus
+    `census` so that an addition or a removal inside a subtree is noticed — for
+    the same reason: one digest over everything can only say *something* moved,
+    and the finding worth printing names the thing.
+    """
+    trees = _subtrees(site, job)
+    cens = census(site, job)
+    return {"job": job, "subtrees": trees, "census": cens,
+            "digest": _digest_of(trees, cens)}
+
+
+def _digest_of(trees, cens):
+    body = json.dumps([sorted(trees.items()), sorted(cens.items())],
+                      sort_keys=True, default=str)
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
+def moved(recorded, site, job=None):
+    """Which declared inputs have changed since an artifact recorded them.
+
+    Returns `None` when the artifact carries no stamp. That is a different
+    answer from "current" and has to read differently: the question cannot be
+    asked yet, rather than nothing having moved.
+    """
+    if not isinstance(recorded, dict) or not recorded.get("subtrees"):
+        return None
+    job = job or recorded.get("job")
+    now = _subtrees(site, job)
+    was = recorded["subtrees"]
+    cens = census(site, job)
+    return {"job": job,
+            "changed": sorted(k for k, v in now.items()
+                              if k in was and was[k] != v),
+            "added": sorted(set(now) - set(was)),
+            "removed": sorted(set(was) - set(now)),
+            "counted": sorted(k for k, n in cens.items()
+                              if (recorded.get("census") or {}).get(k, n) != n),
+            "current": recorded.get("digest") == _digest_of(now, cens)}
 
 
 def soft_inputs(site, job):

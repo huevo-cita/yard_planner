@@ -83,7 +83,13 @@ def ok(cond, label, detail=""):
 # the board visibly rather than by a decimal.
 SITE = {"yard": SLUG, "schema_version": 2,
         "address": {"street": "a street", "lat": 30.27, "lon": -97.70},
-        "zones": {"bed a": {"area_sqft": 100}},
+        # bed a is bare ground and takes the standard mulching depth. bed b has
+        # mulch on it already and states a top-off, and NOTHING IS PLANTED IN IT
+        # — which is the case d9 found: a bed that exists, is edged and is being
+        # weeded this month falls out of every quantity here, because the loop is
+        # scoped to the zones the design puts a plant in.
+        "zones": {"bed a": {"area_sqft": 100},
+                  "bed b": {"area_sqft": 60, "mulch_topoff_in": 1.0}},
         "climate": {}, "boundary": {}, "frame": {}, "features": {},
         "obstructions": {}, "provenance": {}}
 
@@ -144,12 +150,8 @@ SUPPLIERS = {
          "reviews": [{"platform": "google", "rating": 4.8, "count": 900,
                       "as_of": "2026-08-01", "url": "u", "via": "web search"}],
          "verified_open": {"as_of": "2026-08-01", "how": "site"},
-         # A members-only sale price, not a shelf price. It is a real number
-         # and belongs in the median, but anything resting on it has to say
-         # what has to be true first.
          "quotes": [{"item": "plant: Big muhly (1gal)", "usd": 16.0,
-                     "as_of": "2026-08-01",
-                     "conditional": "the $60 membership and a sale Friday"}]},
+                     "as_of": "2026-08-01"}]},
         # Five stars, eight people, two miles away. Must not reach the top tier.
         {"id": "tiny", "name": "Tiny Five Star", "categories": ["nursery"],
          "address": "tiny", "lat": 30.29, "lon": -97.72, "distance_mi": 2.0,
@@ -177,7 +179,14 @@ SUPPLIERS = {
                     "sales": [{"name": "Fall native sale",
                                "window": "2026-09-25/2026-10-25",
                                "member_preview": True, "discount_pct": 10}]},
-         "verified_open": {"as_of": "2026-08-01", "how": "site"}},
+         "verified_open": {"as_of": "2026-08-01", "how": "site"},
+         # A members-only sale price, and the cheapest number in the file. It
+         # is real, and it is not a price anybody can walk in and pay, so it
+         # must not set the figure the plan is built on — it has to arrive as
+         # the saving it is.
+         "quotes": [{"item": "plant: Big muhly (1gal)", "usd": 10.0,
+                     "as_of": "2026-08-01",
+                     "conditional": "the $60 membership and a sale Friday"}]},
         # Mediocre and closest of all. Distance must not save it.
         {"id": "mediocre", "name": "Near Mediocre", "categories": ["nursery"],
          "address": "med", "lat": 30.275, "lon": -97.705, "distance_mi": 0.5,
@@ -483,16 +492,39 @@ def check_ladder(sourcing, bom):
        "and the estimate says how many comparables it rests on", cls["basis"])
 
     # A sale price averaged into a median silently makes the whole budget
-    # assume the sale. It may still be the best evidence there is - it just has
-    # to arrive carrying its condition.
-    ok("membership" in two["basis"] and two.get("conditional"),
-       "a median resting on a members-only price says so in its basis",
-       two["basis"])
-    ok("membership" in cls["basis"] and cls.get("conditional"),
-       "and so does a class median resting on one", cls["basis"])
-    ok(not one.get("conditional") and "conditional" not in one["basis"],
+    # assume the sale. It is still the best news in the file - it just cannot
+    # be the figure anybody plans against.
+    ok(abs(two["usd"] - 15.0) < 0.01 and two["low"] == 14.0,
+       "a members-only price sets no planning figure, however cheap it is",
+       f"${two['usd']} over {two['low']}-{two['high']}, with $10 on the board")
+    up = two.get("upside")
+    ok(up and abs(up["usd"] - 10.0) < 0.01 and abs(up["saves_usd"] - 5.0) < 0.01,
+       "it comes back beside the retail figure as what the sale would save",
+       up and f"${up['usd']}, saving ${up['saves_usd']}")
+    ok(up and any("membership" in c for c in up["conditional"]),
+       "and it names what has to be true first", up and up["conditional"])
+    ok(abs(cls["usd"] - 15.0) < 0.01 and cls.get("upside"),
+       "a class median is retail too, and carries the class's sale price",
+       f"${cls['usd']}, upside ${(cls.get('upside') or {}).get('usd')}")
+    ok(not one.get("upside") and "conditional" not in one["basis"],
        "while an ordinary shelf price is not made to look conditional",
        one["basis"])
+
+    # A sale price dearer than the shelf is not an upside, and saying so would
+    # be worse than silence: it invites a $60 membership to save nothing.
+    dearer = {"radius": {"local_mi": 30.0, "metro_mi": 60.0}, "suppliers": [
+        {"id": "shelf", "name": "Shelf", "distance_mi": 1.0,
+         "quotes": [{"item": "plant: Big muhly (1gal)", "usd": 12.0,
+                     "as_of": "2026-08-01"}]},
+        {"id": "club", "name": "Club", "distance_mi": 1.0,
+         "quotes": [{"item": "plant: Big muhly (1gal)", "usd": 20.0,
+                     "as_of": "2026-08-01", "conditional": "a membership"}]}]}
+    dear = sourcing.price_for("plant: Big muhly (1gal)", "each", dearer,
+                              defaults=bom.PRICES,
+                              plant_defaults=bom.PLANT_PRICES)
+    ok(not dear.get("upside"),
+       "a conditional price above the shelf price is no upside at all",
+       f"${dear['usd']} retail against $20 on the sale card")
 
     # The class median has to be local. A basket of mail-order prices is a
     # different claim, and 13.99 from mailco is not evidence about Austin.
@@ -588,6 +620,29 @@ def check_bill(bom, sourcing):
        "a hardscape line the design costs at nothing costs nothing",
        f"${toads.get('usd')} up to ${toads.get('high_usd')}: "
        f"{toads.get('pricing', {}).get('basis')}")
+
+    # A top-off depth per bed, which is the whole of d9. The failure it replaces
+    # was not an arithmetic error: the derived figure was correct for mulching
+    # 160 sq ft of bare ground and the beds were not bare, so it was answering a
+    # question nobody had asked and being added to the owner's own nine bags on
+    # the way to the shopping list.
+    why = " ".join(need["mulch"]["why"])
+    ok(round(need["mulch"]["quantity"], 2)
+       == round(bom.mulch_volume(100, 3.0) + bom.mulch_volume(60, 1.0), 2),
+       "a bed's own top-off depth is used, and the default where none is given",
+       f"{need['mulch']['quantity']:.2f} cu ft: {why}")
+    ok("bed b topped off at 1.0 in" in why and "bed a at 3.0 in" in why,
+       "and the line says which beds were topped off and which were mulched",
+       why)
+    ok("bed b" in why and "bed b" not in " ".join(need["compost"]["why"]),
+       "an unplanted bed that asks for mulch gets mulch and not compost",
+       f"compost: {' '.join(need['compost']['why'])}")
+    ok(round(need["compost"]["quantity"], 2)
+       == round(bom.mulch_volume(100, 2.0), 2),
+       "so the compost figure is the planted beds alone, unmoved by any of this",
+       f"{need['compost']['quantity']:.2f} cu ft")
+    ok("mulch" in billed,
+       "and the mulch still reaches the bill after all of that", sorted(billed))
 
     gaps = quiet(bom.price_gaps, SLUG, bom=bill)
     ok(gaps["gaps"] and gaps["gaps"] == sorted(
