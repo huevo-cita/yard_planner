@@ -975,6 +975,128 @@ def test_a_bed_a_limb_reaches_counts_as_reached():
           "one tree worth going out to look at is the one not listed")
 
 
+def test_a_reading_history_cannot_drift_from_its_value():
+    """`readings` is only worth having if it is checked against the number.
+
+    Four crown radii on cloverleaf-austin had been paced twice and reproduced,
+    and `site.json` recorded all four as a single reading on one date. The fact
+    of confirmation - the strongest evidence on that lot - lived in the doubt
+    board and the change log where no model and no fingerprint could reach it.
+
+    The failure mode of fixing that is a reading history that becomes decoration:
+    somebody corrects the crown radius, the `readings` list still says two people
+    measured the old figure, and the record now corroborates a number nobody
+    took. So the check is the load-bearing half of the feature, not the store.
+    """
+    site = site_with()
+    path = "features.trees.0.crown_radius"
+    r = site["features"]["trees"][0]["crown_radius"]
+    siteschema.set_provenance(
+        site, path, "measured", date="2026-09-04",
+        readings=[{"date": "2026-09-04", "value": r, "how": "re-walked"},
+                  {"date": "2026-08-30", "value": r, "how": "paced"}])
+
+    entry = siteschema.provenance_of(site, path)
+    check([x["date"] for x in entry["readings"]] == ["2026-08-30", "2026-09-04"],
+          "readings are stored oldest first however they were passed in",
+          entry["readings"])
+
+    c = siteschema.confirmations(entry)
+    check(c["readings"] == 2 and c["reproduced"] is True
+          and c["last"] == "2026-09-04",
+          "two agreeing readings report as reproduced, dated by the later one", c)
+    check(dict(siteschema.confirmed_paths(site)).get(path),
+          "and the path is listed as read more than once")
+    check(not [e for e in siteschema.validate(site)[0] if path in e],
+          "a history that agrees with its value raises nothing",
+          siteschema.validate(site)[0])
+
+    moved = site_with()
+    moved["features"]["trees"][0]["crown_radius"] = r + 24.0
+    moved["provenance"] = dict(site["provenance"])
+    errs = siteschema.validate(moved)[0]
+    check(any(path in e and "nobody took" in e for e in errs),
+          "correcting the value behind a reading history is an ERROR, not a warning",
+          errs)
+
+    # The distinction that carries the weight. Two readings that disagree are a
+    # correction, which is more interesting than a confirmation and must never be
+    # reported as one - t11's crown was 9 ft out on its second reading.
+    disagree = site_with()
+    siteschema.set_provenance(
+        disagree, path, "measured", date="2026-09-04",
+        readings=[{"date": "2026-08-30", "value": r + 108.0, "how": "eyeballed"},
+                  {"date": "2026-09-04", "value": r, "how": "taped"}])
+    c = siteschema.confirmations(siteschema.provenance_of(disagree, path))
+    check(c["readings"] == 2 and c["reproduced"] is False,
+          "two readings that disagree are two readings and NOT a confirmation", c)
+    check(not [e for e in siteschema.validate(disagree)[0] if path in e],
+          "and the value still matches the latest of them, so nothing is wrong",
+          siteschema.validate(disagree)[0])
+
+    stale = site_with()
+    siteschema.set_provenance(
+        stale, path, "measured", date="2026-08-30",
+        readings=[{"date": "2026-08-30", "value": r},
+                  {"date": "2026-09-04", "value": r}])
+    check(any(path in w and "last time somebody looked" in w
+              for w in siteschema.validate(stale)[1]),
+          "an entry dated before its own newest reading is flagged",
+          siteschema.validate(stale)[1])
+
+    try:
+        siteschema.set_provenance(site, path, "measured",
+                                  readings=[{"value": r, "how": "paced"}])
+        check(False, "a reading with no date is refused")
+    except ValueError as exc:
+        check("needs at least a date" in str(exc),
+              "a reading with no date is refused", str(exc))
+    try:
+        siteschema.set_provenance(site, path, "measured",
+                                  readings=[{"date": "2026-09-04", "vaule": r}])
+        check(False, "and so is a misspelt field, rather than silently dropped")
+    except ValueError as exc:
+        check("unknown reading field" in str(exc),
+              "and so is a misspelt field, rather than silently dropped", str(exc))
+
+
+def test_the_real_yards_confirmations_are_recorded():
+    """cloverleaf-austin's four re-walked crowns, on the real record."""
+    site = yards.load_site("cloverleaf-austin")
+    if not site:
+        return
+    twice = dict(siteschema.confirmed_paths(site))
+    want = {f"features.trees.{i}.crown_radius": tid
+            for i, tid in ((1, "t02"), (2, "t03"), (3, "t04"), (11, "t12"))}
+    missing = [tid for p, tid in want.items() if p not in twice]
+    check(not missing,
+          "the four crowns that were re-walked say so in site.json",
+          f"{missing} still read as a single reading, so nothing but prose "
+          f"knows they were confirmed")
+    check(all(twice[p]["reproduced"] for p in want if p in twice),
+          "and all four are recorded as having reproduced")
+    fused = [p for p, tid in want.items()
+             if tid in ("t02", "t03") and p in twice]
+    check(all(twice[p]["caveats"] for p in fused),
+          "with the fused-canopy caveat on the pecan pair and not overstated",
+          "t02/t03 reproduced as a COMBINED spread; their individual 17.5 ft "
+          "radii were fitted to it, so an uncaveated confirmation claims more "
+          "than the walk supports")
+    check(not any(twice[p]["caveats"] for p in want
+                  if p in twice and p not in fused),
+          "and no caveat on the two that were read as single crowns")
+    # The one that failed belongs here as much as the four that passed. Four out
+    # of four reproducing is only worth reading beside a re-read that did not,
+    # and t11 moved by 9 ft. Left out, the register says the walk confirms
+    # everything it looks at.
+    t11 = twice.get("features.trees.10.crown_radius")
+    check(t11 is not None and t11["reproduced"] is False,
+          "and the one crown the tape caught out is recorded as a correction",
+          "t11 went from 312 in to 204 in on the re-walk and the record says so "
+          "only in prose, so `confirmed_paths` reports 4 of 4 reproducing and "
+          "nothing can see the one that did not")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -1012,9 +1134,14 @@ def main():
         test_the_verifier_probes_the_limb()
         test_the_maps_draw_the_limb_they_model()
         test_a_bed_a_limb_reaches_counts_as_reached()
+        print("\nread once, or read twice")
+        test_a_reading_history_cannot_drift_from_its_value()
     finally:
         yards.GARDEN_ROOT = was
         shutil.rmtree(root, ignore_errors=True)
+
+    # Outside the temporary root, because this one reads the real record.
+    test_the_real_yards_confirmations_are_recorded()
 
     print()
     if FAILURES:

@@ -115,7 +115,8 @@ def provenance_of(site, path):
     return site.get("provenance", {}).get(path)
 
 
-def set_provenance(site, path, source, date=None, note=None, uncertainty=None):
+def set_provenance(site, path, source, date=None, note=None, uncertainty=None,
+                   readings=None):
     if source not in SOURCES:
         raise ValueError(f"unknown provenance source {source!r}; expected one of "
                          + ", ".join(SOURCES))
@@ -126,8 +127,71 @@ def set_provenance(site, path, source, date=None, note=None, uncertainty=None):
         entry["note"] = note
     if uncertainty is not None:
         entry["uncertainty"] = uncertainty
+    if readings:
+        entry["readings"] = normalize_readings(readings)
     site.setdefault("provenance", {})[path] = entry
     return entry
+
+
+# ---------------------------------------------------- read once, or read twice
+#
+# `source` says what KIND of act produced a number. It does not say how many
+# times that act happened, and those are different facts with different weight:
+# a crown radius paced once and a crown radius paced twice by different means on
+# different days are both `measured`, and only the second one has survived
+# anything. On one yard the four figures that had reproduced were the strongest
+# evidence in the record and lived entirely in the doubt board and the change
+# log, where no model and no fingerprint could see them.
+#
+# So a provenance entry may carry `readings`: one dict per time somebody went and
+# looked, each with a `date`, the `value` they got, and `how` they got it. The
+# entry's own `date` and the value at the path stay authoritative — `readings` is
+# the history behind them, and `validate` checks the two still agree, which is
+# what stops this becoming decoration.
+
+READING_KEYS = ("date", "value", "how", "caveat")
+
+
+def normalize_readings(readings):
+    out = []
+    for r in readings:
+        if not isinstance(r, dict) or "date" not in r:
+            raise ValueError(f"a reading needs at least a date: {r!r}")
+        bad = set(r) - set(READING_KEYS)
+        if bad:
+            raise ValueError(f"unknown reading field(s) {sorted(bad)}; expected "
+                             + ", ".join(READING_KEYS))
+        out.append({k: r[k] for k in READING_KEYS if k in r})
+    return sorted(out, key=lambda r: r["date"])
+
+
+def confirmations(entry, tol=1e-6):
+    """How many times this value has been read, and whether it reproduced.
+
+    `reproduced` is deliberately strict: every reading carrying a value has to
+    agree with the latest one. Two readings that DISAGREE are still two
+    readings, and that is a correction rather than a confirmation - which is the
+    more interesting of the two, so it must not be reported as agreement.
+    """
+    reads = entry.get("readings") or []
+    if not reads:
+        return None
+    vals = [r["value"] for r in reads if r.get("value") is not None]
+    same = all(abs(v - vals[-1]) <= tol for v in vals) if len(vals) > 1 else None
+    return {"readings": len(reads),
+            "first": reads[0]["date"], "last": reads[-1]["date"],
+            "reproduced": same,
+            "caveats": [r["caveat"] for r in reads if r.get("caveat")]}
+
+
+def confirmed_paths(site):
+    """Paths read more than once, and what came of it. Newest re-read first."""
+    out = []
+    for p, e in (site.get("provenance") or {}).items():
+        c = confirmations(e)
+        if c and c["readings"] > 1:
+            out.append((p, c))
+    return sorted(out, key=lambda r: (r[1]["last"], r[0]), reverse=True)
 
 
 def assumed_paths(site):
@@ -441,9 +505,33 @@ def validate(site):
                 f"round, which is the circle crown_radius already draws. "
                 f"Either the arcs are wrong or the plan is not needed.")
 
-    for p in site.get("provenance", {}):
-        if site["provenance"][p].get("source") not in SOURCES:
+    for p, e in site.get("provenance", {}).items():
+        if e.get("source") not in SOURCES:
             warns.append(f"provenance {p} has an unrecognised source")
+        # A reading history that has drifted from the value it is history for is
+        # worse than no history: it reads as corroboration for a number nobody
+        # took. So the two are checked against each other every time.
+        try:
+            reads = normalize_readings(e.get("readings") or [])
+        except ValueError as exc:
+            errs.append(f"provenance {p}.readings: {exc}")
+            continue
+        if not reads:
+            continue
+        latest = reads[-1]
+        held = get_path(site, p)
+        if latest.get("value") is not None and isinstance(held, (int, float)):
+            if abs(latest["value"] - held) > 1e-6:
+                errs.append(
+                    f"provenance {p} says its latest reading on {latest['date']} "
+                    f"was {latest['value']}, and the value there is {held}. One of "
+                    f"them is stale, and a reading history that disagrees with "
+                    f"its own value is corroboration for a number nobody took.")
+        if e.get("date") and e["date"] < latest["date"]:
+            warns.append(
+                f"provenance {p} is dated {e['date']} but carries a reading from "
+                f"{latest['date']}. The entry date should be the last time "
+                f"somebody looked.")
 
     for i, fid, h, ratio in roofs_as_walls(site):
         height = f"{h:.0f} in" if h else "its stated height"
@@ -648,6 +736,18 @@ def main():
           f"{len(site.get('zones') or {})} zones, "
           f"{len(site.get('provenance') or {})} provenance entries, "
           f"{measured_fraction(site) * 100:.0f}% measured")
+    twice = confirmed_paths(site)
+    if twice:
+        agreed = [p for p, c in twice if c["reproduced"]]
+        print(f"  {len(twice)} value{'s' if len(twice) > 1 else ''} read more "
+              f"than once, {len(agreed)} reproducing")
+        for p, c in twice:
+            verdict = ("reproduced" if c["reproduced"] else "CORRECTED"
+                       if c["reproduced"] is False else "re-read")
+            print(f"    {p}  {c['readings']}x, {c['first']} to {c['last']}, "
+                  f"{verdict}")
+            for cav in c["caveats"]:
+                print(f"      caveat: {cav}")
     for e in errs:
         print("  ERROR   " + e)
     for w in warns:

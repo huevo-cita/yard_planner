@@ -589,11 +589,20 @@ def audit(slug, quick=False):
 
     known = {}
     if site:
+        # Read twice is a different and stronger fact than measured, so it is
+        # counted separately rather than folded into measured_fraction, which
+        # cannot tell the two apart.
+        twice = siteschema.confirmed_paths(site)
         known["site"] = {
             "measured_fraction": round(siteschema.measured_fraction(site), 3),
             "provenance_entries": len(site.get("provenance", {})),
             "trees": len(siteschema.trees(site)),
             "zones": len(site.get("zones") or {}),
+            "read_more_than_once": len(twice),
+            "reproduced": sum(1 for _, c in twice if c["reproduced"]),
+            "corrected_on_re_read": sum(1 for _, c in twice
+                                        if c["reproduced"] is False),
+            "confirmed_paths": {p: c for p, c in twice},
         }
     if cond:
         known["conditions"] = conditions.soil_summary(cond)
@@ -630,6 +639,10 @@ def report(coverage, limit=12):
     if site:
         print(f"  {site['measured_fraction'] * 100:.0f}% of recorded site values "
               f"were measured rather than assumed")
+        if site.get("read_more_than_once"):
+            print(f"  {site['read_more_than_once']} of them read a second time: "
+                  f"{site['reproduced']} reproduced, "
+                  f"{site['corrected_on_re_read']} corrected")
     soil = (coverage.get("known") or {}).get("conditions")
     if soil:
         print(f"  soil confidence: {soil['confidence']}"
