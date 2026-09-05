@@ -55,6 +55,18 @@ A third optional field decides whether the plant is judged on winter light:
                     because it is a judgement about a plant rather than a
                     measurement of the yard.
 
+A fourth says what was done to the ground under one planting:
+
+    drainage_amendment  a mound, a raised pocket, a gravel bed — the position's
+                    own answer to ground that drains too slowly for the plant
+                    standing in it. It is a fact about THIS planting and not
+                    about the plant, which is the whole point: the same
+                    rosemary is a different proposition on a grit mound and
+                    flush in clay, and a checker that cannot tell them apart
+                    refuses a bed whose plan already answers it. It carries
+                    `source`, and an amendment nobody has scheduled is worth
+                    less than one somebody has.
+
 What the objections mean
 ------------------------
     blocking    the plant will not survive, or the design contradicts a `must`.
@@ -465,13 +477,80 @@ def check_soil(plant, cond, site=None):
     drain = (soil.get("drainage") or "").lower()
     if plant.get("soil_drainage") == "sharp" and \
             ("slow" in drain or "poor" in drain):
-        out.append(_obj("blocking", plant["name"],
-                        f"needs sharp drainage and the soil drains {drain}. This "
-                        f"is the classic way to kill rosemary and lavender, and "
-                        f"it takes two years so nobody connects it to the soil",
-                        "plant it on a mound or in a raised pocket with grit, "
-                        "with the crown set high"))
+        out += _sharp_drainage(plant, drain)
     return out
+
+
+def drainage_amendment(plant):
+    """What was done to the ground under this planting, where anything was.
+
+    A dict or None. Read `describe` for the shape of it.
+    """
+    a = plant.get("drainage_amendment")
+    return a if isinstance(a, dict) and a.get("describe") else None
+
+
+def _sharp_drainage(plant, drain):
+    """A sharp-drainage plant in slow ground, and whether the plan answers it.
+
+    Without this the objection is unanswerable, which is a specific and bad
+    kind of wrong: the fix it printed was *plant it on a mound with grit*, and
+    on this yard that mound was already designed, dated, funded and on the
+    shopping list before the objection was ever raised. So the check refused
+    nine plants and then recommended the thing the plan already said to do, on
+    every run, forever. An objection that cannot be satisfied by doing the
+    right thing is one people learn to scroll past, and the next real one goes
+    with it.
+
+    What it deliberately does NOT do is decide that a mound is enough. Nobody
+    knows that — the drainage reading here is `assumed` and the percolation
+    test has been declined twice. The amendment moves the objection from a
+    claim about the SOIL, which the plan cannot change, to a claim about a
+    TASK, which can be checked, slip, or be dropped. That is a better place for
+    the risk to sit and it is not the same as the risk going away, so the note
+    says what the plant is depending on and where to find it.
+
+    Three levels, and the difference between them is evidence and not severity:
+
+      blocking   nothing recorded. Unchanged, and this is still the right
+                 answer where the ground is slow and nobody has said otherwise.
+      serious    an amendment asserted with no `source`. Weaker than nothing
+                 recorded would be honest about, because it reads like an
+                 answer while resting on nobody, so it is called out rather
+                 than believed.
+      note       an amendment with a source. The design is answered; what is
+                 left is doing it.
+    """
+    a = drainage_amendment(plant)
+    if not a:
+        return [_obj("blocking", plant["name"],
+                     f"needs sharp drainage and the soil drains {drain}. This "
+                     f"is the classic way to kill rosemary and lavender, and "
+                     f"it takes two years so nobody connects it to the soil",
+                     "plant it on a mound or in a raised pocket with grit, "
+                     "with the crown set high, and record it as a "
+                     "`drainage_amendment` on the planting so this check can "
+                     "see it")]
+    src = [s for s in (a.get("source") or []) if str(s).strip()]
+    if not src:
+        return [_obj("serious", plant["name"],
+                     f"needs sharp drainage, the soil drains {drain}, and the "
+                     f"planting claims {a['describe']} — but nothing says "
+                     f"where that is written down, so there is no way to tell "
+                     f"whether it is a plan or a hope. An amendment nobody has "
+                     f"scheduled is not one",
+                     "add `source` to the amendment pointing at the task or "
+                     "plan line that builds it, or drop the claim and let the "
+                     "drainage objection stand")]
+    return [_obj("note", plant["name"],
+                 f"needs sharp drainage and the soil drains {drain}, and it is "
+                 f"planted on {a['describe']} — {', '.join(str(s) for s in src)}"
+                 + (f". {a['why']}" if a.get("why") else "")
+                 + f". The soil objection is answered by the planting position "
+                   f"rather than by the ground, so this plant lives or dies on "
+                   f"that being built as written",
+                 f"if that step is dropped or skipped on the day, this plant "
+                 f"goes into the ground it was refused for")]
 
 
 def footprint(plant):
