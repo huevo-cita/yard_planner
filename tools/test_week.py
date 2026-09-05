@@ -15,6 +15,11 @@ disagreeing. The properties worth proving, each easy to pass by accident:
   the digest fires     editing a source section makes the render refuse, naming
                        that section. This is the layer that catches a task
                        nobody ever transcribed, which comparing dates cannot
+  source means source  a section named under `source` is hashed whatever file it
+                       is in, and one named under `reference` or `technique` is
+                       not. Both halves matter: the first is the hole the g05
+                       gutter programme took its dates through, and the second
+                       is what keeps the check from firing on a correct record
   the date check fires moving a date the record cites makes the render refuse,
                        naming the task. Separate from the digest because a
                        digest says only that something moved
@@ -87,6 +92,25 @@ PLAN = """# Scratch — the plan
 - Weekday evening, 30 min — set out the toad abodes.
 """
 
+# Not a plan document, and numbered the way a long reference document is: a
+# parent section with dotted subsections and no `.` after the number. The whole
+# g05 gutter programme came out of a file shaped exactly like this, cited it
+# under `source`, and got no digest because the filename was not on a whitelist.
+RESEARCH = """# Scratch — research
+
+## 4. Slope, and why it matters
+
+Body of section four.
+
+### 4.1 Read this before buying anything
+
+Body of section four point one.
+
+### 4.2 The other one
+
+Body of section four point two.
+"""
+
 TASKS = {
     "yard": SLUG,
     "schema_version": 1,
@@ -118,6 +142,8 @@ def make_yard(root):
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "PLAN.md"), "w") as f:
         f.write(PLAN)
+    with open(os.path.join(d, "research-scratch.md"), "w") as f:
+        f.write(RESEARCH)
     with open(os.path.join(d, "tasks.json"), "w") as f:
         json.dump(TASKS, f, indent=2)
     return d
@@ -184,6 +210,93 @@ def check_uncited(week, yard):
     data = week.load(SLUG)
     data["tasks"][0]["source"] = ["PLAN.md#1"]
     week.save(SLUG, data)
+
+
+def check_source_is_hashed_whatever_the_file(week, yard):
+    """`source` means extracted from, so it is hashed even in a research file.
+
+    This is the hole the g05 gutter walked through. Seven tasks took their
+    content from `research-guttering.md`, named it under `source`, and got no
+    digest, because the check only asked about a fixed list of plan documents.
+    Section 5 of that file then turned out to rest on a driveway at the wrong
+    corner of the house and nothing anywhere noticed.
+    """
+    data = week.load(SLUG)
+    data["tasks"][0]["source"].append("research-scratch.md#4.1")
+    week.save(SLUG, data)
+    found = week.check(SLUG)
+    ok(subjects(found, "uncited") == ["research-scratch.md#4.1"],
+       "a research section cited under `source` is reported as unhashed",
+       [f["message"] for f in found])
+
+    # And the escape hatch works in one command rather than a hand edit.
+    week.restamp(SLUG)
+    ok("research-scratch.md#4.1" in week.load(SLUG).get("sources", {}),
+       "--restamp adopts a cited section that carried no digest")
+    ok(not week.check(SLUG), "and the record is clean once it has",
+       [f["message"] for f in week.check(SLUG)])
+
+    # The point of hashing it: a change to it now surfaces.
+    p = os.path.join(yard, "research-scratch.md")
+    with open(p) as f:
+        before = f.read()
+    with open(p, "w") as f:
+        f.write(before.replace("Body of section four point one.",
+                               "Actually the opposite, and it was never true."))
+    found = week.check(SLUG)
+    ok("research-scratch.md#4.1" in subjects(found, "stale"),
+       "editing that research section makes the digest stale, naming it",
+       [f["message"] for f in found])
+    with open(p, "w") as f:
+        f.write(before)
+
+    data = week.load(SLUG)
+    data["tasks"][0]["source"] = ["PLAN.md#1"]
+    week.save(SLUG, data)
+
+
+def check_reference_is_not_hashed(week, yard):
+    """`reference` and `technique` are links, not provenance, and stay unhashed.
+
+    The other half of the rule, and the one that keeps it usable. If every
+    document a task points at had to be stamped, a task linking three technique
+    notes would make the check fire on a correct record, which is how a check
+    gets switched off.
+    """
+    data = week.load(SLUG)
+    data["sources"].pop("research-scratch.md#4.1", None)
+    data["tasks"][0]["reference"] = "research-scratch.md#4.2"
+    data["tasks"][0]["technique"] = "research-scratch.md#4"
+    week.save(SLUG, data)
+    found = week.check(SLUG)
+    ok(not found, "a research file under `reference` or `technique` is not hashed",
+       [f["message"] for f in found])
+    data = week.load(SLUG)
+    data["tasks"][0].pop("reference"), data["tasks"][0].pop("technique")
+    week.save(SLUG, data)
+
+
+def check_dotted_anchor(week, yard):
+    """`#4.1` finds `### 4.1 ...`, and `#4` does not swallow its own children.
+
+    A reference document numbers subsections `4.1` and writes no `.` after the
+    number. Before this the anchor fell through to a slug match, `4.1` was not a
+    substring of `41-read-this-before-buying-anything`, and the reference
+    resolved to nothing — so a task could cite a section that could never be
+    hashed and the failure looked like a typo.
+    """
+    sec, err = week.resolve(yard, "research-scratch.md#4.1")
+    ok(sec is not None and sec["text"].startswith("4.1 Read"),
+       "a dotted section anchor resolves", err or (sec or {}).get("text"))
+
+    sec, err = week.resolve(yard, "research-scratch.md#4")
+    ok(sec is not None and sec["text"].startswith("4. Slope"),
+       "the parent anchor still resolves to the parent, not to a child",
+       err or (sec or {}).get("text"))
+
+    sec, err = week.resolve(yard, "research-scratch.md#4.9")
+    ok(sec is None, "a dotted anchor that names no heading is an error, not a guess",
+       (sec or {}).get("text"))
 
 
 def check_digest(week, yard):
@@ -321,6 +434,9 @@ def main():
         print("\n the digest")
         check_unstamped(week, yard)
         check_uncited(week, yard)
+        check_source_is_hashed_whatever_the_file(week, yard)
+        check_reference_is_not_hashed(week, yard)
+        check_dotted_anchor(week, yard)
         check_digest(week, yard)
         print("\n the dates")
         check_date(week, yard)

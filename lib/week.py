@@ -63,15 +63,27 @@ DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
-#: Documents whose dated sections tasks.json is allowed to be extracted from.
-#: Anything else cited on a task is reference material and is linked, not hashed.
+#: An anchor that names a numbered section rather than a slug: `4`, `4.1`, `3.9a`.
+SECTION_NO = re.compile(r"^\d+(?:\.\d+)*[a-z]?$")
+
+#: A task's `source` is where it was extracted from, and everything named there
+#: has to carry a digest. `reference` and `technique` are the link fields, and
+#: they are not hashed.
 #:
-#: A document that states a date belongs here. `ANT-PLAN.md` did not, and it
-#: carries a dated table of seven jobs; one of them was scheduled for a Saturday
-#: that no calendar in the yard had ever heard of, because nothing hashed the
-#: section and no task cited it.
-SOURCE_DOCS = ("PLAN.md", "SOWING-CALENDAR.md", "SOURCING.md", "SCHEDULE.md",
-               "ANT-PLAN.md")
+#: This used to be a whitelist of plan documents, on the reading that anything
+#: else was reference material. Two files walked through the gap it left.
+#: `ANT-PLAN.md` carried a dated table of seven jobs, one of them on a Saturday
+#: no calendar in the yard had heard of, and was added by name. Then the whole
+#: g05 gutter programme took its content from `research-guttering.md`, cited it
+#: under `source`, and got no digest because the name was not on the list — and
+#: when the document's section 5 turned out to rest on a driveway that is at the
+#: other corner of the house, nothing anywhere noticed that seven tasks were
+#: still running off it.
+#:
+#: So the rule is the schema's own distinction rather than a list of filenames:
+#: a document a task says it came from is a source, and a source is hashed. The
+#: cost is that a research file cited under `source` now has to be stamped, which
+#: is the work the two failures above were the price of skipping.
 
 
 # ------------------------------------------------------------------ the record
@@ -130,9 +142,14 @@ def sections(path):
 def resolve(root, ref):
     """A `FILE.md#anchor` reference to the one section it names.
 
-    A numeric anchor matches a heading numbered that way — `#2` is `## 2.
-    Weekend by weekend`. Anything else matches on the heading's slug containing
-    it, which keeps the reference readable rather than a forty-character slug.
+    A section-number anchor matches a heading numbered that way — `#2` is `## 2.
+    Weekend by weekend`, and `#4.1` is `### 4.1 Read this table`. The number may
+    be dotted, because a long reference document numbers its subsections that
+    way, and the `.` or `)` after it is optional, because most of them do not
+    write one. `#4` still does not match `4.1`: the separator after the anchor
+    has to be whitespace, so a parent number cannot swallow its own children.
+    Anything else matches on the heading's slug containing it, which keeps the
+    reference readable rather than a forty-character slug.
     Returns (section, error); exactly one of them is None.
     """
     if "#" not in ref:
@@ -142,8 +159,9 @@ def resolve(root, ref):
     if not os.path.exists(path):
         return None, f"{name} does not exist"
     secs = sections(path)
-    if anchor.isdigit():
-        hits = [s for s in secs if re.match(rf"^{anchor}[.)]\s", s["text"])]
+    if SECTION_NO.match(anchor):
+        pattern = rf"^{re.escape(anchor)}[.)]?\s"
+        hits = [s for s in secs if re.match(pattern, s["text"])]
     else:
         hits = [s for s in secs if anchor in s["slug"]]
     if not hits:
@@ -233,16 +251,12 @@ def check(slug):
 
     # Every section a task or a purchase leans on has to be one of the sections
     # under a digest, or a change to it goes unnoticed by the layer above.
-    cited = set()
-    for t in data.get("tasks", []):
-        cited.update(t.get("source", []))
-    for b in data.get("shopping", []):
-        cited.update(b.get("source", []))
-    for ref in sorted(cited - set(declared)):
-        if ref.split("#", 1)[0] in SOURCE_DOCS:
-            add("uncited", ref,
-                f"{pretty(ref)} is cited but carries no digest, so a change to "
-                f"it would go unnoticed. Add it to `sources` and `--restamp`")
+    for ref in sorted(cited_sources(data) - set(declared)):
+        add("uncited", ref,
+            f"{pretty(ref)} is cited as a source but carries no digest, so a "
+            f"change to it would go unnoticed. Add it to `sources` and "
+            f"`--restamp`, or move it to `reference` if the task did not "
+            f"actually come from it")
 
     for t in data.get("tasks", []):
         if t.get("date_inferred"):
@@ -445,10 +459,35 @@ def stamp(findings):
     return "; ".join(parts)
 
 
+def cited_sources(data):
+    """Every section a task or a purchase says it was extracted from."""
+    cited = set()
+    for t in data.get("tasks", []):
+        cited.update(t.get("source", []))
+    for b in data.get("shopping", []):
+        cited.update(b.get("source", []))
+    return cited
+
+
 def restamp(slug):
+    """Stamp every declared source, adopting any a task cites and none declares.
+
+    Adopting rather than only stamping is what makes the `uncited` finding
+    actionable in one command. It is safe in the direction that matters: a ref
+    that appears here is one a task already claims to have come from, and the
+    alternative to hashing it is the status quo, which is not hashing it.
+    """
     data = load(slug)
     root = yards.yard_dir(slug)
     today = datetime.date.today().isoformat()
+    declared = data.setdefault("sources", {})
+    adopted = sorted(cited_sources(data) - set(declared))
+    for ref in adopted:
+        declared[ref] = {}
+    if adopted:
+        print(f"  adopted {len(adopted)} cited section"
+              f"{'s' if len(adopted) > 1 else ''} that carried no digest: "
+              + ", ".join(pretty(r) for r in adopted))
     changed = []
     for ref, rec in data.get("sources", {}).items():
         sec, err = resolve(root, ref)
