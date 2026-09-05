@@ -551,14 +551,20 @@ def validate(site):
     for label, key, where, frac in enclosed_zones(site):
         msg = (f"zone {label!r} (zones.{key}) has {frac:.0%} of its footprint "
                f"inside {where}, which is opaque from grade up. That ground is "
-               f"indoors: it cannot be planted, it reads as permanent shade, "
-               f"and it pulls the zone's mean down for a reason that has "
-               f"nothing to do with light. Correct the zone rectangle or the "
+               f"indoors and cannot be planted. It does NOT drag the mean down: "
+               f"sunmodel masks the wall footprint out of the sample, so the "
+               f"average is taken over the {1 - frac:.0%} that is outdoors and "
+               f"carries no permanent-shade cells. What it does mean is that "
+               f"the mean speaks for less ground than the rectangle claims, and "
+               f"that the rectangle is probably misplaced — so the "
+               f"{1 - frac:.0%} being sampled may sit offset from the bed "
+               f"somebody plants. Correct the zone rectangle or the "
                f"obstruction — a bed recorded square against a wall that runs "
                f"at an angle always overlaps a little.")
         if frac >= 0.5:
-            errs.append(msg + " At this fraction the zone is mostly indoors "
-                              "and its average means nothing.")
+            errs.append(msg + " At this fraction most of the named footprint is "
+                              "never sampled and the average speaks for a "
+                              "minority of the bed.")
         else:
             warns.append(msg)
 
@@ -657,9 +663,14 @@ def enclosed_zones(site, sample=11):
 
     A bed modelled as indoors is always a bug, whatever put it there — a roof
     outline entered as a wall, a bed rectangle recorded square against a wall
-    that runs at an angle, a neighbouring footprint traced over the line. It
-    reads as near-permanent shade, which is true and useless, and it drags the
-    zone's mean down without ever looking like an error.
+    that runs at an angle, a neighbouring footprint traced over the line.
+
+    What the bug costs is narrower than it looks, and saying so is the point:
+    sunmodel._built_on masks the wall footprint out of the sampled grid, so the
+    indoor cells never reach a zone average and the mean is not contaminated by
+    permanent shade. The cost is that the mean is taken over a smaller and
+    probably offset patch than the rectangle names — which is worth reporting,
+    and is not the same finding as "your bed reads as a cupboard".
 
     Returns (label, key, obstruction label, fraction) worst-first, naming only
     the worst offender per zone so one buried bed does not report five times.
