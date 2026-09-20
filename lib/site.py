@@ -113,6 +113,15 @@ def _hero_week(tasks, w, target, target_note):
     the build cannot know. The distance to the target is counted in weeks
     rather than in days for the same reason: a week's worth of prose is true
     for that whole week.
+
+    Past the target date the plan stops planning, but it does not stop holding
+    work. So "beyond" alone does not make a week blank, and the emptiness the
+    spine measured is what picks the sentence. Reading "beyond" as "blank" made
+    this page deny jobs that `WEEK.html` went on to list.
+
+    The job count is the sum the week page and the spine both use. A window
+    task sits outside the day grid, so a count taken off the grid alone is
+    short, and three screens that count differently give three answers.
     """
     from . import week
 
@@ -120,9 +129,10 @@ def _hero_week(tasks, w, target, target_note):
     grid, loose = week.week_grid(tasks, monday)
     buys = week.buys_for(tasks, monday)
     shape = week.week_shape(grid, loose, buys)
+    jobs = shape["jobs"] + len(loose)
 
     out = []
-    if w["beyond"]:
+    if w["beyond"] and w["empty"]:
         nxt = week.next_work(tasks, week._date(w["sunday"]))
         out.append('<p class="big">This week is past the end of the plan.</p>')
         out.append(f'<p>The plan runs to {target:%-d %B %Y}'
@@ -135,9 +145,10 @@ def _hero_week(tasks, w, target, target_note):
                        f'</a>, on {day:%-d %B %Y}.</p>')
         return "".join(out)
 
-    out.append(f'<p class="big">{week.hours(shape["fixed"])} of dated work '
-               f'this week, across {shape["jobs"]} job'
-               f'{"s" if shape["jobs"] != 1 else ""}.</p>')
+    lead = (f'{week.hours(shape["fixed"])} of dated work this week'
+            if shape["fixed"] else "No fixed hours this week")
+    out.append(f'<p class="big">{lead}, across {jobs} job'
+               f'{"s" if jobs != 1 else ""}.</p>')
     if shape["critical"]:
         d, t = shape["critical"][0]
         out.append(f'<p><b>{d:%A}</b> carries work that cannot slip: '
@@ -147,9 +158,19 @@ def _hero_week(tasks, w, target, target_note):
         out.append(f'<p>{len(shape["buys"])} thing'
                    f'{"s" if len(shape["buys"]) > 1 else ""} to buy, the first '
                    f'by {week._date(first["by"]):%A}.</p>')
-    if not shape["critical"] and not shape["buys"] and not shape["fixed"]:
+    if loose:
+        many = len(loose) > 1
+        out.append(f'<p>{len(loose)} job{"s" if many else ""} '
+                   f'{"have" if many else "has"} a window rather than a '
+                   f'day.</p>')
+    if w["empty"]:
         out.append("<p>Nothing is dated to this week.</p>")
-    if target:
+    if w["beyond"]:
+        out.append(f'<p>This work sits past {target:%-d %B %Y}, which the '
+                   f'plan runs to'
+                   + (f' &mdash; {_e(target_note)}' if target_note else "")
+                   + ".</p>")
+    elif target:
         weeks = (week.monday_of(target) - monday).days // 7
         when = ("this week" if weeks == 0 else
                 "last week" if weeks == -1 else

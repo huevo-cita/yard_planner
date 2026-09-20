@@ -56,6 +56,12 @@ built. The properties there:
   the page says its age
                        a build older than the threshold shows a banner, and
                        the threshold holds either side of the line
+  one answer per week  the front door and the week page describe the same week
+                       the same way. Both write a block per week and pick one
+                       by the clock, so they can disagree about any week and
+                       not only about the week somebody built in. A week past
+                       the target date can still hold work, and a job given a
+                       window rather than a day is still a job
 
 Everything runs against a temporary GARDEN_ROOT, so no real yard is read or
 written and none of this touches personal data.
@@ -944,6 +950,21 @@ def week_chunks(page):
     return out
 
 
+def hero_blocks(page):
+    """Each week's hero block of INDEX.html, by its id.
+
+    Split on the same literal as `week_chunks`, and for the same reason: the
+    index writes one block per week and the script shows one of them, so the
+    front door can disagree with the week page about any week of the plan.
+    """
+    out = {}
+    for part in page.split('<div class="wknow')[1:]:
+        m = re.search(r'data-week="(w[\d-]+)"', part)
+        if m:
+            out[m.group(1)] = part
+    return out
+
+
 def node_run(source):
     """Run a fragment of the page's own JavaScript, or say it was not run.
 
@@ -1255,6 +1276,64 @@ def check_bundle_holds_the_weeks(yard):
        "and each week carries the words a page shows for it", first)
 
 
+def check_index_hero_matches_the_week(yard):
+    """The front door describes a week the way the week page describes it.
+
+    `INDEX.html` writes a hero block for every week and the script shows one,
+    exactly as `WEEK.html` does. So the two can disagree about any week of the
+    plan, not only about the week somebody built in, and the disagreement is
+    invisible until a reader opens both on the same day.
+
+    Two ways they did disagree. The hero took "past the target date" to mean
+    "blank" and told the reader nobody had planned a week that the week page
+    then filled with jobs. And it counted jobs off the day grid, which leaves
+    out a job whose record gives a window rather than a day.
+    """
+    from lib import bundle, site, week as W
+
+    data = bundle.build(SCREENS)
+    page = site.render_index(SCREENS, data, today=datetime.date(2026, 9, 21))
+    heroes = hero_blocks(page)
+
+    ok(set(heroes) >= {w["id"] for w in data["weeks"]},
+       "the index carries a block for every week the bundle holds")
+
+    work = heroes["w2027-01-11"]
+    ok("Nobody has planned this week yet" not in work,
+       "a week past the target that holds work is not called unplanned", work)
+    ok("across 1 job" in work and "45 min" in work,
+       "the front door counts the work the week page lists", work)
+    ok("15 November 2026" in work,
+       "and still says the week falls past the date the plan runs to", work)
+
+    blank = heroes["w2026-11-16"]
+    ok("Nobody has planned this week yet" in blank,
+       "a blank week past the target does still say nobody planned it")
+    ok('href="TASKS.html#t105"' in blank,
+       "and does still name the next dated job")
+
+    # A window task never lands on the day grid, so a count taken off the grid
+    # alone is short. The fixture holds no window task, and this property is
+    # proved on a document built here rather than by disturbing every count
+    # the checks above make.
+    doc = {"yard": SCREENS, "target_date": "2026-11-15", "tasks": [
+        {"id": "x01", "date": "2026-10-20", "minutes": 30, "kind": "prune",
+         "title": "A job with a day", "done": False},
+        {"id": "x02", "window": ["2026-10-19", "2026-10-25"], "minutes": 30,
+         "kind": "prune", "title": "A job with a window", "done": False}]}
+    row = {w["id"]: w for w in W.week_spine(doc)}["w2026-10-19"]
+    block = site._hero_week(doc, row, datetime.date(2026, 11, 15), None)
+
+    ok(row["jobs"] == 2,
+       "the spine counts a job with a window beside the one with a day",
+       row["jobs"])
+    ok("across 2 jobs" in block,
+       "and so does the front door, rather than counting the grid alone",
+       block)
+    ok("has a window rather than a day" in block,
+       "which it says, so the reader knows where the second job is", block)
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser(description=__doc__,
@@ -1319,6 +1398,7 @@ def main():
         check_density_strip(screens)
         print("\n one data layer")
         check_bundle_holds_the_weeks(screens)
+        check_index_hero_matches_the_week(screens)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

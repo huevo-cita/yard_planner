@@ -1317,9 +1317,12 @@ def _beyond_note(data, monday, target, note):
 
     A blank week and a finished week look the same on a page, and this is the
     difference between them. The plan runs to a date; after that date nobody
-    has planned the week rather than nothing needing doing in it. The five
-    jobs that do sit past the target are two years behind a run of blank
-    weeks, so each blank week names the next one and links to it.
+    has planned the week rather than nothing needing doing in it.
+
+    Only a blank week gets this note. Weeks past the target do carry work, and
+    they take the ordinary week body with a tagline. The blank ones can sit a
+    long way in front of the next job, so each of them names that job and
+    links to it.
     """
     e = html.escape
     sunday = monday + datetime.timedelta(days=6)
