@@ -19,6 +19,12 @@ refuses instead. The check is deliberately not silent and deliberately not fatal
 by default: a document worth publishing under a warning exists, and a check that
 blocks a publish gets routed around within a week.
 
+--strict refuses over narration, not over length. Being long is advisory - it
+still prints - because a document can be long for the good reason that it has a
+lot to say, and refusing that one leaves dropping --strict as the only way to
+ship it, which switches off the narration check too. --budget asks for length to
+block as well.
+
 Requires: markdown
 """
 import argparse
@@ -293,6 +299,9 @@ def main():
     ap.add_argument('--strict', action='store_true',
                     help='refuse to publish an action document that narrates '
                          'its own history')
+    ap.add_argument('--budget', action='store_true',
+                    help='with --strict, also refuse one that is over the '
+                         'prose budget')
     args = ap.parse_args()
 
     if args.output and len(args.markdown) > 1:
@@ -311,15 +320,26 @@ def main():
             print('    %s:%d  %s' % (name, line, what))
             print('        %s' % instead)
         if r['over']:
-            print('    %s: %d words of prose, %d over the action-document budget'
-                  % (name, r['words'], r['over']))
+            print('    %s: %d words of prose, %d over the action-document '
+                  'budget%s' % (name, r['words'], r['over'],
+                                '' if args.budget else ' (advisory)'))
         print('    python3 -m lib.changelog %s --lint' % r['slug'])
 
-    if flagged and args.strict:
+    # Narration and length are different failures and only one of them is a
+    # defect. A document that is long because it has a lot to say is what the
+    # budget is advisory about; one that is narrating its own history is the
+    # thing this refuses over. Collapsing the two means the only way to publish
+    # a long clean document is to drop --strict, which switches off the check
+    # that matters - so length blocks only when it is asked to.
+    narrating = [p for p in flagged if prose[p]['findings']]
+    refuse = flagged if args.budget else narrating
+    if refuse and args.strict:
         raise SystemExit(
-            'nothing published. %d action document%s narrating its own history '
-            'or over budget,\nand --strict was asked for. The prose above is '
-            'change-log entries.' % (len(flagged), 's' if len(flagged) > 1 else ''))
+            'nothing published. %d action document%s %s,\nand --strict was '
+            'asked for. The prose above is change-log entries.'
+            % (len(refuse), 's' if len(refuse) > 1 else '',
+               'narrating its own history or over budget' if args.budget
+               else 'narrating its own history'))
 
     for path in args.markdown:
         out, sections, tables = convert(path, args.output, args.link)

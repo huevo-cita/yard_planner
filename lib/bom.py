@@ -24,12 +24,21 @@ person hauls it themselves, the folk rule is right again.
 as the total, ordered by what the vision said mattered least, so the conversation
 is about which things to drop rather than about whether the number is right.
 
-Prices
-------
+Prices, and the line that used to disappear
+-------------------------------------------
 The defaults are national ballpark figures and are labelled as such wherever they
 are printed. They exist so a plan has a number before anyone drives anywhere, not
 so that number can be quoted. Real prices come from the `sourcing-scout` subagent
-and are passed in with `--prices`, which overrides per item.
+into `sourcing.json`, and `--prices` still overrides per item.
+
+An item nobody had priced used to be flagged `unpriced` and left out of the
+total. The flag was honest and the total was not: it looked complete, and it got
+smaller the less anyone knew. On one real yard that hid about a third of the
+plant list. Now every line goes through `lib.sourcing.price_for`, which returns a
+figure from one of four rungs — a local quote, the median of several, the median
+of the item's price class, or the national ballpark — and never returns nothing.
+The total then carries `firm_usd` and `estimated_usd` separately, plus the range,
+so the uncertainty is visible instead of being subtracted.
 
 Volume, and the thing everyone gets wrong
 -----------------------------------------
@@ -42,7 +51,8 @@ import argparse
 import json
 import math
 
-from . import conditions as cond_mod, doubts, vision as vision_mod, yards
+from . import (conditions as cond_mod, doubts, sourcing,
+               vision as vision_mod, yards)
 
 CU_FT_PER_YARD = 27.0
 SETTLE = 1.15                     # loose material settles about this much
@@ -136,11 +146,22 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
     for h in design.get("hardscape", []):
         if h.get("existing"):
             continue                      # already built; listing it buys it twice
+        if h.get("superseded_by"):
+            continue                      # kept for the record, not for buying
         kind = (h.get("kind") or h.get("item") or h.get("name") or "").lower()
         qty, unit = h.get("quantity"), h.get("unit")
         if kind:
-            add(kind, float(qty or 1), unit or "each",
+            n = float(qty or 1)
+            add(kind, n, unit or "each",
                 h.get("why") or h.get("note") or "hardscape")
+            # `cost_usd` is what the design costed the whole line at, and it is
+            # the only figure that knows two toad abodes are broken pots off the
+            # spoil heap rather than two of whatever else the yard buys singly.
+            if h.get("cost_usd") is not None and n:
+                try:
+                    need[kind]["design_usd"] = float(h["cost_usd"]) / n
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
         if h.get("fill_cu_ft"):
             add(h.get("fill_material", "garden soil"), float(h["fill_cu_ft"]),
                 "cu ft", f"filling {h.get('name', kind)}")
@@ -149,13 +170,41 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         if p.get("existing") or p.get("role") == "existing":
             continue
         n = int(p.get("count", 1))
-        size = p.get("pot_size", DEFAULT_POT)
-        add(f"plant: {p['name']} ({size})", n, "each",
-            f"{n} in {p.get('zone', 'the yard')}")
+        # Normalised here rather than at the price lookup, so that the item key
+        # a quote has to match is the same string whichever spelling the design
+        # used. `4 in` and `4in` priced as two classes is how twelve violas came
+        # to be worth $456.
+        size = sourcing.normalize_size(p.get("pot_size")) or DEFAULT_POT
+        key = f"plant: {p['name']} ({size})"
+        add(key, n, "each", f"{n} in {p.get('zone', 'the yard')}")
+        # The design's own figure for this planting, where it gave one. It is
+        # the only thing on file that knows a garlic clove is not a shrub and
+        # that a direct-sown carrot is a seed, and without it every entry with
+        # no `pot_size` was costed as a one-gallon pot: $31.50 of carrots,
+        # $105 of garlic.
+        if p.get("unit_price") is not None:
+            try:
+                need[key]["design_usd"] = float(p["unit_price"])
+            except (TypeError, ValueError):
+                pass
 
     for item, qty in (design.get("extra_materials") or {}).items():
-        add(item, float(qty), PRICES.get(item, {}).get("unit", "each"),
-            "listed in design.extra_materials")
+        # A `note` sitting among the quantities is normal in these files and
+        # must not take the whole bill of materials down with a ValueError.
+        # Anything that will not read as a number is commentary, not an order.
+        try:
+            qty = float(qty)
+        except (TypeError, ValueError):
+            continue
+        # A material priced by the bag or the yard is sold by volume, whatever
+        # its entry happens to say. Without this, mulch and compost arrive here
+        # as `each`, miss `price_bulk` entirely, and get priced against whatever
+        # else in the yard is sold one at a time — which is how eighteen cubic
+        # feet of mulch came to be worth more than the fountain.
+        p = PRICES.get(item, {})
+        unit = p.get("unit") or ("cu ft" if p.get("bag_usd") or
+                                 p.get("bulk_usd_per_yard") else "each")
+        add(item, qty, unit, "listed in design.extra_materials")
     return need
 
 
@@ -226,33 +275,81 @@ def crossover(item, prices=None):
                    f"${fee:.0f} delivery. Below that, buy bags"}
 
 
+def _price_each(item, unit, overlay, merged, src, index, order, design_usd=None):
+    """One unit of this, and where the figure came from.
+
+    The sourcing record is asked first, because a quote there carries a supplier,
+    a date and a URL. A price in the `--prices` overlay is also a real local
+    figure and counts as firm, so it is used whenever the ladder could only
+    manage an estimate. The ladder's own estimate is the floor, and it always
+    returns something."""
+    got = sourcing.price_for(item, unit, src, defaults=merged,
+                             plant_defaults=PLANT_PRICES, index=index,
+                             order=order)
+    if got and got.get("firm"):
+        return got
+    each = sourcing._entry(overlay, item).get("unit_usd")
+    if each is not None:
+        return {"usd": float(each), "low": float(each), "high": float(each),
+                "rung": "published", "firm": True, "n": 1,
+                "supplier": None, "supplier_name": None,
+                "as_of": None, "url": None,
+                "basis": "local price file"}
+    # The design's figure beats anything derived from a pot size, because the
+    # design is the only record that knows what form the plant is bought in. It
+    # is still an estimate: nobody quoted it and it carries no date.
+    if design_usd is not None:
+        return {"usd": design_usd, "low": design_usd * 0.75,
+                "high": design_usd * 1.5, "rung": "design", "firm": False,
+                "n": 1, "supplier": None, "supplier_name": None,
+                "as_of": None, "url": None,
+                "basis": "the design's own figure for this planting, which is "
+                         "not a quote"}
+    return got
+
+
 def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
         force=False):
     """The requirement, minus what is on site, priced."""
-    local = bool(prices)
+    # A yard that has been sourced has a price file, and it is the best evidence
+    # about that yard there is. Waiting to be handed it with `--prices` meant the
+    # default run quietly costed Austin against national ballparks while a file
+    # of real Austin prices sat unread in the same directory.
+    overlay = dict(prices if prices is not None
+                   else (yards.load(slug, "local-prices.json") or {}))
+    local = bool(overlay)
     # A total is the most actionable thing this repo produces — someone reads it
     # and drives to a yard. An open doubt about a bed's size prices the soil, the
     # compost, the mulch and the plant count all wrong at once.
     provisional = doubts.gate(slug, "bom", force=force)
-    prices = {**PRICES, **(prices or {})}
+    prices = {**PRICES, **overlay}
     cond = yards.load_conditions(slug)
     need = requirements(slug, mulch_depth_in, compost_depth_in)
 
+    src = sourcing.load(slug)
+    local = local or bool(src.get("suppliers"))
+    index = sourcing.quotes_index(src)
+    order = sourcing.rank_order(slug)
+
     lines, total, saved = [], 0.0, 0.0
+    firm_total, low_total, high_total = 0.0, 0.0, 0.0
     for item in sorted(need):
         e = need[item]
         qty, unit = e["quantity"], e["unit"]
         why = "; ".join(e["why"])
 
         if item.startswith("plant: "):
-            size = item.rsplit("(", 1)[-1].rstrip(")")
-            each = PLANT_PRICES.get(size, PLANT_PRICES[DEFAULT_POT])
-            usd = qty * each
-            ln = line(item[7:], qty, "plants", usd, why)
-            ln["unit_usd"] = each
+            got = _price_each(item, "each", overlay, prices, src, index, order,
+                              design_usd=e.get("design_usd"))
+            ln = line(item[7:], qty, "plants", qty * got["usd"], why)
+            ln["unit_usd"] = got["usd"]
             ln["kind"] = "plant"
+            _stamp(ln, got, qty)
             lines.append(ln)
-            total += usd
+            total += ln["usd"]
+            firm_total += ln["usd"] if got["firm"] else 0.0
+            low_total += ln["low_usd"]
+            high_total += ln["high_usd"]
             continue
 
         have, have_unit = cond_mod.on_hand(cond, item)
@@ -267,13 +364,27 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
                       f"{why} — all {saved_qty:g} {unit} already on site",
                       have=saved_qty)
             ln["kind"] = "material"
+            ln["low_usd"] = ln["high_usd"] = 0.0
             lines.append(ln)
             continue
 
         if unit == "cu ft":
-            best = price_bulk(item, qty, prices)
+            firm = bool(sourcing._entry(overlay, item).get("bag_usd") or
+                        sourcing._entry(overlay, item).get("bulk_usd_per_yard"))
+            rates = prices
+            basis = ("local rates" if firm else
+                     f"national ballpark rate for {item}")
+            best = price_bulk(item, qty, rates)
             if best is None:
-                continue
+                # A material the ballpark has never heard of used to fall out of
+                # the bill here. Synthesise a rate from the ones it knows rather
+                # than lose the line.
+                est = sourcing.bulk_estimate(item, prices)
+                if est is None:
+                    continue
+                rates = {**prices, item: est}
+                best = price_bulk(item, qty, rates)
+                firm, basis = False, est["note"]
             ln = line(item, qty, unit, best["usd"], why, have=saved_qty)
             ln.update({"buy_as": best["how"], "detail": best["detail"],
                        "kind": "material"})
@@ -282,31 +393,61 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
                 ln["saves_usd"] = best["saves_usd"]
             if best.get("note"):
                 ln["note"] = best["note"]
+            # A bulk line is priced as a basket of bags or yards rather than per
+            # cubic foot, so the range is stamped against the whole line.
+            spread = 0.0 if firm else sourcing.NATIONAL_SPREAD
+            _stamp(ln, {"firm": firm, "rung": "published" if firm else "national",
+                        "basis": basis, "n": 0,
+                        "low": best["usd"] * (1 - spread),
+                        "high": best["usd"] * (1 + spread)}, 1.0)
         else:
-            each = prices.get(item, {}).get("unit_usd")
-            ln = line(item, qty, unit, qty * (each or 0.0), why, have=saved_qty)
-            ln["unit_usd"] = each or 0.0
+            got = _price_each(item, unit, overlay, prices, src, index, order,
+                              design_usd=e.get("design_usd"))
+            ln = line(item, qty, unit, qty * got["usd"], why, have=saved_qty)
+            ln["unit_usd"] = got["usd"]
             ln["kind"] = "material"
-            # An unpriced line quietly costing nothing is worse than no line at
-            # all, because the total looks complete and is not.
-            if each is None:
-                ln["unpriced"] = True
-                ln["note"] = ("no price on file, so this is missing from the "
-                              "total. The sourcing-scout can quote it")
-            elif prices.get(item, {}).get("note"):
+            if (prices.get(item) or {}).get("note"):
                 ln["note"] = prices[item]["note"]
+            _stamp(ln, got, qty)
 
         lines.append(ln)
         total += ln["usd"]
+        firm_total += ln["usd"] if ln["pricing"]["firm"] else 0.0
+        low_total += ln["low_usd"]
+        high_total += ln["high_usd"]
         if saved_qty:
             saved += saved_qty * _rough_unit_cost(item, unit, prices)
 
+    estimated = total - firm_total
     out = {"yard": slug, "lines": lines, "total_usd": round(total, 2),
+           "firm_usd": round(firm_total, 2),
+           "estimated_usd": round(estimated, 2),
+           "estimated_share_pct": round(100.0 * estimated / total, 1) if total
+           else 0.0,
+           "low_usd": round(low_total, 2), "high_usd": round(high_total, 2),
            "saved_by_using_what_is_here_usd": round(saved, 2),
            "prices": "local" if local else "national ballpark"}
     if provisional:
         out["provenance"] = provisional
     return out
+
+
+def _stamp(ln, got, qty):
+    """Record how a line was priced, on the line, in money rather than per unit.
+
+    Kept on every line and not only the estimated ones, because a reader
+    comparing two lines needs to know that one is a quote and the other is a
+    class median, and a field that only appears sometimes is one that gets
+    missed."""
+    ln["pricing"] = {"rung": got["rung"], "firm": bool(got["firm"]),
+                     "basis": got["basis"], "comparables": got.get("n", 0)}
+    for key in ("supplier", "supplier_name", "as_of", "url"):
+        if got.get(key):
+            ln["pricing"][key] = got[key]
+    ln["low_usd"] = round(qty * got["low"], 2)
+    ln["high_usd"] = round(qty * got["high"], 2)
+    if not got["firm"]:
+        ln["estimated"] = True
 
 
 def _rough_unit_cost(item, unit, prices):
@@ -411,6 +552,30 @@ def _substitute(ln):
     return ("defer", "push to the next phase", 1.0)
 
 
+# ---------------------------------------------------------------- price gaps
+
+def price_gaps(slug, prices=None, bom=None, force=False):
+    """The estimated lines, worst first, measured in dollars at risk.
+
+    "A third of the list has no local price" is true and unusable. What a person
+    can act on is a short list ordered by how much the total moves if the guess
+    is wrong, because that is the order to make phone calls in."""
+    bom = bom or net(slug, prices, force=force)
+    gaps = []
+    for ln in bom["lines"]:
+        if not ln.get("estimated") or ln["usd"] <= 0:
+            continue
+        gaps.append({"item": ln["item"], "usd": ln["usd"],
+                     "low_usd": ln["low_usd"], "high_usd": ln["high_usd"],
+                     "at_risk_usd": round(ln["high_usd"] - ln["low_usd"], 2),
+                     "rung": ln["pricing"]["rung"],
+                     "basis": ln["pricing"]["basis"]})
+    gaps.sort(key=lambda g: -g["at_risk_usd"])
+    return {"yard": slug, "gaps": gaps,
+            "estimated_usd": bom["estimated_usd"],
+            "at_risk_usd": round(sum(g["at_risk_usd"] for g in gaps), 2)}
+
+
 # ------------------------------------------------------------------ reporting
 
 def report(slug, prices=None, force=False):
@@ -424,9 +589,9 @@ def report(slug, prices=None, force=False):
             print(f"  {ln['item']:44s} {'—':>10s}   already on site "
                   f"({ln['already_on_hand']:g} {ln['unit']})")
             continue
-        money = "unpriced" if ln.get("unpriced") else f"${ln['usd']:,.2f}"
+        money = f"${ln['usd']:,.2f}" + ("~" if ln.get("estimated") else " ")
         print(f"  {ln['item']:44s} {ln['quantity']:8g} {ln['unit']:<8s} "
-              f"{money:>10s}")
+              f"{money:>11s}")
         if ln.get("detail"):
             print(f"      {ln['detail']}")
         if ln.get("saves_usd"):
@@ -434,20 +599,24 @@ def report(slug, prices=None, force=False):
         if ln.get("already_on_hand"):
             print(f"      {ln['already_on_hand']:g} {ln['unit']} already here, "
                   f"netted out")
+        if ln.get("estimated"):
+            print(f"      ~ estimated: {ln['pricing']['basis']}")
         if ln.get("note"):
             print(f"      {ln['note']}")
 
-    print(f"\n  {'total':44s} {'':17s} " + f"${bom['total_usd']:,.2f}".rjust(10))
-    missing = [ln["item"] for ln in bom["lines"] if ln.get("unpriced")]
-    if missing:
-        print(f"  that total excludes {len(missing)} unpriced item"
-              f"{'s' if len(missing) > 1 else ''}: {', '.join(missing)}")
+    print(f"\n  {'total':44s} {'':17s} " + f"${bom['total_usd']:,.2f}".rjust(11))
+    if bom["estimated_usd"]:
+        print(f"  ${bom['firm_usd']:,.2f} of that is quoted and "
+              f"${bom['estimated_usd']:,.2f} — {bom['estimated_share_pct']:.0f}% "
+              f"— is estimated from comparable prices")
+        print(f"  the range across those estimates is "
+              f"${bom['low_usd']:,.0f} to ${bom['high_usd']:,.0f}")
     if bom["saved_by_using_what_is_here_usd"]:
         print(f"  about ${bom['saved_by_using_what_is_here_usd']:,.0f} of that "
               f"avoided by using what was already on site")
     if bom["prices"] != "local":
-        print("  prices are national ballpark figures, not quotes. Run the "
-              "sourcing-scout subagent for real local numbers")
+        print("  nothing local on file, so every figure above is a national "
+              "ballpark. Run the sourcing-scout subagent for real numbers")
     if bom.get("provenance"):
         print(f"  {bom['provenance']}: quantities above rest on assumptions "
               f"still in question")
@@ -476,6 +645,8 @@ def main():
     ap.add_argument("--mulch-depth", type=float, default=3.0)
     ap.add_argument("--compost-depth", type=float, default=2.0)
     ap.add_argument("--cut", action="store_true", help="only the cut list")
+    ap.add_argument("--price-gaps", action="store_true",
+                    help="the estimated lines, ranked by dollars at risk")
     ap.add_argument("--crossover", action="store_true",
                     help="bags-versus-bulk crossover for every bulk material")
     ap.add_argument("--json", action="store_true")
@@ -500,6 +671,20 @@ def main():
         return
     if args.cut:
         print(json.dumps(cut_list(args.slug, force=args.force), indent=2))
+        return
+    if args.price_gaps:
+        g = price_gaps(args.slug, prices, force=args.force)
+        if not g["gaps"]:
+            print(f"{args.slug}: every line is a quoted price")
+            return
+        print(f"{args.slug} — {len(g['gaps'])} estimated line"
+              f"{'s' if len(g['gaps']) > 1 else ''}, "
+              f"${g['estimated_usd']:,.0f} of the total, "
+              f"${g['at_risk_usd']:,.0f} of spread. Call in this order.\n")
+        for x in g["gaps"]:
+            print(f"  {x['item'][:40]:40s} ${x['usd']:>9,.2f}   "
+                  f"${x['low_usd']:,.0f}–${x['high_usd']:,.0f}")
+            print(f"      {x['basis']}")
         return
     report(args.slug, prices, force=args.force)
 

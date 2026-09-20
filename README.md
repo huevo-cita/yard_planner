@@ -104,6 +104,25 @@ backwards, works around travel, reserves a catch-up weekend, gates tasks on the
 person's actual experience, and produces a cut list when it comes in over
 budget.
 
+**Ranks the suppliers, and stops the budget shrinking as it gets less certain.**
+Where to buy the list used to be a prose brief and somebody's memory, so nothing
+in code knew where the yard was and reputation was recorded nowhere. Suppliers
+now live in `sourcing.json` with dated evidence, and four rules in
+`lib/sourcing.py` order them: every supplier geocoded and carrying a real
+distance, with anything outside the metro reported rather than dropped and mail
+order kept as its own class because some things have no local source; ratings
+shrunk toward the local mean by review volume and tiered on the bottom of the
+confidence interval, so a 5.0 from eight people does not outrank a 4.7 from nine
+hundred and a shop nobody checked is not ranked at all; memberships and annual
+sales worth a large, named bump, because a members-only Friday at a sale that
+sells out by Saturday decides whether the plants happen; and distance breaking
+ties inside a quality tier rather than across one. Prices work the same way. An
+item nobody had quoted used to be dropped from the total, which made the number
+look complete and get smaller the less anyone knew — on one real yard that hid
+about a third of the plant list. Now a price comes off one of four rungs, from a
+local quote down to a national ballpark, the rung is stated, and the total
+carries the quoted and estimated parts separately with the range.
+
 **Says what to do this week, in one document.** The dated actions end up spread
 across the plan, the sowing calendar and the sourcing report — each coherent, and
 together three documents open at once with a shopping list that never sits beside
@@ -180,7 +199,11 @@ yard inputs                       # which part of site.json each gated job reads
 yard changelog <slug>             # what changed, and why the plan reads as it does
 yard changelog <slug> --lint      # prose in the plan that belongs in the log
 yard design   <slug>              # check a design against the measured site
+yard sourcing <slug>              # where to buy it, best tier first, nearest within a tier
+yard sourcing <slug> --geocode    # real distances, from the suppliers' addresses
+yard sourcing <slug> --check      # evidence that is undated, unplaced or stale
 yard bom      <slug>              # bill of materials, netted against what is here
+yard bom      <slug> --price-gaps # the estimated lines, by dollars at risk
 yard schedule <slug>              # the weekend plan, back-planned from the date
 yard week     <slug>              # what to do this week, on one screen
 yard week     <slug> --calendar   # every week to the target date -> CALENDAR.md
@@ -207,8 +230,10 @@ yard --help                       # every module
 `parcel-scout` finds authoritative lot geometry from county GIS.
 `photo-surveyor` measures real dimensions from photographs.
 `vision-scout` reads a board or folder of inspiration images.
-`sourcing-scout` finds local nurseries, bulk yards and municipal programs with
-real prices. Each runs in its own context because each has a high dead-end rate.
+`sourcing-scout` finds local nurseries, bulk yards and municipal programs, and
+writes the dated evidence — ratings with their review counts, forum threads,
+membership and sale windows, quotes — into `sourcing.json` for `lib.sourcing` to
+rank. Each runs in its own context because each has a high dead-end rate.
 
 ## Data, and why none of it is in this repo
 
@@ -295,8 +320,9 @@ strength on each want), `design.json`, `sun-hours.json`, `coverage.json`,
 `doubts.json` (what is in question, and what it blocks), `all-clear.json` (what
 was assumed and run on anyway, and why), `changelog.json` (what changed and why
 it reads as it does), `tasks.json` (every action with a day on it, and a digest
-of the section it came from), a prose `profile.md`, and `maps/`, `photos/` and
-`design/`.
+of the section it came from), `sourcing.json` (every supplier with its dated
+reputation, distance and access evidence), a prose `profile.md`, and `maps/`,
+`photos/` and `design/`.
 
 The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 `SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true

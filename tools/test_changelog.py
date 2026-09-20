@@ -339,6 +339,32 @@ def check_publish_gate(root):
     os.remove(path)
 
 
+def check_long_but_clean(root):
+    """Length and narration are different failures, and only one is a defect.
+
+    A document that is long because it has a lot to say must still publish
+    under --strict, or the only way to ship it is to drop --strict, which
+    switches off the narration check that is the whole point.
+    """
+    path = doc(root, "PLAN.md", CLEAN + ("\n- filler word " * 4000))
+    html = os.path.splitext(path)[0] + ".html"
+    if os.path.exists(html):
+        os.remove(html)
+
+    code, out = run(root, path, "--strict", module="lib.buildhtml")
+    record("pass" if code == 0 and os.path.exists(html) else "FAIL",
+           "a long document with nothing to answer for still publishes under "
+           "--strict", out)
+    record("pass" if "over the action-document budget" in out else "FAIL",
+           "and is still told it is long", out)
+    os.remove(html)
+
+    code, out = run(root, path, "--strict", "--budget", module="lib.buildhtml")
+    record("pass" if code != 0 and not os.path.exists(html) else "FAIL",
+           "--budget is how you ask for the length to block as well", out)
+    os.remove(path)
+
+
 # ---------------------------------------------------------------------- the hook
 
 def check_hook(root):
@@ -394,6 +420,7 @@ def main():
         check_reference_material_exempt(root)
         check_word_budget(root)
         check_publish_gate(root)
+        check_long_but_clean(root)
         check_hook(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
