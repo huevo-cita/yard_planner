@@ -79,6 +79,105 @@ nav.screens span.brand { flex:0 0 auto; color:#8fae93; font-size:.72rem;
 """
 
 
+#: How old a page may be before it says so, in days.
+#:
+#: A generated page is a photograph of `bundle.json` on the day it was built.
+#: The week it shows rolls over on its own, but the jobs, the dates and the
+#: prices in it do not. Fourteen days is one fortnight: long enough that a page
+#: in normal use never shows the banner, and short enough that a plan a month
+#: behind says so before somebody acts on it.
+STALE_DAYS = 14
+
+STALE_CSS = """
+.stale { border-left:4px solid var(--warnline); background:#fef3c7;
+  color:#78350f; padding:.7em 1em; border-radius:0 8px 8px 0; margin:1em 0; }
+.stale b { display:block; }
+.stale code { background:#fff8e1; }
+"""
+
+#: Date arithmetic for every page, and the only computation any of them do.
+#:
+#: The pages hold the answers and none of the rules. Python renders every week
+#: and every sentence about it; this decides which of them the device clock
+#: asks for. Keeping that to four functions with no DOM in them is what lets
+#: `tools/test_week.py` run them in node and compare the result against the
+#: ids Python wrote.
+#:
+#: A date is a `YYYY-MM-DD` string throughout, and the arithmetic runs in UTC
+#: so that a daylight-saving change cannot move a Monday. Only `today()` reads
+#: the local clock, because the day a person is having is a local fact.
+DATES_JS = """
+var yard = window.yard || (window.yard = {});
+
+yard.today = function (d) {
+  d = d || new Date();
+  var p = function (n) { return (n < 10 ? '0' : '') + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+};
+
+yard.utc = function (iso) {
+  return Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10));
+};
+
+yard.iso = function (ms) { return new Date(ms).toISOString().slice(0, 10); };
+
+yard.mondayOf = function (iso) {
+  var ms = yard.utc(iso);
+  var dow = (new Date(ms).getUTCDay() + 6) % 7;
+  return yard.iso(ms - dow * 86400000);
+};
+
+yard.weekId = function (iso) { return 'w' + yard.mondayOf(iso); };
+
+yard.ageDays = function (from, to) {
+  return Math.floor((yard.utc(to) - yard.utc(from)) / 86400000);
+};
+
+yard.isStale = function (built, now, limit) {
+  return yard.ageDays(built, now) >= limit;
+};
+"""
+
+
+def dates_js():
+    """The date functions, at the id the tests read them back from."""
+    return f'<script id="yard-dates">{DATES_JS}</script>'
+
+
+def stale_banner(slug, built):
+    """The banner a page shows when its data is old enough to have moved.
+
+    Written out in full and hidden, rather than composed in the browser. The
+    script fills in one number and drops the `hidden` attribute.
+    """
+    import datetime
+    import html as _h
+    day = datetime.date.fromisoformat(built)
+    return (f'<div class="stale" id="stale" data-built="{built}" '
+            f'data-days="{STALE_DAYS}" hidden>'
+            f'<b>This page was built <span class="age">?</span> days ago, on '
+            f'{day:%-d %B %Y}.</b>'
+            f'The week below still follows the clock, and the jobs, dates and '
+            f'prices on it are whatever <code>bundle.json</code> said that '
+            f'day. Build it again with '
+            f'<code>python3 -m lib.site {_h.escape(slug)}</code>, then open '
+            f'this page again.</div>')
+
+
+STALE_JS = """
+(function () {
+  var el = document.getElementById('stale');
+  if (!el) return;
+  var age = yard.ageDays(el.getAttribute('data-built'), yard.today());
+  if (!yard.isStale(el.getAttribute('data-built'), yard.today(),
+                    +el.getAttribute('data-days'))) return;
+  var n = el.querySelector('.age');
+  if (n) n.textContent = age;
+  el.hidden = false;
+})();
+"""
+
+
 TICKS_CSS = """
 input.tick { flex:0 0 auto; width:1.15em; height:1.15em; margin:0 .1em 0 0;
   accent-color:var(--accent); cursor:pointer; }
@@ -99,7 +198,7 @@ textarea.dump { width:100%; height:9rem; font:12px/1.4 ui-monospace,Menlo,
 """
 
 
-def ticks_js(slug):
+def ticks_js(slug, scope=None):
     """Checkboxes that survive closing the page, and can be read back in.
 
     The state of a job lives in `tasks.json`, which is the record. A browser
@@ -111,10 +210,16 @@ def ticks_js(slug):
     That round trip is the whole design. A tick that lives only in a browser
     is lost with the browser's cache and cannot reach next season's rotation
     log; a tick that has a way home is a record of what was actually done.
+
+    `scope` is a selector that a box has to sit inside to be counted and
+    copied. The week page needs it: it now holds every week of the plan, and a
+    tally over all of them answers a question nobody asked. A tick is still
+    stored and painted wherever it is, because the store is one record for the
+    yard. Call `window.yardTally()` after showing a different week.
     """
     return """
 (function () {
-  var KEY = 'yard:%s:done', store = {};
+  var KEY = 'yard:%s:done', SCOPE = %s, store = {};
   try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
 
   var boxes = [].slice.call(document.querySelectorAll('input.tick'));
@@ -122,13 +227,14 @@ def ticks_js(slug):
 
   function holder(b) { return b.closest('article.task, details.job') || b; }
   function paint(b) { holder(b).classList.toggle('ticked', b.checked); }
+  function counted(b) { return !SCOPE || b.closest(SCOPE); }
 
   // A standing job draws a box on every day it asks for work, so the same
   // task id appears several times on one page. Count each job once.
   function each_job(fn) {
     var seen = {};
     boxes.forEach(function (b) {
-      if (seen[b.dataset.task]) return;
+      if (seen[b.dataset.task] || !counted(b)) return;
       seen[b.dataset.task] = 1;
       fn(b);
     });
@@ -188,8 +294,10 @@ def ticks_js(slug):
     if (out) out.style.display = 'none';
     if (copy) copy.textContent = 'Copy the done list';
   });
+
+  window.yardTally = tally;
 })();
-""" % slug
+""" % (slug, f"'{scope}'" if scope else "null")
 
 
 def tick(task):
