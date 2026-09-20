@@ -1100,8 +1100,15 @@ def _title_of(line):
     The markdown export backslash-escapes punctuation, so a title with " - " in
     it comes back as " \\- " and matches nothing. Unescaping first is what makes
     the round trip work on the eight tasks that have a dash in the name.
+
+    And striking a line out in the Doc — which is how a person marks a job done
+    by hand, on top of ticking it — exports as `~~...~~` around the whole item.
+    No task title contains a tilde, so dropping every `~~` is safe, and it has
+    to happen before the title is read or the marker rides along on the front of
+    it and the item is reported as drift instead of as done.
     """
     line = re.sub(r"\\([-_*\[\]()#.!`~])", r"\1", line.strip())
+    line = line.replace("~~", "").strip()
     m = re.match(r"\*{0,2}(.+?)\*{0,2}\s*(?:·|$)", line)
     return re.sub(r"\s+", " ", (m.group(1) if m else line)).strip().strip("*")
 
@@ -1122,6 +1129,10 @@ def sync(slug, exported):
             m = rx.match(line)
             if m:
                 body = re.sub(r"\\([-_*\[\]()#.!`~])", r"\1", m.group(1).strip())
+                # Before DONE_MARK, not after: a struck-out done task exports as
+                # "~~DONE · **title**~~" and the marker never matches behind the
+                # tildes, so the task keys on the word DONE and collides.
+                body = body.replace("~~", "").strip()
                 marked = DONE_MARK.match(body)
                 if marked:
                     body, value = body[marked.end():], True

@@ -412,6 +412,39 @@ def check_sync(week, yard):
     ok(sorted(c[0] for c in changed) == ["t004"] and not unmatched,
        "a title the export escaped still matches its task", (changed, unmatched))
     check_done_prefix(week, yard)
+    check_struck_out(week, yard)
+
+
+def check_struck_out(week, yard):
+    """Striking a line out in the Doc is how a person marks it done by hand.
+
+    It exports as `~~` around the whole item, and it lands in two places that
+    fail differently. On an ordinary ticked line the tildes ride along on the
+    front of the title, so the task is reported as drift and its tick is lost —
+    silently, because drift is reported as a formatting problem rather than as a
+    completed job. On a line the publish step already marked done, the tildes sit
+    in front of `DONE ·` so the marker never matches, and every such task keys on
+    the word DONE and collides with the others.
+    """
+    data = week.load(SLUG)
+    for t in data["tasks"][:3]:
+        t["done"] = False
+    week.save(SLUG, data)
+    titles = [t["title"] for t in data["tasks"][:3]]
+
+    export = os.path.join(yard, "struck-export.md")
+    with open(export, "w") as f:
+        f.write(f"> - [x] ~~**{titles[0]}** · 10 min · phone~~\n"
+                f"> - [x] ~~DONE · **{titles[1]}** · 1 min · indoors~~\n"
+                f"> - [ ] **{titles[2]}** · 2 h · roses\n")
+    changed, unmatched, seen = week.sync(SLUG, export)
+    ok(seen == 3, f"a struck-out line is still one checkbox item, keyed on its "
+                  f"own title (saw {seen} of 3)")
+    ok(not unmatched, "a struck-out item is not reported as drift", unmatched)
+    ok(sorted(c[0] for c in changed) == ["t001", "t002"]
+       and all(c[2] is True for c in changed),
+       "both a struck-out tick and a struck-out DONE marker come back as done",
+       changed)
 
 
 def check_done_prefix(week, yard):
@@ -454,6 +487,75 @@ def check_done_prefix(week, yard):
        changed)
 
 
+def check_column_widths():
+    """A table the importer autofits is mostly scroll, so the widths are pinned.
+
+    The shopping table is the case this is for: one prose column beside four
+    holding a date, a price and a name. Shared out evenly the prose wraps to
+    dozens of lines and every other cell in the row is white space.
+    """
+    from lib import builddoc
+
+    def cells(*texts):
+        return [[(t, False, False)] for t in texts]
+
+    # One prose column against three short ones, the shopping table's shape.
+    rows = [cells("Buy", "By", "Cost", "Ask for"),
+            cells("Fire ant bait", "Sun 6 Sep", "$22-30", "x" * 2000),
+            cells("Dill seed", "Sat 5 Sep", "$3-6", "y" * 400)]
+    w = builddoc.column_widths(rows, 4)
+
+    ok(abs(sum(w) - builddoc.TABLE_WIDTH_IN) < 0.01,
+       "the columns add up to the text column exactly", sum(w))
+    ok(min(w) >= builddoc.MIN_COL_IN - 1e-9,
+       "no column falls under the floor a date needs to stay on one line", w)
+    ok(w[3] == max(w) and w[3] > builddoc.TABLE_WIDTH_IN / 4,
+       "the prose column takes more than an even share", w)
+    # The damping is the point: raw proportion would give the prose column
+    # 2000/2050 of the table and leave the date under a tenth of an inch.
+    ok(w[3] < builddoc.TABLE_WIDTH_IN * 0.75,
+       "and not so much that the short columns are unreadable", w)
+    ok(w[1] > w[2],
+       "a longer short column still beats a shorter one", (w[1], w[2]))
+
+    # Degenerate: more columns than the page can hold falls back to even.
+    many = builddoc.column_widths([cells(*"abcdefghijklmnopqrst")], 20)
+    ok(abs(sum(many) - builddoc.TABLE_WIDTH_IN) < 0.01
+       and len(set(round(x, 6) for x in many)) == 1,
+       "more columns than the floor allows shares the width evenly instead of "
+       "overflowing the page", (len(many), sum(many)))
+
+    # The widths have to reach w:tblGrid, not just w:tcW. Google Docs reads the
+    # grid and ignores the cells, so a version that set only the cells passed
+    # every check above and still imported as five even columns.
+    from docx.oxml.ns import qn
+    md = os.path.join(tempfile.mkdtemp(prefix="yard-doc-test-"), "t.md")
+    with open(md, "w") as fh:
+        fh.write("| Buy | By | Ask for |\n|---|---|---|\n"
+                 "| bait | Sun 6 Sep | %s |\n" % ("x" * 900))
+    out = md[:-3] + ".docx"
+    imgs = {}
+    html = builddoc.build_html(md, imgs)
+    from docx import Document
+    doc = Document()
+    builddoc.Conv(doc, imgs).feed(html)
+    doc.save(out)
+
+    t = Document(out).tables[0]
+    gridEl = t._tbl.find(qn("w:tblGrid"))
+    grid = [int(c.get(qn("w:w"))) / 1440.0
+            for c in gridEl.findall(qn("w:gridCol"))] if gridEl is not None else []
+    ok(len(grid) == 3 and len(set(round(g, 3) for g in grid)) == 3,
+       "w:tblGrid carries three different widths, not add_table's even split", grid)
+    ok(grid and grid[2] == max(grid),
+       "and the widest grid column is the prose one", grid)
+    layout = t._tbl.tblPr.find(qn("w:tblLayout"))
+    ok(layout is not None and layout.get(qn("w:type")) == "fixed",
+       "the table layout is fixed, so nothing re-fits it on import",
+       layout if layout is None else layout.get(qn("w:type")))
+    shutil.rmtree(os.path.dirname(md), ignore_errors=True)
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser(description=__doc__,
@@ -487,6 +589,8 @@ def main():
         check_cheap_paths(week, yard)
         print("\n the ticks")
         check_sync(week, yard)
+        print("\n the published table widths")
+        check_column_widths()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

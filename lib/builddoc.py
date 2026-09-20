@@ -26,11 +26,78 @@ from html.parser import HTMLParser
 
 import markdown as md_lib
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 
 MAX_WIDTH_IN = 6.5
 IMG_RE = re.compile(r'<img\s+[^>]*src="([^"]+)"[^>]*?/?>', re.I)
 WIDTH_RE = re.compile(r'width="(\d+)"', re.I)
+
+# The text column between the margins set in main().
+TABLE_WIDTH_IN = 7.3
+MIN_COL_IN = 0.55
+
+
+def column_widths(rows, ncols):
+    """Inches per column, weighted by how much text each column actually holds.
+
+    Left to itself the importer gives every column a similar share, which is
+    wrong whenever one column is prose and the others are dates and prices: the
+    prose wraps to fifteen lines and every other cell in the row is nine tenths
+    white space, so the page becomes mostly scroll.
+
+    Weighting by the square root of the mean cell length rather than by the
+    length itself is what keeps this honest at both ends. Raw proportion hands a
+    1,500-character cell 80% of the page and squeezes a street address into half
+    an inch; the square root damps the extreme while still moving most of the
+    width where the text is. MIN_COL_IN is the floor a date or a price needs to
+    stay on one line, and it is taken out before the rest is shared.
+    """
+    lengths = [0.0] * ncols
+    counts = [0] * ncols
+    for row in rows:
+        for j, cell in enumerate(row[:ncols]):
+            lengths[j] += sum(len(text) for text, _, _ in cell)
+            counts[j] += 1
+    means = [lengths[j] / counts[j] if counts[j] else 1.0 for j in range(ncols)]
+    weights = [max(m, 1.0) ** 0.5 for m in means]
+
+    floor = MIN_COL_IN * ncols
+    if floor >= TABLE_WIDTH_IN:            # more columns than the page can hold
+        return [TABLE_WIDTH_IN / ncols] * ncols
+    spare, total = TABLE_WIDTH_IN - floor, sum(weights)
+    return [MIN_COL_IN + spare * w / total for w in weights]
+
+
+def fix_layout(table, widths):
+    """Pin the widths so the importer honours them instead of re-fitting.
+
+    w:tblGrid is the part that matters and the one python-docx never touches: it
+    writes w:tcW per cell and leaves the grid at the equal split add_table made,
+    and Google Docs reads the grid. Setting only the cells looks correct in a
+    local inspection — cell.width reads back exactly what was set — and imports
+    as evenly spaced columns, so this has to be verified on the grid rather than
+    on the cells. Both are written, because Word prefers w:tcW under a fixed
+    layout, and the two disagreeing is what produced the wrong answer here.
+    """
+    table.autofit = False
+    tblPr = table._tbl.tblPr
+    layout = tblPr.find(qn('w:tblLayout'))
+    if layout is None:
+        layout = OxmlElement('w:tblLayout')
+        tblPr.append(layout)
+    layout.set(qn('w:type'), 'fixed')
+
+    twips = [str(int(round(w * 1440))) for w in widths]
+    gridEl = table._tbl.find(qn('w:tblGrid'))
+    if gridEl is not None:
+        cols = gridEl.findall(qn('w:gridCol'))
+        for col, tw in zip(cols, twips):
+            col.set(qn('w:w'), tw)
+    for j, w in enumerate(widths):
+        for cell in table.column_cells(j):
+            cell.width = Inches(w)
 
 
 def build_html(md_path, images):
@@ -167,8 +234,10 @@ class Conv(HTMLParser):
             rows, self.table_rows = self.table_rows, None
             if not rows:
                 return
-            t = self.doc.add_table(rows=len(rows), cols=max(len(r) for r in rows))
+            ncols = max(len(r) for r in rows)
+            t = self.doc.add_table(rows=len(rows), cols=ncols)
             t.style = 'Table Grid'
+            fix_layout(t, column_widths(rows, ncols))
             for i, row in enumerate(rows):
                 for j, cell in enumerate(row):
                     p = t.cell(i, j).paragraphs[0]
