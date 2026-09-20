@@ -21,6 +21,11 @@ about a date or a link. The one after that is that a phone app reads this same
 file and renders the same screens natively, with no second extraction to keep
 in step with this one.
 
+A week is in here as well, under `weeks`: one row of facts each, carrying its
+id, its hours, how many jobs it holds, and whether it falls past the date the
+plan runs to. Three screens count weeks, and three counts are three answers.
+A week's id is `w` and its Monday's date, which is the only address a week has.
+
 What this is not: a new source of truth. Nothing is authored here and nothing
 is stored here that is not derived. Delete `bundle.json` and rebuild it; the
 record is the JSON files and the markdown, exactly as before.
@@ -211,6 +216,8 @@ def build(slug):
         },
         "built": datetime.date.today().isoformat(),
         "documents": documents(slug),
+        "weeks": week.week_spine(tasks_doc,
+                                 yards.load_conditions(slug) or {}),
         "tasks": out_tasks,
         "shopping": [dict(b, shop=shops.get(b.get("supplier")))
                      for b in tasks_doc.get("shopping", [])],
@@ -268,6 +275,10 @@ def main():
     print(f"\n  {data['yard']['name']}")
     print(f"      {len(data['documents']):3d} documents, {anchors} anchored "
           f"sections to link into")
+    beyond = [w for w in data["weeks"] if w["beyond"]]
+    print(f"      {len(data['weeks']):3d} weeks, "
+          f"{sum(1 for w in data['weeks'] if not w['empty'])} of them carrying "
+          f"work, {len(beyond)} past the target date")
     print(f"      {len(data['tasks']):3d} tasks, "
           f"{sum(len(t['links']) for t in data['tasks'])} references, "
           f"{len(broken)} of them resolving to nothing")

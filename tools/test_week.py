@@ -39,6 +39,30 @@ disagreeing. The properties worth proving, each easy to pass by accident:
                        the plan no longer states, or the escape hatch swallows
                        the finding it exists to record
 
+The fourth guardrail is the published week, and it turns on a second claim:
+that the page is right on the day it is read rather than on the day it was
+built. The properties there:
+
+  the week rolls over  every week of the plan is in `WEEK.html`, and the
+                       script picks one from the device clock. A week other
+                       than the build week has to carry its own jobs
+  one Monday           the id the script asks for is the id the renderer
+                       wrote. Run in node, because two languages agreeing is
+                       the property and each checking itself proves nothing
+  empty is not done    an empty week before the target date says nothing is
+                       planned; one after it says the plan stops there, and
+                       names the next dated job. A blank week that reads as a
+                       finished week hides five jobs behind two years
+  the page says its age
+                       a build older than the threshold shows a banner, and
+                       the threshold holds either side of the line
+  one answer per week  the front door and the week page describe the same week
+                       the same way. Both write a block per week and pick one
+                       by the clock, so they can disagree about any week and
+                       not only about the week somebody built in. A week past
+                       the target date can still hold work, and a job given a
+                       window rather than a day is still a job
+
 Everything runs against a temporary GARDEN_ROOT, so no real yard is read or
 written and none of this touches personal data.
 """
@@ -47,7 +71,9 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -60,9 +86,12 @@ results = []          # (state, label, detail) — state in pass/FAIL
 verbose = False
 
 
+MARK = {"pass": "ok  ", "skip": "skip", "FAIL": "FAIL"}
+
+
 def record(state, label, detail=""):
     results.append((state, label, detail))
-    print(f"  {'ok  ' if state == 'pass' else 'FAIL'}  {label}")
+    print(f"  {MARK.get(state, state)}  {label}")
     if detail and (state != "pass" or verbose):
         for line in str(detail).strip().splitlines():
             print(f"          {line}")
@@ -607,6 +636,10 @@ S_SOURCING = {"yard": SCREENS, "suppliers": [
 
 S_TASKS = {
     "yard": SCREENS, "schema_version": 1, "sources": {}, "suppliers": {},
+    # The target date is what tells an empty week which kind of empty it is.
+    # 15 November is a Sunday, so the week of 9 November is the last week the
+    # plan reaches and every week after it is past the end of the plan.
+    "target_date": "2026-11-15", "target_note": "the party",
     "shopping": [{"id": "b01", "item": "The plant order", "supplier": "nursery",
                   "by": "2026-09-25", "cost_usd": [100, 120],
                   "confidence": "estimated", "source": [],
@@ -638,6 +671,11 @@ S_TASKS = {
          "title": "Water the new plants", "done": False,
          "where": {"bed": "bed a"},
          "repeat": {"from": "2026-10-19", "to": "2026-11-15", "every": "day"}},
+        # Two months past the target date, behind nine blank weeks. This is
+        # the job the beyond-the-plan label exists to keep reachable.
+        {"id": "t105", "date": "2027-01-15", "minutes": 45, "kind": "prune",
+         "title": "Prune the late roses", "source": [], "done": False,
+         "where": {"bed": "bed a"}},
     ],
 }
 
@@ -893,6 +931,409 @@ def check_standing_ticks(yard):
        "the tally counts the job once, not once per day it lands on")
 
 
+# ----------------------------------------------- the week that rolls over
+
+def week_chunks(page):
+    """Each week section of WEEK.html, by its id.
+
+    Split rather than matched, because a week section holds seven day
+    sections inside it and a regular expression cannot find the right closing
+    tag. Every week starts with the same literal, so the text between two of
+    them is one week. The last chunk carries the page footer with it, which
+    matters only where a whole chunk is compared.
+    """
+    out = {}
+    for part in page.split('<section class="wk')[1:]:
+        m = re.search(r'id="(w[\d-]+)"', part)
+        if m:
+            out[m.group(1)] = part
+    return out
+
+
+def hero_blocks(page):
+    """Each week's hero block of INDEX.html, by its id.
+
+    Split on the same literal as `week_chunks`, and for the same reason: the
+    index writes one block per week and the script shows one of them, so the
+    front door can disagree with the week page about any week of the plan.
+    """
+    out = {}
+    for part in page.split('<div class="wknow')[1:]:
+        m = re.search(r'data-week="(w[\d-]+)"', part)
+        if m:
+            out[m.group(1)] = part
+    return out
+
+
+def node_run(source):
+    """Run a fragment of the page's own JavaScript, or say it was not run.
+
+    The date functions are the one thing in these pages that Python cannot
+    check by reading the HTML: they decide which week the device opens on.
+    They are written with no DOM in them for exactly this reason, so node can
+    load them as they ship. Where node is missing the check is reported as
+    skipped, because a check that quietly passes when it did not run is worse
+    than no check.
+    """
+    if not shutil.which("node"):
+        return {"ran": False, "why": "node is not on this machine, so the "
+                                     "script was not run"}
+    path = os.path.join(tempfile.gettempdir(), "yard-week-dates.js")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("var window = {};\n" + source)
+    proc = subprocess.run([shutil.which("node"), path],
+                          capture_output=True, text=True)
+    os.unlink(path)
+    if proc.returncode:
+        return {"ran": True, "ok": False, "why": proc.stderr.strip()}
+    return {"ran": True, "ok": True, "value": json.loads(proc.stdout.strip())}
+
+
+def dates_js(page):
+    """The page's own date functions, as they ship."""
+    m = re.search(r'<script id="yard-dates">(.*?)</script>', page, re.S)
+    return m.group(1) if m else ""
+
+
+def check_every_week_travels(yard):
+    """The page holds every week of the plan, not the week it was built in.
+
+    This is the whole defect. `WEEK.html` used to bake one Monday at build
+    time, so the page on a phone said the same seven days until somebody
+    remembered to build it again — and said nothing about being out of date.
+    """
+    from lib import week as W
+
+    data = W.load(SCREENS)
+    spine = W.week_spine(data)
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+    chunks = week_chunks(page)
+
+    ok(len(spine) == 17, f"the fixture spans 17 weeks (spine says {len(spine)})")
+    ok(sorted(chunks) == sorted(w["id"] for w in spine),
+       "every week in the span is in the page, one section each",
+       (len(chunks), len(spine)))
+    ok(page.count('<section class="wk on"') == 1,
+       "exactly one of them is shown without a script running")
+
+    # A week is addressed by its Monday and by nothing else, so a page, a
+    # bundle and a calendar row can all name the same week.
+    ok(W.week_id(datetime.date(2026, 10, 19)) == "w2026-10-19"
+       and W.week_monday("w2026-10-19") == datetime.date(2026, 10, 19),
+       "a week id is `w` and its Monday, and reads back to that Monday")
+
+    # The point of the whole change: a week that is not the build week is in
+    # the page, with its own jobs on their own days.
+    later = chunks["w2026-10-19"]
+    ok('data-task="t102"' in later and 'data-day="2026-10-24"' in later,
+       "a week other than the build week carries its own jobs, on its own days")
+    ok('data-task="t102"' not in chunks["w2026-09-21"],
+       "and a job does not bleed into the week before it")
+    ok('data-task="t104"' in chunks["w2026-11-09"],
+       "a standing job appears in every week it runs through")
+
+    # Built on a different day, the weeks are the same weeks. Only which one
+    # is shown may differ, which is what the script decides.
+    other = week_chunks(W.render_week_html(
+        SCREENS, today=datetime.date(2027, 6, 1)))
+    same = all(chunks[k] == other[k] for k in sorted(chunks)[:-1])
+    ok(sorted(other) == sorted(chunks) and same,
+       "building on another day changes no week's content",
+       [k for k in sorted(chunks)[:-1] if chunks[k] != other.get(k)])
+
+
+def check_clock_picks_the_week(yard):
+    """The script asks for the id Python wrote, on whatever day it is opened.
+
+    Run in node against the page's own script, and compared with the ids the
+    renderer put on the sections. Two languages agreeing on the same Monday
+    is the property; each checking itself would prove nothing.
+    """
+    from lib import week as W
+
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+    days = ["2026-09-21", "2026-09-27", "2026-09-28", "2026-12-31",
+            "2027-01-01", "2026-03-08", "2026-11-01"]
+    ran = node_run(dates_js(page)
+                   + "\nconsole.log(JSON.stringify(%s.map(yard.weekId)));"
+                   % json.dumps(days))
+    if not ran["ran"]:
+        record("skip", "the page's week-picking script runs in node",
+               ran["why"])
+        return
+    if not ran["ok"]:
+        ok(False, "the page's week-picking script runs in node", ran["why"])
+        return
+
+    got = ran["value"]
+    want = [W.week_id(W.monday_of(datetime.date.fromisoformat(d)))
+            for d in days]
+    ok(got == want,
+       "the script names the same Monday as the renderer, for every day tried",
+       list(zip(days, got, want)))
+
+    chunks = week_chunks(page)
+    ok(all(i in chunks for i in got if "2026-09" <= i[1:8] <= "2027-01"),
+       "and each of those ids is a section that exists in the page",
+       [i for i in got if i not in chunks])
+
+    # A Sunday is the end of its week, not the start of the next one. This is
+    # the off-by-one that would put a person on the wrong page every Sunday.
+    ok(got[days.index("2026-09-27")] == "w2026-09-21",
+       "Sunday belongs to the week that began on Monday", got)
+
+
+def check_beyond_the_plan(yard):
+    """An empty week says which kind of empty it is, and stays navigable.
+
+    Before the target date an empty week is planned and clear. After it,
+    nobody has planned that far, and the difference matters because the jobs
+    that do sit past the target are behind nine blank weeks. A blank week
+    that reads as a finished week loses them.
+    """
+    from lib import week as W
+
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+    chunks = week_chunks(page)
+
+    quiet = chunks["w2026-09-28"]
+    ok("Nothing is planned for this week" in quiet,
+       "an empty week the plan reaches says nothing is planned")
+    ok("15 November 2026" in quiet and "the party" in quiet,
+       "and names the date the plan runs to, so 'clear' is checkable")
+    ok("Beyond the plan" not in quiet,
+       "and does not claim the plan has run out")
+
+    past = chunks["w2026-11-16"]
+    ok("Beyond the plan" in past,
+       "an empty week past the target says so instead")
+    ok("15 November 2026" in past,
+       "names the date the plan runs to", past[:400])
+    ok('href="TASKS.html#t105"' in past,
+       "names the next dated job, with a link to its own page")
+    ok("15 January 2027" in past,
+       "and says when that job is")
+    ok('href="#w2027-01-11"' in past,
+       "and offers the week it falls in, so it is one click away")
+
+    ok(quiet != past and "Nothing is planned" not in past,
+       "the two kinds of empty week do not read the same")
+
+    work = chunks["w2027-01-11"]
+    ok('data-task="t105"' in work and "Beyond the plan, which runs to" in work,
+       "a week past the target that does hold work says both")
+
+    ok("w2026-11-16" in chunks and "w2026-11-23" in chunks,
+       "every blank week between is still in the page and still addressable")
+
+
+def check_stale_banner(yard):
+    """The page says when its own data is old enough to have moved.
+
+    The week rolls over on its own; the jobs, dates and prices in it do not.
+    This is the net under that: the client-side arithmetic can be perfectly
+    right over a bundle built four months ago.
+    """
+    from lib import chrome, week as W
+
+    built = datetime.date.today().isoformat()
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+
+    ok(f'data-built="{built}"' in page,
+       "the page carries the day it was built, where a script can read it")
+    ok(f'data-days="{chrome.STALE_DAYS}"' in page,
+       f"and the threshold it is judged against ({chrome.STALE_DAYS} days)")
+    ok('id="stale"' in page and "hidden>" in page.split('id="stale"')[1][:200],
+       "the banner is written out and hidden, not composed in the browser")
+    ok(f"python3 -m lib.site {SCREENS}" in page,
+       "and it names the command that fixes it")
+
+    limit = chrome.STALE_DAYS
+    ran = node_run(dates_js(page) + """
+console.log(JSON.stringify({
+  under: yard.isStale('2026-09-01', '2026-09-%02d', %d),
+  at: yard.isStale('2026-09-01', '2026-09-%02d', %d),
+  over: yard.isStale('2026-09-01', '2026-10-01', %d),
+  age: yard.ageDays('2026-09-01', '2026-09-%02d'),
+  dst: yard.ageDays('2026-03-07', '2026-03-09')
+}));""" % (1 + limit - 1, limit, 1 + limit, limit, limit, 1 + limit))
+    if not ran["ran"]:
+        record("skip", "the staleness threshold holds either side of the line",
+               ran["why"])
+        return
+    if not ran["ok"]:
+        ok(False, "the staleness threshold holds either side of the line",
+           ran["why"])
+        return
+
+    got = ran["value"]
+    ok(got["under"] is False,
+       f"a page {limit - 1} days old says nothing", got)
+    ok(got["at"] is True and got["over"] is True,
+       f"a page {limit} days old says so, and an older one keeps saying it",
+       got)
+    ok(got["age"] == limit, "the age it reports is the age it is", got)
+    ok(got["dst"] == 2,
+       "and a daylight-saving change does not add or lose a day", got)
+
+
+def check_week_navigation(yard):
+    """Previous, next, today, the arrow keys and a swipe, over one handler."""
+    from lib import week as W
+
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+
+    for what, mark in (("previous", 'id="prevwk"'), ("next", 'id="nextwk"'),
+                       ("this week", 'id="thiswk"')):
+        ok(mark in page, f"there is a {what} control")
+    ok("ArrowLeft" in page and "ArrowRight" in page,
+       "the arrow keys move a week, for a laptop")
+    ok("touchstart" in page and "touchend" in page,
+       "and a swipe does, for a phone")
+    ok(page.count("function step(") == 1
+       and page.count("step(dx < 0 ? 1 : -1)") == 1,
+       "the swipe and the arrows share one way of moving a week, not two")
+    ok("hashchange" in page,
+       "a link naming a week opens that week, rather than the current one")
+    ok("scrollIntoView(" not in page and "strip.scrollLeft" in page,
+       "the strip is scrolled sideways by hand, so the page itself stays put")
+
+    # A week is chosen by its id. Leaving that id in the address on the way in
+    # makes the browser scroll to the section when loading ends, which puts
+    # the week's own heading off the top of the screen.
+    ok("if (moved && window.history" in page
+       and "window.scrollTo(0, 0)" in page,
+       "arriving at a week starts at the top of it, not part way down")
+
+
+def check_calendar_rows_open_their_week(yard):
+    """The year view is the map, and every row is the way into the detail."""
+    from lib import bundle, week as W
+
+    data = bundle.build(SCREENS)
+    cal = W.render_calendar_html(SCREENS, data=data,
+                                 today=datetime.date(2026, 9, 21))
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+    sections = set(week_chunks(page))
+    linked = set(re.findall(r'href="WEEK\.html#(w[\d-]+)"', cal))
+
+    ok(linked, "a calendar row links to its week in WEEK.html")
+    ok(linked <= sections,
+       "and every one of those links lands on a week the page holds",
+       sorted(linked - sections))
+    ok(linked == sections,
+       "every week the page holds is reachable from the calendar",
+       sorted(sections - linked))
+    ok(cal.count('data-monday="') == len(sections),
+       "each row carries its Monday, so the script can mark the current one")
+    ok("yard.mondayOf" in cal and "classList.toggle('now'" in cal,
+       "the 'this week' mark follows the clock rather than the build day")
+
+
+def check_density_strip(yard):
+    """Hours a week over the whole plan, so blank weeks have a shape to them."""
+    from lib import week as W
+
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+    strip = page.split('<div class="density"', 1)[1].split("</div>", 1)[0]
+    bars = re.findall(r'data-week="(w[\d-]+)"[^>]*>'
+                      r'<i style="height:(\d+)%"', strip)
+    heights = dict(bars)
+    sections = set(week_chunks(page))
+
+    ok(len(bars) == len(sections),
+       "one bar per week of the plan", (len(bars), len(sections)))
+    ok(set(heights) == sections,
+       "and each bar names a week the page holds")
+    ok(heights.get("w2026-09-28") == "0",
+       "a week with no work has no bar", heights.get("w2026-09-28"))
+    ok(int(heights.get("w2026-10-19", 0)) > int(heights.get("w2027-01-11", 0)),
+       "a busy week stands taller than a quiet one",
+       (heights.get("w2026-10-19"), heights.get("w2027-01-11")))
+    ok('href="#w2026-10-19"' in strip,
+       "and a bar is a link into its own week")
+
+
+def check_bundle_holds_the_weeks(yard):
+    """One data layer. Every screen counts weeks from the same rows."""
+    from lib import bundle, week as W
+
+    data = bundle.build(SCREENS)
+    page = W.render_week_html(SCREENS, today=datetime.date(2026, 9, 21))
+    ids = [w["id"] for w in data["weeks"]]
+
+    ok(ids and ids == sorted(ids), "the bundle carries the weeks, in order")
+    ok(set(ids) == set(week_chunks(page)),
+       "the same weeks the page holds, addressed the same way")
+
+    beyond = [w for w in data["weeks"] if w["beyond"]]
+    ok(all(w["monday"] > "2026-11-15" for w in beyond) and beyond,
+       "a week past the target date is flagged in the data, not only in prose",
+       [w["id"] for w in beyond][:3])
+    first = data["weeks"][0]
+    ok(first["position"] == "week 1 of %d" % len(ids)
+       and first["title"].startswith("Monday"),
+       "and each week carries the words a page shows for it", first)
+
+
+def check_index_hero_matches_the_week(yard):
+    """The front door describes a week the way the week page describes it.
+
+    `INDEX.html` writes a hero block for every week and the script shows one,
+    exactly as `WEEK.html` does. So the two can disagree about any week of the
+    plan, not only about the week somebody built in, and the disagreement is
+    invisible until a reader opens both on the same day.
+
+    Two ways they did disagree. The hero took "past the target date" to mean
+    "blank" and told the reader nobody had planned a week that the week page
+    then filled with jobs. And it counted jobs off the day grid, which leaves
+    out a job whose record gives a window rather than a day.
+    """
+    from lib import bundle, site, week as W
+
+    data = bundle.build(SCREENS)
+    page = site.render_index(SCREENS, data, today=datetime.date(2026, 9, 21))
+    heroes = hero_blocks(page)
+
+    ok(set(heroes) >= {w["id"] for w in data["weeks"]},
+       "the index carries a block for every week the bundle holds")
+
+    work = heroes["w2027-01-11"]
+    ok("Nobody has planned this week yet" not in work,
+       "a week past the target that holds work is not called unplanned", work)
+    ok("across 1 job" in work and "45 min" in work,
+       "the front door counts the work the week page lists", work)
+    ok("15 November 2026" in work,
+       "and still says the week falls past the date the plan runs to", work)
+
+    blank = heroes["w2026-11-16"]
+    ok("Nobody has planned this week yet" in blank,
+       "a blank week past the target does still say nobody planned it")
+    ok('href="TASKS.html#t105"' in blank,
+       "and does still name the next dated job")
+
+    # A window task never lands on the day grid, so a count taken off the grid
+    # alone is short. The fixture holds no window task, and this property is
+    # proved on a document built here rather than by disturbing every count
+    # the checks above make.
+    doc = {"yard": SCREENS, "target_date": "2026-11-15", "tasks": [
+        {"id": "x01", "date": "2026-10-20", "minutes": 30, "kind": "prune",
+         "title": "A job with a day", "done": False},
+        {"id": "x02", "window": ["2026-10-19", "2026-10-25"], "minutes": 30,
+         "kind": "prune", "title": "A job with a window", "done": False}]}
+    row = {w["id"]: w for w in W.week_spine(doc)}["w2026-10-19"]
+    block = site._hero_week(doc, row, datetime.date(2026, 11, 15), None)
+
+    ok(row["jobs"] == 2,
+       "the spine counts a job with a window beside the one with a day",
+       row["jobs"])
+    ok("across 2 jobs" in block,
+       "and so does the front door, rather than counting the grid alone",
+       block)
+    ok("has a window rather than a day" in block,
+       "which it says, so the reader knows where the second job is", block)
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser(description=__doc__,
@@ -944,11 +1385,28 @@ def main():
         check_pages(screens)
         print("\n one standing job, one tick")
         check_standing_ticks(screens)
+        print("\n the week that rolls over by itself")
+        check_every_week_travels(screens)
+        check_clock_picks_the_week(screens)
+        print("\n what an empty week means")
+        check_beyond_the_plan(screens)
+        print("\n the stale banner")
+        check_stale_banner(screens)
+        print("\n moving between weeks")
+        check_week_navigation(screens)
+        check_calendar_rows_open_their_week(screens)
+        check_density_strip(screens)
+        print("\n one data layer")
+        check_bundle_holds_the_weeks(screens)
+        check_index_hero_matches_the_week(screens)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
     bad = [r for r in results if r[0] == "FAIL"]
-    print(f"\n{len(results) - len(bad)} passed, {len(bad)} failed")
+    skipped = [r for r in results if r[0] == "skip"]
+    print(f"\n{len(results) - len(bad) - len(skipped)} passed, "
+          f"{len(bad)} failed"
+          + (f", {len(skipped)} skipped" if skipped else ""))
     if bad:
         print("\nThe calendar is not holding:")
         for _, label, _ in bad:

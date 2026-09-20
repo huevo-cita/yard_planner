@@ -63,6 +63,32 @@ ul.doubts li { border-left:3px solid var(--warnline); background:#fffbeb;
 ul.doubts li code { background:#fff; }
 ul.doubts li span { display:block; color:var(--muted); font-size:.82rem;
   margin-top:.15em; }
+
+/* One of these is shown, and the script picks which. The hero used to hold
+   the build week's hours, which stopped being true the following Monday. */
+.hero .wknow { display:none; }
+.hero .wknow.on { display:block; }
+"""
+
+#: The hero, corrected by the device clock.
+#:
+#: Python writes a paragraph for every week and this shows one of them. It
+#: writes nothing itself, so the front door cannot say an hours figure the
+#: week page disagrees with.
+INDEX_JS = """
+(function () {
+  var blocks = [].slice.call(document.querySelectorAll('.hero .wknow'));
+  if (!blocks.length) return;
+  var id = yard.weekId(yard.today()), found = false;
+  blocks.forEach(function (b) {
+    var on = b.getAttribute('data-week') === id;
+    b.classList.toggle('on', on);
+    found = found || on;
+  });
+  if (found) return;
+  var out = document.getElementById('hwout');
+  if (out) out.classList.add('on');
+})();
 """
 
 
@@ -80,6 +106,82 @@ def _card(href, title, blurb, note=None):
             + (f"<em>{_e(note)}</em>" if note else "") + "</a>")
 
 
+def _hero_week(tasks, w, target, target_note):
+    """What one week is, in the two or three lines the front door can afford.
+
+    Written for every week of the plan, because the page is opened on a day
+    the build cannot know. The distance to the target is counted in weeks
+    rather than in days for the same reason: a week's worth of prose is true
+    for that whole week.
+
+    Past the target date the plan stops planning, but it does not stop holding
+    work. So "beyond" alone does not make a week blank, and the emptiness the
+    spine measured is what picks the sentence. Reading "beyond" as "blank" made
+    this page deny jobs that `WEEK.html` went on to list.
+
+    The job count is the sum the week page and the spine both use. A window
+    task sits outside the day grid, so a count taken off the grid alone is
+    short, and three screens that count differently give three answers.
+    """
+    from . import week
+
+    monday = week._date(w["monday"])
+    grid, loose = week.week_grid(tasks, monday)
+    buys = week.buys_for(tasks, monday)
+    shape = week.week_shape(grid, loose, buys)
+    jobs = shape["jobs"] + len(loose)
+
+    out = []
+    if w["beyond"] and w["empty"]:
+        nxt = week.next_work(tasks, week._date(w["sunday"]))
+        out.append('<p class="big">This week is past the end of the plan.</p>')
+        out.append(f'<p>The plan runs to {target:%-d %B %Y}'
+                   + (f' &mdash; {_e(target_note)}' if target_note else "")
+                   + ". Nobody has planned this week yet.</p>")
+        if nxt:
+            day, t = nxt
+            out.append(f'<p>The next dated job is '
+                       f'<a href="TASKS.html#{_e(t["id"])}">{_e(t["title"])}'
+                       f'</a>, on {day:%-d %B %Y}.</p>')
+        return "".join(out)
+
+    lead = (f'{week.hours(shape["fixed"])} of dated work this week'
+            if shape["fixed"] else "No fixed hours this week")
+    out.append(f'<p class="big">{lead}, across {jobs} job'
+               f'{"s" if jobs != 1 else ""}.</p>')
+    if shape["critical"]:
+        d, t = shape["critical"][0]
+        out.append(f'<p><b>{d:%A}</b> carries work that cannot slip: '
+                   f'{_e(t["title"])}.</p>')
+    if shape["buys"]:
+        first = min(shape["buys"], key=lambda b: b["by"])
+        out.append(f'<p>{len(shape["buys"])} thing'
+                   f'{"s" if len(shape["buys"]) > 1 else ""} to buy, the first '
+                   f'by {week._date(first["by"]):%A}.</p>')
+    if loose:
+        many = len(loose) > 1
+        out.append(f'<p>{len(loose)} job{"s" if many else ""} '
+                   f'{"have" if many else "has"} a window rather than a '
+                   f'day.</p>')
+    if w["empty"]:
+        out.append("<p>Nothing is dated to this week.</p>")
+    if w["beyond"]:
+        out.append(f'<p>This work sits past {target:%-d %B %Y}, which the '
+                   f'plan runs to'
+                   + (f' &mdash; {_e(target_note)}' if target_note else "")
+                   + ".</p>")
+    elif target:
+        weeks = (week.monday_of(target) - monday).days // 7
+        when = ("this week" if weeks == 0 else
+                "last week" if weeks == -1 else
+                f"{-weeks} weeks ago" if weeks < 0 else
+                "next week" if weeks == 1 else f"{weeks} weeks away")
+        out.append(f'<p>{target:%-d %B} is {when}'
+                   + (f' &mdash; {_e(target_note)}' if target_note else "")
+                   + ".</p>")
+    return "".join(out)
+
+
 def render_index(slug, data=None, today=None):
     """The front door, built from the bundle so it cannot contradict a page."""
     from . import week
@@ -89,36 +191,28 @@ def render_index(slug, data=None, today=None):
     today = today or datetime.date.today()
     monday = week.monday_of(today)
     tasks = week.load(slug) or {}
-
-    grid, loose = week.week_grid(tasks, monday)
-    buys = week.buys_for(tasks, monday)
-    shape = week.week_shape(grid, loose, buys)
     ahead = [t for t in data["tasks"] if not t.get("done")]
 
-    # What is happening now, in one sentence, with the page that answers it.
-    crit = shape["critical"]
-    now = [f'<p class="big">{week.hours(shape["fixed"])} of dated work this '
-           f'week, across {shape["jobs"]} job'
-           f'{"s" if shape["jobs"] != 1 else ""}.</p>']
-    if crit:
-        d, t = crit[0]
-        now.append(f'<p><b>{d:%A}</b> carries work that cannot slip: '
-                   f'{_e(t["title"])}.</p>')
-    if shape["buys"]:
-        first = min(shape["buys"], key=lambda b: b["by"])
-        now.append(f'<p>{len(shape["buys"])} thing'
-                   f'{"s" if len(shape["buys"]) > 1 else ""} to buy, the first '
-                   f'by {week._date(first["by"]):%A}.</p>')
-    if not crit and not shape["buys"] and not shape["fixed"]:
-        now.append("<p>Nothing is dated to this week.</p>")
-
-    target = ""
-    if data["yard"].get("target_date"):
-        td = datetime.date.fromisoformat(data["yard"]["target_date"])
-        days = (td - today).days
-        target = (f'<p>{days} days to {td:%-d %B}'
-                  + (f' &mdash; {_e(data["yard"]["target_note"])}'
-                     if data["yard"].get("target_note") else "") + ".</p>")
+    # What is happening now, for every week the plan holds, with the script
+    # showing the one the device clock asks for. Baking the build week's
+    # hours in here is the defect this page shares with WEEK.html.
+    target = (datetime.date.fromisoformat(data["yard"]["target_date"])
+              if data["yard"].get("target_date") else None)
+    target_note = data["yard"].get("target_note")
+    here = week.week_id(monday)
+    now = []
+    for w in data["weeks"]:
+        on = " on" if w["id"] == here else ""
+        now.append(f'<div class="wknow{on}" data-week="{w["id"]}">'
+                   + _hero_week(tasks, w, target, target_note) + "</div>")
+    span = ""
+    if data["weeks"]:
+        a = week._date(data["weeks"][0]["monday"])
+        z = week._date(data["weeks"][-1]["sunday"])
+        span = (f'<p>The plan covers {a:%-d %B %Y} to {z:%-d %B %Y}.</p>')
+    outside = any(w["id"] == here for w in data["weeks"])
+    now.append(f'<div class="wknow{"" if outside else " on"}" id="hwout">'
+               f'<p class="big">Today is outside this plan.</p>{span}</div>')
 
     stats = (_stat(len(ahead), "jobs still to do")
              + _stat(len([b for b in data["shopping"]]), "things to buy")
@@ -134,7 +228,7 @@ def render_index(slug, data=None, today=None):
         act.append(_card("WEEK.html", "This week",
                          "The seven days in front of you, with the detail "
                          "behind a click.",
-                         f"{week.hours(shape['fixed'])} dated"))
+                         "follows the clock, so it rolls over on its own"))
     if exists("CALENDAR.html"):
         act.append(_card("CALENDAR.html", "The calendar",
                          "Every week from here to the end, one line each.",
@@ -182,16 +276,16 @@ def render_index(slug, data=None, today=None):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_e(data['yard']['name'])} &mdash; the yard</title>
-<style>{chrome.BASE_CSS}{chrome.NAV_CSS}{INDEX_CSS}</style>
+<style>{chrome.BASE_CSS}{chrome.NAV_CSS}{chrome.STALE_CSS}{INDEX_CSS}</style>
 </head>
 <body>
 {chrome.nav(root, INDEX, data['yard']['name'])}
 <div class="wrap">
 {sandbox}
+{chrome.stale_banner(slug, data['built'])}
 <div class="hero">
 <h1>{_e(data['yard']['name'])}</h1>
 {''.join(now)}
-{target}
 <a class="go" href="WEEK.html">What to do this week &rarr;</a>
 </div>
 
@@ -213,11 +307,19 @@ page above links into them rather than repeating them.</p>
 <p>Built from <code>bundle.json</code> on {data['built']} by
 <code>python3 -m lib.site {_e(slug)}</code>. Every page in this set is
 generated from the same bundle, so two of them cannot disagree about a date.</p>
+<p>The lines above follow this device's clock, and a banner appears when the
+build is more than {chrome.STALE_DAYS} days old. What the plan holds still
+comes from the day it was built.</p>
 <p>Nothing on any page is a copy of prose that lives somewhere else. A link
 into a document is the document; correct it once and every page follows.</p>
 </footer>
 
 </div>
+{chrome.dates_js()}
+<script>
+{INDEX_JS}
+{chrome.STALE_JS}
+</script>
 </body>
 </html>
 """
