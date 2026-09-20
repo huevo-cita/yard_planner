@@ -118,8 +118,20 @@ def bed_fill_volume(length_ft, width_ft, depth_in):
     return length_ft * width_ft * (depth_in / 12.0) * SETTLE
 
 
+CAVEATS = "_caveats"     # reserved key on `need`; never a purchasable line
+
+
+def _caveat(need, say):
+    need.setdefault(CAVEATS, []).append(say)
+
+
 def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
-    """Everything the design implies, before netting against what is on site."""
+    """Everything the design implies, before netting against what is on site.
+
+    Anything this could not work out is recorded under `CAVEATS` rather than
+    left out. A quantity that silently does not appear reads as a cheaper job,
+    which is the one direction a bill of materials must never be wrong in.
+    """
     site = yards.load(slug, "site.json") or {}
     design = yards.load(slug, "design.json") or {}
     need = {}
@@ -130,18 +142,58 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         if why not in e["why"]:
             e["why"].append(why)
 
-    from .design import zone_areas
+    from .design import resolve_site_zone, zone_areas
     areas = zone_areas(site)
     planted = {p.get("zone") for p in design.get("plants", []) if p.get("zone")}
 
+    # A zone with no area recorded used to be skipped in silence, which is why
+    # a yard whose zones carried no `area_sqft` produced a bill of materials
+    # with no mulch and no compost on it at all — a shorter list reads as a
+    # cheaper job rather than as an unanswered question. Uncheckable zones are
+    # collected and reported on the record instead.
+    #
+    # `no_mulch` is the other half of it. Mulch is not wanted everywhere: a
+    # self-sown seed bank cannot push through three inches of it, and a bed
+    # whose whole front edge is a bluebonnet strip needs that stated on the
+    # zone rather than subtracted from the total by hand afterwards.
+    # Mulch and compost are declared independently, because a bed can want one
+    # and not the other and usually does. A square-foot vegetable bed is
+    # composted every turnover and never mulched; a container is neither.
+    unpriced = []
+    excluded = {"mulch": [], "compost": []}
     for zone in sorted(planted):
-        a = areas.get(zone)
+        key = resolve_site_zone(site, zone) or zone
+        z = (site.get("zones") or {}).get(key) or {}
+        a = areas.get(key)
         if not a:
+            unpriced.append(zone)
             continue
-        add("mulch", mulch_volume(a, mulch_depth_in), "cu ft",
-            f"{a:.0f} sq ft of {zone} at {mulch_depth_in} in")
-        add("compost", mulch_volume(a, compost_depth_in), "cu ft",
-            f"{a:.0f} sq ft of {zone} topdressed at {compost_depth_in} in")
+        for item, depth, verb in (("mulch", mulch_depth_in, "at"),
+                                  ("compost", compost_depth_in,
+                                   "topdressed at")):
+            off = z.get(f"no_{item}")
+            if off:
+                excluded[item].append(f"{zone} — {off}" if isinstance(off, str)
+                                      else zone)
+                continue
+            area = float(a) - float(z.get(f"no_{item}_sqft") or 0)
+            if area <= 0:
+                excluded[item].append(zone)
+                continue
+            less = ("" if abs(area - float(a)) < 0.05 else
+                    f", less {float(a) - area:.1f} sq ft excluded")
+            add(item, mulch_volume(area, depth), "cu ft",
+                f"{area:.0f} sq ft of {zone} {verb} {depth} in{less}")
+
+    if unpriced:
+        _caveat(need, f"no area_sqft on {', '.join(unpriced)}, so no mulch or "
+                      f"compost is costed for "
+                      f"{'them' if len(unpriced) > 1 else 'it'}. This total is "
+                      f"short by whatever they need — set the areas in "
+                      f"site.json rather than reading the omission as zero")
+    for item, zs in excluded.items():
+        if zs:
+            _caveat(need, f"no {item} by declaration: " + "; ".join(zs))
 
     for h in design.get("hardscape", []):
         if h.get("existing"):
@@ -204,7 +256,22 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         p = PRICES.get(item, {})
         unit = p.get("unit") or ("cu ft" if p.get("bag_usd") or
                                  p.get("bulk_usd_per_yard") else "each")
+        # Same item from two directions is a double count, and it is silent:
+        # the quantity is simply larger and reads as a bigger job. It happens
+        # for exactly one reason and it is a good one — somebody wrote down what
+        # the owner actually said he would buy, back when the derived figure was
+        # zero because no zone had an area. Now that both exist they are two
+        # answers to the same question and a person has to pick.
+        before = (need.get(item) or {}).get("quantity") or 0.0
         add(item, qty, unit, "listed in design.extra_materials")
+        if before:
+            _caveat(need, f"{item} is counted twice: {before:.1f} {unit} "
+                          f"derived from the zone areas at the standard depth, "
+                          f"plus {qty:g} {unit} listed in "
+                          f"design.extra_materials, totalling "
+                          f"{before + qty:.1f}. These are two answers to the "
+                          f"same question, not two purchases. Decide which "
+                          f"before this reaches a shopping list")
     return need
 
 
@@ -325,6 +392,7 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
     prices = {**PRICES, **overlay}
     cond = yards.load_conditions(slug)
     need = requirements(slug, mulch_depth_in, compost_depth_in)
+    caveats = need.pop(CAVEATS, [])
 
     src = sourcing.load(slug)
     local = local or bool(src.get("suppliers"))
@@ -427,6 +495,8 @@ def net(slug, prices=None, mulch_depth_in=3.0, compost_depth_in=2.0,
            "low_usd": round(low_total, 2), "high_usd": round(high_total, 2),
            "saved_by_using_what_is_here_usd": round(saved, 2),
            "prices": "local" if local else "national ballpark"}
+    if caveats:
+        out["caveats"] = caveats
     if provisional:
         out["provenance"] = provisional
     return out
@@ -620,6 +690,10 @@ def report(slug, prices=None, force=False):
     if bom.get("provenance"):
         print(f"  {bom['provenance']}: quantities above rest on assumptions "
               f"still in question")
+    for c in bom.get("caveats") or []:
+        print()
+        for i, w in enumerate(vision_mod._wrap(c, 68)):
+            print(f"  {'not costed:' if i == 0 else '           '} {w}")
 
     for ln in bom["lines"]:
         if ln["unit"] != "cu ft" or ln["usd"] <= 0:

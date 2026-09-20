@@ -26,8 +26,20 @@ would tempt everyone into skipping the research that actually matters.
      "count": 5, "zone": "back_bed", "light": "full sun",
      "mature_spread_ft": 3.0, "mature_height_ft": 3.0,
      "water": "low", "ph_range": [6.0, 8.0], "bloom": ["Oct", "Nov"],
-     "evergreen": false, "role": "accent",
+     "evergreen": false, "role": "accent", "layer": "back",
      "source": "Lady Bird Johnson Wildflower Center, 2026-08"}
+
+Two optional fields change how much ground a plant is judged to occupy, and
+both of them were a wrong answer on a real bed before they existed:
+
+    layer      front / middle / back / vine / accent. A `vine` is carried on a
+               trellis and takes no ground, which is the difference between a
+               bed reading 1.49x overplanted and reading 0.77x.
+    annual     true for anything that holds the ground for one season and then
+               comes out. Cool-season annuals tucked among established
+               perennials are a succession rather than a competition, and
+               counting both at full spread double-books ground that only one
+               of them occupies at a time.
 
 What the objections mean
 ------------------------
@@ -116,6 +128,27 @@ def resolve_zone(sun, site, zone):
 
 def _norm(s):
     return "".join(c for c in str(s).lower() if c.isalnum())
+
+
+def resolve_site_zone(site, zone):
+    """A design's zone name, resolved to the key `site.json` files it under.
+
+    `resolve_zone` above answers a different question — it resolves to the label
+    the *sun model* keys its table by. The area and container records live on
+    `site.json` under their own keys, so a design that names a bed by its label
+    rather than its key found no area at all and the space check silently passed.
+    """
+    zones = (site.get("zones") or {})
+    if zone in zones:
+        return zone
+    want = _norm(zone)
+    for key, z in zones.items():
+        names = [key]
+        if isinstance(z, dict):
+            names += [z.get("label"), z.get("label_short")]
+        if any(name and _norm(name) == want for name in names):
+            return key
+    return None
 
 
 def _series(sun, site, zone, months, field):
@@ -267,8 +300,19 @@ def check_water(plant, cond, site):
     return out
 
 
-def check_soil(plant, cond):
+def check_soil(plant, cond, site=None):
+    """Whether the soil suits the plant — where the plant is in soil at all.
+
+    A container is not the ground. Its medium is whatever gets put in it, so
+    holding a potted plant to the yard's pH refuses it for a reason that does
+    not apply — and this function's own advice for a pH mismatch is to *grow it
+    in a container where the medium is yours*, which it then objected to.
+    """
     out = []
+    if site is not None and plant.get("zone"):
+        key = resolve_site_zone(site, plant["zone"]) or plant["zone"]
+        if zone_kind(site, key) == "container":
+            return out
     soil = (cond or {}).get("soil") or {}
     ph = soil.get("ph")
     rng = plant.get("ph_range")
@@ -290,25 +334,75 @@ def check_soil(plant, cond):
     return out
 
 
+def footprint(plant):
+    """Ground a plant occupies at mature spread.
+
+    A vine is the exception, and it is not a rounding error: a climbing rose on
+    an 80 in trellis was counted as if its whole 3 ft canopy sat on the soil,
+    which read one bed at 1.49x overplanted when the bed is fine and its own
+    notes say so — the canopy is carried overhead and the ground beneath it
+    still plants. The base a vine does occupy is small and unrecorded, and the
+    answer does not move across its plausible range.
+    """
+    if plant.get("layer") == "vine":
+        return 0.0
+    spread = plant.get("mature_spread_ft")
+    if not spread:
+        return 0.0
+    return plant.get("count", 1) * 3.1416 * (spread / 2.0) ** 2
+
+
+# The band a border planting has to land in. Below the floor it reads as sparse
+# and wants weeding for years; above the ceiling it is overplanted and the
+# plants that lose are the slow expensive ones. `lib.niches` budgets its slots
+# against this same band, so a planting picked there passes here by
+# construction rather than by luck.
+COVER_FLOOR, COVER_CEILING = 0.45, 1.15
+
+
 def check_space(design, site, sun):
     """Overplanting, which is the most common failure and the least visible."""
     out = []
     by_zone = {}
     for p in design.get("plants", []):
         z = p.get("zone")
-        spread = p.get("mature_spread_ft")
-        if not z or not spread:
+        if not z or not p.get("mature_spread_ft"):
             continue
-        n = p.get("count", 1)
-        by_zone.setdefault(z, []).append((p["name"], n, spread))
+        by_zone.setdefault(z, []).append(p)
 
     areas = zone_areas(site)
     for z, plants in by_zone.items():
-        usable = areas.get(z)
-        if not usable:
+        key = resolve_site_zone(site, z) or z
+        kind = zone_kind(site, key)
+
+        if kind == "container":
+            out += _check_containers(z, plants,
+                                     zone_containers(site, key) or 0)
             continue
-        need = sum(n * 3.1416 * (s / 2.0) ** 2 for _, n, s in plants)
-        if need > usable * 1.15:
+        if kind == "grid":
+            out += _check_grid(z, plants, site, key)
+            continue
+
+        usable = areas.get(key)
+        if not usable:
+            continue                # reported by check_coverage, not passed over
+
+        # Annuals and perennials in one bed are a succession, not a crowd: the
+        # violas come out before the perennials have their summer size. Judging
+        # the bed on whichever group needs more ground counts the busiest
+        # moment, which is the honest reading, rather than adding two plantings
+        # that are never both at full spread.
+        perennial = sum(footprint(p) for p in plants if not p.get("annual"))
+        annual = sum(footprint(p) for p in plants if p.get("annual"))
+        need = max(perennial, annual)
+        both = perennial + annual
+        note = ""
+        if annual and both > usable * COVER_CEILING >= need:
+            note = (f" Counting the {annual:.0f} sq ft of annuals alongside the "
+                    f"perennials rather than after them would read "
+                    f"{both / usable:.2f}x, and they are a succession.")
+
+        if need > usable * COVER_CEILING:
             over = round(need / usable, 2)
             out.append(_obj("serious", f"zone {z}",
                             f"the plants at mature spread need {need:.0f} sq ft "
@@ -317,34 +411,245 @@ def check_space(design, site, sun):
                             "cut the count. A first-year bed that looks full is "
                             "overplanted, and the plants that lose are usually "
                             "the expensive slow ones"))
-        elif need < usable * 0.45:
+        elif need < usable * COVER_FLOOR:
             out.append(_obj("note", f"zone {z}",
                             f"the planting covers about "
                             f"{100 * need / usable:.0f}% of the zone at maturity, "
                             f"which will read as sparse and will want mulching "
-                            f"and weeding for years",
+                            f"and weeding for years" + note,
                             "add groundcover between, or tighten the layout and "
                             "leave deliberate open ground rather than accidental "
                             "gaps"))
+        out += _check_depth(z, plants, site, key)
+    return out
+
+
+def _check_depth(zone, plants, site, key):
+    """A plant wider than the bed is deep, which area alone never catches.
+
+    A bed can be comfortably under its area budget and still have nowhere to put
+    something: a two-foot rosette in a bed two foot five deep has nowhere to go,
+    and it leans out over the edge or into the wall whatever the square footage
+    says. Reported once per zone with the plants named, because it is a fact
+    about the bed.
+    """
+    z = (site.get("zones") or {}).get(key) or {}
+    depth = z.get("usable_depth_ft")
+    if not depth:
+        return []
+    # A canopy and a root ball are different constraints, and a bed with a
+    # gravel or stone apron in front of it can hold a plant whose top leans out
+    # over ground its roots could never occupy. That has to be declared per
+    # zone, because whether the apron may be shaded is a judgement about how the
+    # bed should look, not something derivable from the measurements.
+    reach = float(depth) + float(z.get("canopy_overhang_ft") or 0)
+    over = [(p["name"], p["mature_spread_ft"], p.get("count", 1))
+            for p in plants
+            if p.get("layer") != "vine"
+            and (p.get("mature_spread_ft") or 0) > reach]
+    if not over:
+        return []
+    # Individual plants, not entries. Two white mistflower under one entry are
+    # two plants with nowhere to go, and reporting "1" invites someone to move
+    # one thing and consider it handled.
+    n = sum(c for _, _, c in over)
+    worst = ", ".join(
+        (f"{c} {name}" if c > 1 else name) + f" at {s:g} ft"
+        for name, s, c in sorted(over, key=lambda x: -x[1])[:4])
+    allowed = ("" if reach == float(depth) else
+               f", plus the {reach - float(depth):g} ft of overhang this zone "
+               f"allows")
+    return [_obj("serious", f"zone {zone}",
+                 f"{n} plant{'' if n == 1 else 's'} spread wider "
+                 f"than the bed is deep — {depth:g} ft of usable depth"
+                 f"{allowed}, against {worst}. Area is not the constraint here; "
+                 f"there is nowhere for them to go but out over the edge or "
+                 f"into the wall",
+                 "move them to a deeper bed, choose narrower plants for this "
+                 "one, or set `canopy_overhang_ft` on the zone if a canopy may "
+                 "lean out over whatever is in front of the soil")]
+
+
+def _check_grid(zone, plants, site, key):
+    """A square-foot bed, counted in squares.
+
+    Dense planting is the method in a grid, not a fault, so judging it against
+    the border band reports a correctly planted bed as overplanted. What is
+    worth checking is whether the planting fits the squares there are.
+    """
+    z = (site.get("zones") or {}).get(key) or {}
+    squares = z.get("squares")
+    if not squares:
+        return []
+    planted = sum(p.get("count", 1) for p in plants)
+    if planted > squares:
+        return [_obj("note", f"zone {zone}",
+                     f"{planted} entries for {squares} squares. A square-foot "
+                     f"bed is meant to be full, and several of these share a "
+                     f"square by design — worth a look at the map rather than a "
+                     f"count",
+                     f"check the grid in the bed map covers all {squares}")]
+    return []
+
+
+def _check_containers(zone, plants, pots):
+    """A pot bed, counted in pots."""
+    planted = sum(p.get("count", 1) for p in plants)
+    n = f"{planted} plant" + ("" if planted == 1 else "s")
+    if planted > pots:
+        return [_obj("serious", f"zone {zone}",
+                     f"{n} for {pots} containers. A pot of this size holds one "
+                     f"of these, and two root systems sharing the medium is a "
+                     f"slow decline over two summers rather than an obvious "
+                     f"failure anyone would connect to the pot",
+                     "one per container, or a bigger container")]
+    if planted < pots:
+        spare = pots - planted
+        return [_obj("note", f"zone {zone}",
+                     f"{n} in {pots} containers, so "
+                     f"{spare} container{'' if spare == 1 else 's'} "
+                     f"{'stands' if spare == 1 else 'stand'} empty")]
+    return []
+
+
+def check_coverage(design, site, cond, sun):
+    """What could not be checked, said out loud.
+
+    Three of the checks below read a flat scalar that a yard may record as prose
+    under some other key, and each of them answered a missing input by moving on
+    to the next plant. An objection list with nothing in it then means either
+    "the site supports this" or "I could not look", and there is no way to tell
+    which from the outside. On the yard this was written against all three were
+    inert at once: no zone had an `area_sqft`, `soil` carried no `ph`, and
+    `water` carried no `hose_reaches` — so the space, soil and water checks had
+    never run, while the bed maps carried the sums somebody had done by hand.
+
+    One objection per missing input, naming what it disabled. Per plant it would
+    be fifty lines saying the same thing, which is its own kind of silence.
+    """
+    out = []
+    plants = design.get("plants", [])
+    if not plants:
+        return out
+
+    # --- space
+    areas = zone_areas(site)
+    blind = []
+    for z in sorted({p.get("zone") for p in plants if p.get("zone")}):
+        key = resolve_site_zone(site, z) or z
+        if not areas.get(key) and not zone_containers(site, key):
+            blind.append(z)
+    if blind:
+        out.append(_obj("note", "space",
+                        f"no usable area recorded for "
+                        f"{', '.join(repr(z) for z in blind)}, so the "
+                        f"overplanting check did not run there. It is the most "
+                        f"common failure and the least visible, and an empty "
+                        f"objection list here does not mean the beds fit",
+                        "set `area_sqft` on those zones in site.json (and "
+                        "`unplantable_sqft` for any gravel or stone inside the "
+                        "bed), or `containers` where the bed is pots"))
+
+    # --- soil
+    soil = (cond or {}).get("soil") or {}
+    fussy = [p for p in plants if p.get("ph_range")]
+    if soil.get("ph") is None and fussy:
+        out.append(_obj("note", "soil",
+                        f"no soil pH on record, so the pH check did not run for "
+                        f"{len(fussy)} plants that state a range they need",
+                        "set `soil.ph` in conditions.json — a $15 strip is "
+                        "enough, and the yard-conditions skill walks it"))
+    sharp = [p for p in plants if p.get("soil_drainage") == "sharp"]
+    if not (soil.get("drainage") or "").strip() and sharp:
+        out.append(_obj("note", "soil",
+                        f"no soil drainage on record, so the drainage check did "
+                        f"not run for {len(sharp)} plants needing sharp "
+                        f"drainage. This is the classic way to kill rosemary "
+                        f"and lavender, and it takes two years",
+                        "set `soil.drainage` in conditions.json from a "
+                        "percolation test, or from the USDA class"))
+
+    # --- water
+    water = (cond or {}).get("water") or {}
+    thirsty = [p for p in plants if (p.get("water") or "").lower() == "high"]
+    if water.get("hose_reaches") is None and thirsty:
+        out.append(_obj("note", "water",
+                        f"nothing on record about whether a hose reaches, so "
+                        f"that check did not run for {len(thirsty)} plants "
+                        f"needing regular water",
+                        "set `water.hose_reaches` in conditions.json"))
+    if water.get("rain_shadow_zones") is None:
+        out.append(_obj("note", "water",
+                        "no rain-shadow zones on record, so nothing checked "
+                        "whether a bed sits under an eave or awning and gets "
+                        "almost no natural rain",
+                        "set `water.rain_shadow_zones` in conditions.json, to "
+                        "an empty list if genuinely none — which is a different "
+                        "statement from saying nothing"))
     return out
 
 
 def zone_areas(site):
-    """Usable square feet per zone, net of anything declared unplantable."""
+    """Usable square feet per zone, net of anything declared unplantable.
+
+    The deduction used to apply only to an area computed from a `box`, so a zone
+    stating `area_sqft` outright kept its river rock and gravel in the plantable
+    figure. Both routes net it off now, which means `area_sqft` is the gross bed
+    soil and `unplantable_sqft` is subtracted from it exactly once.
+    """
     out = {}
     for name, z in (site.get("zones") or {}).items():
-        if isinstance(z, dict) and z.get("area_sqft"):
-            out[name] = float(z["area_sqft"])
+        if not isinstance(z, dict):
             continue
-        box = z.get("box") if isinstance(z, dict) else None
-        if box and len(box) == 4:
-            x0, y0, x1, y1 = box
-            sq = abs((x1 - x0) * (y1 - y0)) / 144.0
-            for taken in (z.get("unplantable_sqft"), z.get("rock_band_sqft")):
-                if taken:
-                    sq -= float(taken)
-            out[name] = max(0.0, sq)
+        sq = None
+        if z.get("area_sqft"):
+            sq = float(z["area_sqft"])
+        else:
+            box = z.get("box")
+            if box and len(box) == 4:
+                x0, y0, x1, y1 = box
+                sq = abs((x1 - x0) * (y1 - y0)) / 144.0
+        if sq is None:
+            continue
+        for taken in (z.get("unplantable_sqft"), z.get("rock_band_sqft")):
+            if taken:
+                sq -= float(taken)
+        out[name] = max(0.0, sq)
     return out
+
+
+def zone_containers(site, key):
+    """How many pots a zone is, where it is pots rather than ground.
+
+    A barrel bed is not a small border. Its binding constraint is one plant per
+    barrel, and square footage barely enters into it — measured as area with the
+    vines excluded it reads as 0 percent covered and trips the sparse branch.
+    """
+    z = (site.get("zones") or {}).get(key)
+    if not isinstance(z, dict):
+        return None
+    c = z.get("containers")
+    if isinstance(c, dict) and c.get("count"):
+        return int(c["count"])
+    return None
+
+
+# What a zone is measured in. `border` is the default and the only one that
+# judges mature spread against square footage. The other two have their own
+# unit, and applying the border unit to them gives a confident wrong answer in
+# both directions: pots read as sparse when they are full, and a square-foot
+# grid reads as overplanted when dense planting is the whole method.
+ZONE_KINDS = ("border", "grid", "container")
+
+
+def zone_kind(site, key):
+    z = (site.get("zones") or {}).get(key)
+    if not isinstance(z, dict):
+        return "border"
+    kind = (z.get("kind") or "").lower()
+    if kind in ZONE_KINDS:
+        return kind
+    return "container" if z.get("containers") else "border"
 
 
 def check_vision(design, vision):
@@ -529,9 +834,10 @@ def check(slug, force=False):
     for p in design.get("plants", []):
         out += check_light(p, sun, site)
         out += check_water(p, cond, site)
-        out += check_soil(p, cond)
+        out += check_soil(p, cond, site)
     out += check_sun_timing(design, sun, site)
     out += check_space(design, site, sun)
+    out += check_coverage(design, site, cond, sun)
     out += check_vision(design, vis)
     out += check_season(design, vis, site)
     out += check_grouping(design)
