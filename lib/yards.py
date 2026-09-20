@@ -40,6 +40,24 @@ FILES = ["site.json", "conditions.json", "vision.json", "design.json",
 PROVENANCE = ["measured", "lidar", "photo", "parcel", "osm", "survey",
               "reported", "derived", "assumed"]
 
+# A rehearsal copy of a real yard, for trying new work against real data without
+# touching it. The marker file is what makes a sandbox recognisable from the
+# outside, so that everything generated inside one can say so. An unstamped
+# rehearsal artifact found in six months is indistinguishable from the plan.
+SANDBOX_MARKER = "sandbox.json"
+
+
+def sandbox_of(slug):
+    """The yard this one is a copy of, or None if it is a real yard."""
+    return (load(slug, SANDBOX_MARKER) or {}).get("origin")
+
+
+def sandbox_stamp(slug):
+    """`SANDBOX of <origin>`, or None. Same contract as the provisional stamp
+    in `doubts.gate` — a caller that gets a string marks its output with it."""
+    origin = sandbox_of(slug)
+    return f"SANDBOX of {origin}" if origin else None
+
 
 def slugify(name):
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
@@ -95,8 +113,19 @@ def save(slug, filename, data):
 
 
 def write_text(slug, filename, text):
-    """Write a rendered document into the yard, creating the yard if needed."""
+    """Write a rendered document into the yard, creating the yard if needed.
+
+    A document written into a sandbox is banner-stamped here rather than in each
+    of the dozen modules that render one, because the failure being prevented is
+    someone finding a rehearsal artifact months later and reading it as the plan,
+    and that only takes one module forgetting.
+    """
     yard_dir(slug, create=True)
+    stamp = sandbox_stamp(slug)
+    if stamp and filename.lower().endswith(".md") and stamp not in text[:400]:
+        text = (f"> **{stamp}.** A rehearsal copy, not the plan. Nothing here "
+                f"describes work anyone should do, and the real yard is "
+                f"`{sandbox_of(slug)}`.\n\n") + text
     p = path(slug, filename)
     with open(p, "w", encoding="utf-8") as fh:
         fh.write(text)
@@ -239,12 +268,17 @@ def main():
     print(f"{'slug':22s} {'site':5s} {'cond':5s} {'vis':5s} {'design':7s} {'maps':>5s}")
     for slug in ys:
         st = status(slug)
+        # A sandbox is named as one here, not left to be inferred from the slug.
+        # A rehearsal copy sitting unlabelled in a list of real yards is the
+        # thing the marker file exists to prevent.
+        origin = sandbox_of(slug)
         print(f"{slug:22s} "
               f"{'yes' if st['site.json'] else '-':5s} "
               f"{'yes' if st['conditions.json'] else '-':5s} "
               f"{'yes' if st['vision.json'] else '-':5s} "
               f"{'yes' if st['design.json'] else '-':7s} "
-              f"{st['maps']:>5d}")
+              f"{st['maps']:>5d}"
+              + (f"   SANDBOX of {origin}" if origin else ""))
 
 
 if __name__ == "__main__":

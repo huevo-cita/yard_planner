@@ -11,6 +11,39 @@ attention, every time the plan is opened, forever.
 Both are the same bug: a sentence that should have gone into a file went into
 prose instead, where nothing reads it and nothing acts on it.
 
+# Try it on a copy
+
+Before any of that, one small thing that prevents a whole class of damage.
+
+New functionality wants a real yard to run against. Made-up data does not have
+the disagreements that break things — the bed measured two ways, the prose
+holding a number a scalar should hold, the task with no `where`. Every one of
+those was found by pointing new code at a yard that actually exists.
+
+But a real yard has a live calendar and a plan somebody is working from, and a
+rehearsal that leaves picks, cards and half-written files in it is worse than no
+rehearsal. So take a copy:
+
+```bash
+yard sandbox new cloverleaf-austin      # deep copy -> cloverleaf-sandbox
+yard sandbox list                       # what exists, from what, when
+yard sandbox diff cloverleaf-sandbox    # what changed against the real yard
+yard sandbox promote cloverleaf-sandbox niches.json   # keep one thing
+yard sandbox rm cloverleaf-sandbox --yes
+```
+
+A real copy, never a symlink, because a symlink writes through. Every document
+generated inside one is stamped `SANDBOX of <origin>`, and `doubts.gate()`
+returns that stamp so a gated job is labelled with no extra plumbing — an
+unstamped rehearsal artifact found in six months is indistinguishable from the
+real plan. The gate and the shell hook both refuse inside a sandbox exactly as
+they would outside it, which is deliberate: a rehearsal where the gate silently
+allowed everything would teach the wrong thing. `promote` takes named files and
+refuses any whose origin has moved since the copy, rather than overwriting work.
+
+What this honestly protects against is accident, not a deliberately mistyped
+slug.
+
 # A doubt goes in a file
 
 ## The failure

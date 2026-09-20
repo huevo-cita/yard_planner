@@ -14,6 +14,7 @@
 #   yard doubts <slug>            what is still in question, and what it blocks
 #   yard changelog <slug>         what changed, and why the plan reads as it does
 #   yard vault lock <slug>        encrypt a yard so it can travel in the repo
+#   yard sandbox new <slug>       a rehearsal copy, to try new work on real data
 #   yard scrub                    check nothing personal is about to be published
 #   yard install                  link the skills and agents into ~/.cursor
 #   yard doctor                   check the environment is complete
@@ -41,6 +42,10 @@ sourcing bom schedule week builddoc buildhtml vault"
 case "${1:-}" in
   ""|list)
     exec "$PYTHON" -m lib.yards
+    ;;
+  sandbox)
+    shift
+    exec "$PYTHON" tools/sandbox.py "$@"
     ;;
   scrub)
     shift
