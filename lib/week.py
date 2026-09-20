@@ -3,6 +3,7 @@
 
     python3 -m lib.week <slug>                  this week, to the terminal
     python3 -m lib.week <slug> --week 2026-09-14
+    python3 -m lib.week <slug> --html           -> WEEK.html, Mon-Sun on a page
     python3 -m lib.week <slug> --calendar       -> CALENDAR.md
     python3 -m lib.week <slug> --shop 3         the next three weeks of buying
     python3 -m lib.week <slug> --check          has the plan drifted from tasks.json
@@ -49,22 +50,28 @@ one of the cheap paths that has to stay open so a plan can be read at all.
 import argparse
 import datetime
 import hashlib
+import html
 import json
 import os
 import re
 
-from . import conditions, yards
+from . import chrome, conditions, links, yards
+
+# Reading a document and resolving a reference into it now live in `lib.links`,
+# because the publisher needs the same two answers and a second implementation
+# of them is how a deep link comes to point at nothing. Re-exported here: every
+# caller of `week.resolve` is asking the same question it always was.
+HEADING = links.HEADING
+SECTION_NO = links.SECTION_NO
+_slug = links.slug
+sections = links.sections
+resolve = links.resolve
 
 MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
 ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
         "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
-
-#: An anchor that names a numbered section rather than a slug: `4`, `4.1`, `3.9a`.
-SECTION_NO = re.compile(r"^\d+(?:\.\d+)*[a-z]?$")
 
 #: A task's `source` is where it was extracted from, and everything named there
 #: has to carry a digest. `reference` and `technique` are the link fields, and
@@ -106,71 +113,6 @@ def monday_of(d):
 
 
 # -------------------------------------------------------------- source digests
-
-def _slug(text):
-    s = re.sub(r"[^\w\s-]", "", text).strip().lower()
-    return re.sub(r"[\s_-]+", "-", s)
-
-
-def sections(path):
-    """Every heading in a document, with the text it owns.
-
-    A section runs to the next heading at the same level or higher, so `## 2`
-    stops at `## 3` and carries its own `###` subsections with it. That matters:
-    the weekend blocks in the plan are `###` under one `##`, and hashing the
-    parent without them would miss every change that actually moves a date.
-    """
-    with open(path, encoding="utf-8") as fh:
-        lines = fh.read().splitlines()
-    heads = []
-    for i, line in enumerate(lines):
-        m = HEADING.match(line)
-        if m:
-            heads.append((len(m.group(1)), m.group(2), i))
-    out = []
-    for k, (level, text, start) in enumerate(heads):
-        end = len(lines)
-        for level2, _, start2 in heads[k + 1:]:
-            if level2 <= level:
-                end = start2
-                break
-        out.append({"level": level, "text": text, "slug": _slug(text),
-                    "body": "\n".join(lines[start:end]).rstrip()})
-    return out
-
-
-def resolve(root, ref):
-    """A `FILE.md#anchor` reference to the one section it names.
-
-    A section-number anchor matches a heading numbered that way — `#2` is `## 2.
-    Weekend by weekend`, and `#4.1` is `### 4.1 Read this table`. The number may
-    be dotted, because a long reference document numbers its subsections that
-    way, and the `.` or `)` after it is optional, because most of them do not
-    write one. `#4` still does not match `4.1`: the separator after the anchor
-    has to be whitespace, so a parent number cannot swallow its own children.
-    Anything else matches on the heading's slug containing it, which keeps the
-    reference readable rather than a forty-character slug.
-    Returns (section, error); exactly one of them is None.
-    """
-    if "#" not in ref:
-        return None, f"{ref} has no #anchor"
-    name, anchor = ref.split("#", 1)
-    path = os.path.join(root, name)
-    if not os.path.exists(path):
-        return None, f"{name} does not exist"
-    secs = sections(path)
-    if SECTION_NO.match(anchor):
-        pattern = rf"^{re.escape(anchor)}[.)]?\s"
-        hits = [s for s in secs if re.match(pattern, s["text"])]
-    else:
-        hits = [s for s in secs if anchor in s["slug"]]
-    if not hits:
-        return None, f"{ref} matches no heading in {name}"
-    if len(hits) > 1:
-        found = ", ".join(h["text"][:34] for h in hits)
-        return None, f"{ref} is ambiguous in {name} — matches {found}"
-    return hits[0], None
-
 
 def digest(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
@@ -273,6 +215,44 @@ def check(slug):
                     f"Either the date moved in the plan, or the task needs "
                     f"`date_inferred` and a note saying where its date came from")
                 break
+    return out
+
+
+def link_check(slug):
+    """Every reference that points nowhere, and every plant name nobody knows.
+
+    Reported and not blocking, on purpose, and the distinction is the same one
+    `blackout_conflicts` draws. `check()` asks whether a person would be sent
+    into the garden on the wrong day, and refuses a render when the answer is
+    yes. A dead reference does not move a date. It costs the reader the
+    explanation behind a job, which is worth fixing and is not worth refusing
+    to print the calendar over.
+
+    Two kinds, because they fail differently. A reference that resolves to
+    nothing is a task whose method cannot be reached from the page somebody
+    reads. A placement naming a plant the design does not contain is worse in
+    a quieter way: the prose and the design disagree about what goes in the
+    ground, and nothing else in the record compares them.
+    """
+    from . import bundle, plants
+
+    out = []
+    data = bundle.build(slug)
+    for t in data["tasks"]:
+        for l in t["links"]:
+            if l["error"]:
+                out.append({"kind": "reference", "subject": t["id"],
+                            "message": f'{t["id"]} "{t["title"]}" cites '
+                                       f'{l["kind"]} {l["ref"]!r}: '
+                                       f'{l["error"]}'})
+        for p in t["placements"]:
+            if p["unmatched"] and p["positional"]:
+                out.append({"kind": "placement", "subject": t["id"],
+                            "message": f'{t["id"]} plants "{p["text"]}" at '
+                                       f'{p.get("bed") or "?"} '
+                                       f'{p.get("at") or ""}'.rstrip()
+                                       + ", and design.json holds no plant "
+                                         "of that name"})
     return out
 
 
@@ -763,16 +743,15 @@ def _cell(text):
     return re.sub(r"\s+", " ", str(text)).replace("|", "/").strip()
 
 
-def _detail(t):
-    """A task's detail, as a table.
+def detail_rows(t):
+    """A task's detail as (label, value) pairs, in the order they are read.
 
-    A table rather than paragraphs for two reasons that point the same way. This
-    is looked up for the one task in hand rather than read straight through, so
-    the labelled rows are easier to scan than prose. And the action-document word
-    budget counts prose only, precisely because a table does not cost the reader
-    what an argument does — seventy tasks of depth, spacing and fallbacks in
-    paragraph form would put this document three times over it and get the whole
-    check switched off.
+    Split out from the markdown renderer because the HTML week page shows the
+    same rows, and a second copy of this ordering would drift from this one the
+    first time a field was added.
+
+    Values are raw. Escaping and whitespace flattening belong to whichever
+    renderer is being used, because they are not the same in the two formats.
     """
     w = t.get("where") or {}
     rows = []
@@ -784,49 +763,85 @@ def _detail(t):
                 spot = f"{p['bed']} {p['at']}"
             elif p.get("bed"):
                 spot = f"{p['bed']} {spot}"
-            rows.append((_cell(spot), _cell(p["plant"])))
+            rows.append((spot, p["plant"]))
     elif where_of(t):
-        rows.append(("Where", _cell(where_of(t))))
+        rows.append(("Where", where_of(t)))
     if w.get("note"):
-        rows.append(("Note", _cell(w["note"])))
+        rows.append(("Note", w["note"]))
 
     if t.get("how"):
-        rows.append(("How", " · ".join(_cell(h) for h in t["how"])))
+        rows.append(("How", " · ".join(str(h) for h in t["how"])))
     g = t.get("gate") or {}
     if g.get("below_f"):
         rows.append(("Gate", f"Soil under {g['below_f']} °F"))
     elif g.get("depends"):
-        rows.append(("Gate", _cell(f"depends on {g['depends']}"
-                                   + (f" — {g['unless']}" if g.get("unless") else ""))))
+        rows.append(("Gate", f"depends on {g['depends']}"
+                     + (f" — {g['unless']}" if g.get("unless") else "")))
     if g.get("early"):
-        rows.append(("Earlier", _cell(g["early"])))
+        rows.append(("Earlier", g["early"]))
     for key, label in ((g.get("miss"), "If the window closes"),
                        (t.get("miss"), "If it slips")):
         if key:
-            rows.append((label, _cell(key)))
+            rows.append((label, key))
     for key, label in (("why", "Why"), ("warn", "Watch out"), ("then", "Then")):
         if t.get(key):
-            rows.append((label, _cell(t[key])))
+            rows.append((label, t[key]))
+    return rows
 
-    # The section number goes in the link text rather than the target. Publishing
-    # rewrites a .md target to .html, but the anchor a heading actually gets is
-    # its slug, so "#8" would land nowhere. Naming the section in the text is a
-    # reference that survives both formats.
-    links = []
+
+def detail_links(t, root=None):
+    """The task's references as (label, target) pairs.
+
+    The target is the real `FILE.html#heading-anchor` wherever the reference
+    resolves, worked out by `lib.links` — the same code the publisher uses to
+    put the id on the heading, so the two cannot disagree about where a link
+    lands. A reference that resolves to nothing keeps the file as its target
+    rather than vanishing, because a task that silently loses its method is
+    the failure `--links` exists to report.
+    """
+    w = t.get("where") or {}
+    out = []
     for ref, label in ((t.get("technique"), "technique"),
                        (t.get("reference"), "detail")):
-        if ref:
-            name, _, anchor = str(ref).partition("#")
-            name = name.split()[0]
-            where = f" §{anchor}" if anchor else (
-                " " + " ".join(str(ref).split()[1:]) if len(str(ref).split()) > 1 else "")
-            links.append(f"[{label} in {name}{where}]({name})")
+        if not ref:
+            continue
+        ref = str(ref)
+        url, sec, err = (links.target(root, ref) if root
+                         else (None, None, "no yard given"))
+        name = ref.split("#")[0].split()[0]
+        # The label stays short even though the target is now a full anchor.
+        # This one goes into a markdown table cell and then into the Doc, and
+        # a forty-word heading in a cell is worse than the dead link was.
+        where = f" §{ref.partition('#')[2]}" if "#" in ref else (
+            " " + " ".join(ref.split()[1:]) if len(ref.split()) > 1 else "")
+        if ref.startswith(("http://", "https://")):
+            out.append((f"{label} at {links.label(ref)}", ref))
+        else:
+            out.append((f"{label} in {name}{where}", url or name))
     if w.get("map"):
-        links.append(f"[bed map]({w['map']})")
+        out.append(("bed map", w["map"]))
+    return out
+
+
+def _detail(t, root=None):
+    """A task's detail, as a table.
+
+    A table rather than paragraphs for two reasons that point the same way. This
+    is looked up for the one task in hand rather than read straight through, so
+    the labelled rows are easier to scan than prose. And the action-document word
+    budget counts prose only, precisely because a table does not cost the reader
+    what an argument does — seventy tasks of depth, spacing and fallbacks in
+    paragraph form would put this document three times over it and get the whole
+    check switched off.
+    """
+    rows = [(_cell(a), _cell(b)) for a, b in detail_rows(t)]
+
+    refs = [f"[{label}]({target})"
+            for label, target in detail_links(t, root)]
     if t.get("changelog"):
-        links.append(" ".join(f"[{c}]" for c in t["changelog"]))
-    if links:
-        rows.append(("More", " · ".join(links)))
+        refs.append(" ".join(f"[{c}]" for c in t["changelog"]))
+    if refs:
+        rows.append(("More", " · ".join(refs)))
 
     if not rows:
         return []
@@ -858,6 +873,7 @@ def _buy_table(data, buys):
 
 
 def render_week(data, monday, heading=None, cond=None, slug=None):
+    root = yards.yard_dir(slug) if slug else None
     days, starting, running = placed(data, monday)
     buys = buys_for(data, monday)
     if not days and not starting and not running and not buys:
@@ -902,7 +918,7 @@ def render_week(data, monday, heading=None, cond=None, slug=None):
             out.append(_checkbox(t))
         out.append("")
         for t in items:
-            out += _detail(t)
+            out += _detail(t, root)
 
     if starting:
         out.append("### Starts this week, and runs on")
@@ -911,7 +927,7 @@ def render_week(data, monday, heading=None, cond=None, slug=None):
             out.append(_checkbox(t))
         out.append("")
         for t in starting:
-            out += _detail(t)
+            out += _detail(t, root)
 
     if running:
         out.append("### Already running")
@@ -926,6 +942,825 @@ def render_week(data, monday, heading=None, cond=None, slug=None):
                        f"{cadence}, {hours(t.get('minutes', 0))} a time |")
         out.append("")
     return out
+
+
+def week_grid(data, monday):
+    """Every day of the week, with the work that actually lands on it.
+
+    `placed()` splits a week three ways, and that split is right for a document
+    somebody ticks: a daily watering rendered as a checkbox in each of the nine
+    weeks it spans reads as nagging, and the Docs checkbox pass cannot address
+    nine identical strings. It is the wrong split for a week read at a glance,
+    because it lifts every standing job off the days it happens on and leaves
+    the reader to work out for themselves which of them lands on Tuesday. That
+    is the specific confusion this grid exists to remove.
+
+    So a repeat is expanded onto each day it asks for work, and carries a flag
+    saying it is standing rather than one-off. A window is not expanded. It is
+    returned separately, because the record does not say which day inside the
+    window the work happens, and putting it on Monday would state a date nobody
+    chose.
+    """
+    sunday = monday + datetime.timedelta(days=6)
+    grid = {monday + datetime.timedelta(days=i): [] for i in range(7)}
+    loose = []
+    for t in data.get("tasks", []):
+        if t.get("window"):
+            lo, hi = _date(t["window"][0]), _date(t["window"][1])
+            if lo <= sunday and hi >= monday:
+                loose.append(t)
+            continue
+        standing = bool(t.get("repeat"))
+        for d in _occurrences(t, monday, sunday):
+            grid[d].append((t, standing))
+    for items in grid.values():
+        items.sort(key=lambda p: (p[1], not p[0].get("critical"),
+                                  -p[0].get("minutes", 0)))
+    loose.sort(key=lambda t: (not t.get("critical"), t["id"]))
+    return grid, loose
+
+
+def week_shape(grid, loose, buys):
+    """The numbers the summary strip quotes, counted off the grid itself.
+
+    Counted from the grid rather than alongside it, so the headline and the
+    days cannot disagree. A total that has drifted from the thing it totals is
+    worse than no total, because it is believed.
+    """
+    fixed = standing = 0
+    per_day = {}
+    critical, seen = [], set()
+    for d, items in grid.items():
+        f = sum(t.get("minutes", 0) for t, s in items if not s)
+        s = sum(t.get("minutes", 0) for t, st in items if st)
+        per_day[d] = (f, s)
+        fixed += f
+        standing += s
+        for t, st in items:
+            if t.get("critical") and t["id"] not in seen:
+                seen.add(t["id"])
+                critical.append((d, t))
+    busiest = max(per_day, key=lambda d: per_day[d][0] + per_day[d][1])
+    if sum(per_day[busiest]) == 0:
+        busiest = None
+    jobs = len({t["id"] for items in grid.values() for t, _ in items})
+    return {"fixed": fixed, "standing": standing, "per_day": per_day,
+            "busiest": busiest,
+            "critical": sorted(critical, key=lambda p: (p[0], p[1]["id"])),
+            "jobs": jobs, "loose": len(loose),
+            "buys": [b for b in buys if not b.get("optional")]}
+
+
+WEEK_CSS = """
+:root { --ink:#1a1a1a; --muted:#5c5c5c; --rule:#dcdcdc; --accent:#2f5d34;
+        --band:#f6f7f4; --today:#fff8e1; --todayline:#b45309; --crit:#a52121; }
+* { box-sizing:border-box; }
+body { margin:0; background:#fff; color:var(--ink);
+  font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+.wrap { max-width:58rem; margin:0 auto; padding:2rem 1.1rem 5rem; }
+h1 { font-size:1.75rem; margin:0 0 .1em; letter-spacing:-.02em; }
+p.sub { margin:0 0 1.2em; color:var(--muted); }
+a { color:var(--accent); }
+
+.shape { display:flex; flex-wrap:wrap; gap:.5em; margin:0 0 1em; }
+.stat { flex:1 1 7rem; background:var(--band); border:1px solid var(--rule);
+  border-radius:8px; padding:.55em .75em; }
+.stat b { display:block; font-size:1.35rem; line-height:1.15;
+  font-variant-numeric:tabular-nums; }
+.stat span { color:var(--muted); font-size:.76rem; text-transform:uppercase;
+  letter-spacing:.05em; }
+.gist { border-left:4px solid var(--accent); background:var(--band);
+  padding:.7em 1em; border-radius:0 8px 8px 0; margin:0 0 1.6em; }
+.gist p { margin:.35em 0; }
+
+.day { border:1px solid var(--rule); border-radius:10px; margin:.55em 0;
+  overflow:hidden; }
+.day.weekend { background:#fbfbf9; }
+.day.today { border-color:var(--todayline); box-shadow:0 0 0 1px var(--todayline); }
+.dayhead { display:flex; align-items:baseline; gap:.6em; padding:.5em .85em;
+  background:var(--accent); color:#fff; }
+.day.weekend .dayhead { background:#24482a; }
+.day.today .dayhead { background:var(--todayline); }
+.dayhead .dow { font-weight:700; font-size:1rem; }
+.dayhead .dat { opacity:.85; font-size:.85rem; }
+.dayhead .mins { margin-left:auto; font-size:.85rem;
+  font-variant-numeric:tabular-nums; }
+.empty { padding:.6em .9em; color:var(--muted); font-size:.88rem; }
+
+details.job { border-top:1px solid var(--rule); }
+details.job:first-of-type { border-top:0; }
+summary { cursor:pointer; padding:.5em .85em; list-style:none;
+  display:flex; align-items:baseline; gap:.5em; }
+summary::-webkit-details-marker { display:none; }
+summary::before { content:"\\25B8"; color:var(--muted); font-size:.8em; }
+details[open] > summary::before { content:"\\25BE"; }
+summary:hover { background:var(--band); }
+.ttl { font-weight:600; }
+details.standing .ttl { font-weight:400; color:#444; }
+.tag { font-size:.7rem; text-transform:uppercase; letter-spacing:.05em;
+  border:1px solid var(--rule); border-radius:999px; padding:.05em .5em;
+  color:var(--muted); white-space:nowrap; }
+.tag.crit { color:var(--crit); border-color:var(--crit); font-weight:600; }
+.tag.done { color:var(--accent); border-color:var(--accent); }
+.mins2 { margin-left:auto; color:var(--muted); font-size:.82rem;
+  white-space:nowrap; font-variant-numeric:tabular-nums; }
+.where { color:var(--muted); font-size:.85rem; }
+
+dl.detail { margin:0; padding:.2em .85em 1em; border-top:1px dashed var(--rule);
+  display:grid; grid-template-columns:8.5rem 1fr; gap:.3em .9em;
+  font-size:.92rem; }
+dl.detail dt { color:var(--muted); font-size:.82rem; padding-top:.15em; }
+dl.detail dd { margin:0; }
+dl.detail dd ul { margin:.1em 0; padding-left:1.1em; }
+dl.detail dd li { margin:.15em 0; }
+
+p.tools { margin:0 0 .6em; }
+p.tools button { font:inherit; font-size:.85rem; cursor:pointer;
+  background:var(--band); border:1px solid var(--rule); border-radius:999px;
+  padding:.3em 1em; color:var(--accent); }
+p.tools button:hover { background:#eceee8; }
+.loose { border:1px dashed var(--rule); border-radius:10px; margin:1.2em 0 0; }
+.loose > .dayhead { background:#6b6b6b; }
+table.buy { border-collapse:collapse; width:100%; font-size:.9rem;
+  margin:.6em 0 1.4em; }
+table.buy th, table.buy td { padding:.45em .6em; text-align:left;
+  border-bottom:1px solid var(--rule); vertical-align:top; }
+table.buy thead th { background:var(--band); font-size:.76rem;
+  text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+h2 { font-size:1.05rem; margin:2em 0 .4em; padding-bottom:.2rem;
+  border-bottom:2px solid var(--accent); }
+.warn { border-left:4px solid var(--todayline); background:#fef3c7;
+  color:#78350f; padding:.7em 1em; border-radius:0 8px 8px 0; margin:1em 0; }
+footer { margin-top:2.5rem; padding-top:1em; border-top:1px solid var(--rule);
+  color:var(--muted); font-size:.8rem; }
+code { font:.87em ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:var(--band); padding:.1em .3em; border-radius:3px; }
+@media (max-width:640px) {
+  .wrap { padding:1.2rem .6rem 3rem; }
+  h1 { font-size:1.35rem; }
+  dl.detail { grid-template-columns:1fr; gap:.05em; }
+  dl.detail dt { margin-top:.5em; }
+  .stat { flex:1 1 40%; } }
+@media print { details { break-inside:avoid; } details > .detail { display:grid; } }
+"""
+
+
+def _job_html(t, standing, show_cadence=True, root=None):
+    e = html.escape
+    tags = []
+    if t.get("critical"):
+        tags.append('<span class="tag crit">cannot slip</span>')
+    if standing and show_cadence:
+        tags.append(f'<span class="tag">{e(_cadence(t))}</span>')
+    w = where_of(t)
+    mins = hours(t["minutes"]) if t.get("minutes") else ""
+
+    rows = []
+    for label, value in detail_rows(t):
+        if label == "How":
+            steps = "".join(f"<li>{e(str(h))}</li>" for h in t["how"])
+            rows.append(("How", f"<ul>{steps}</ul>"))
+        else:
+            rows.append((label, e(str(value))))
+    if standing:
+        span = _repeat_span(t)
+        if span:
+            rows.append(("Runs", f"{_cadence(t)}, "
+                                 f"{span[0]:%-d %b} to {span[1]:%-d %b}"))
+    refs = [f'<a href="{e(target)}">{e(label)}</a>'
+            for label, target in detail_links(t, root)]
+    if t.get("changelog"):
+        refs += [f'<a href="CHANGELOG.html#{e(c)}">{e(c)}</a>'
+                 for c in t["changelog"]]
+    if refs:
+        rows.append(("More", " · ".join(refs)))
+    # Into the one page that holds the whole job. Every screen points at the
+    # same anchor, so there is one address for a task and not four.
+    rows.append(("Task", f'<a href="TASKS.html#{e(t["id"])}">'
+                         f'<code>{e(t["id"])}</code> in full</a>'))
+
+    body = "".join(f"<dt>{e(str(a))}</dt><dd>{b}</dd>" for a, b in rows)
+    cls = "job standing" if standing else "job"
+    return (f'<details class="{cls}"><summary>'
+            + chrome.tick(t)
+            + f'<span class="ttl">{e(t["title"])}</span>'
+            + "".join(tags)
+            + (f'<span class="where">{e(w)}</span>' if w else "")
+            + (f'<span class="mins2">{mins}</span>' if mins else "")
+            + f'</summary><dl class="detail">{body}</dl></details>')
+
+
+def render_week_html(slug, monday, today=None):
+    """One week on one page: the shape, the seven days, the detail behind a click."""
+    e = html.escape
+    data = load(slug)
+    root = yards.yard_dir(slug)
+    today = today or datetime.date.today()
+    sunday = monday + datetime.timedelta(days=6)
+    grid, loose = week_grid(data, monday)
+    buys = buys_for(data, monday)
+    s = week_shape(grid, loose, buys)
+
+    stats = [(hours(s["fixed"]), "dated work"),
+             (hours(s["standing"]) if s["standing"] else "none",
+              "standing jobs"),
+             (str(s["jobs"]), "jobs in all"),
+             (f"{s['busiest']:%a}" if s["busiest"] else "\u2014",
+              "busiest day")]
+    if s["buys"]:
+        first = min(s["buys"], key=lambda b: b["by"])
+        stats.append((str(len(s["buys"])),
+                      f"to buy, first {_date(first['by']):%a}"))
+    strip = "".join(f'<div class="stat"><b>{e(a)}</b><span>{e(b)}</span></div>'
+                    for a, b in stats)
+
+    gist = []
+    if s["critical"]:
+        gist.append("<p><b>Cannot slip:</b> " + "; ".join(
+            f'{d:%A} &mdash; {e(t["title"])}' for d, t in s["critical"])
+            + ".</p>")
+    if s["busiest"] and sum(s["per_day"][s["busiest"]]) >= 60:
+        f, st = s["per_day"][s["busiest"]]
+        gist.append(f"<p><b>{s['busiest']:%A}</b> carries {hours(f + st)} of "
+                    f"it. The other six days hold {hours(s['fixed'] - f)} of "
+                    f"dated work between them.</p>")
+    if s["standing"]:
+        gist.append(f"<p>{hours(s['standing'])} of that is standing jobs "
+                    f"&mdash; watering and the like, a few minutes at a time, "
+                    f"shown on each day they fall on.</p>")
+    if not gist:
+        gist.append("<p>A quiet week. Nothing on it cannot move.</p>")
+
+    banner = ""
+    blocks = week_blackout(data, yards.load_conditions(slug) or {}, monday)
+    for b in blocks:
+        banner += (f'<div class="warn"><b>No-build week.</b> The '
+                   f'{b["from"]:%-d %b}&ndash;{b["to"]:%-d %b} blackout bars '
+                   f'{e(b["bars"] or "work it has not named")}.'
+                   + (f' Permitted: {e("; ".join(b["permits"]))}.'
+                      if b["permits"] else "")
+                   + "</div>")
+
+    daysout = []
+    for i in range(7):
+        d = monday + datetime.timedelta(days=i)
+        items = grid[d]
+        f, st = s["per_day"][d]
+        cls = "day" + (" weekend" if d.weekday() >= 5 else "")
+        if d == today:
+            cls += " today"
+        mins = " + ".join(x for x in
+                          [hours(f) if f else "", f"{st} min standing" if st
+                           else ""] if x)
+        inner = "".join(_job_html(t, standing, root=root)
+                        for t, standing in items) \
+            or '<div class="empty">Nothing dated.</div>'
+        daysout.append(
+            f'<section class="{cls}"><div class="dayhead">'
+            f'<span class="dow">{d:%A}</span>'
+            f'<span class="dat">{d:%-d %B}</span>'
+            f'<span class="mins">{mins or "&mdash;"}</span></div>'
+            f'{inner}</section>')
+
+    if loose:
+        inner = "".join(_job_html(t, True, show_cadence=False, root=root)
+                        for t in loose)
+        # These minutes are deliberately outside the headline figure, because
+        # the work is not promised to this week. They are still quoted, because
+        # a reader planning a Saturday needs to know they exist.
+        spare = sum(t.get("minutes", 0) for t in loose)
+        daysout.append(
+            '<section class="day loose"><div class="dayhead">'
+            '<span class="dow">Any day this week</span>'
+            '<span class="dat">the record names no day for these</span>'
+            f'<span class="mins">{hours(spare)}, not in the total</span>'
+            '</div>' + inner + '</section>')
+
+    buytable = ""
+    if buys:
+        sup = data.get("suppliers", {})
+        rows = ""
+        for b in buys:
+            shop = sup.get(b.get("supplier")) or {}
+            where = e(shop["name"]) if shop else "anywhere"
+            if shop.get("phone"):
+                where += f'<br><a href="tel:{e(shop["phone"])}">' \
+                         f'{e(shop["phone"])}</a>'
+            rows += (f'<tr><td>{e(b["item"])}</td>'
+                     f'<td>{_date(b["by"]):%a %-d %b}</td>'
+                     f'<td>{e(money(b))}</td><td>{where}</td></tr>')
+        buytable = ('<h2>To buy this week</h2><table class="buy"><thead><tr>'
+                    '<th>Item</th><th>By</th><th>Cost</th><th>Where</th>'
+                    f'</tr></thead><tbody>{rows}</tbody></table>')
+
+    name = yard_name(slug)
+    built = datetime.date.today().isoformat()
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{e(name)} &mdash; week of {monday:%-d %B}</title>
+<style>{WEEK_CSS}{chrome.NAV_CSS}{chrome.TICKS_CSS}</style>
+</head>
+<body>
+{chrome.nav(root, 'WEEK.html', name)}
+<div class="wrap">
+
+<h1>{monday:%A %-d %B} to {sunday:%A %-d %B}</h1>
+<p class="sub">{e(name)} &middot; every day of the week, with the detail behind
+a click. Any job opens to its full instructions in
+<a href="TASKS.html">every job, in full</a>.</p>
+
+<div class="shape">{strip}</div>
+<div class="gist">{"".join(gist)}</div>
+{banner}
+{chrome.tools('<button type="button" id="all">Open every task</button>')}
+{"".join(daysout)}
+{buytable}
+
+<footer>
+<p>Built from <code>tasks.json</code> on {built} by
+<code>python3 -m lib.week {e(slug)} --html</code>. A standing job appears on
+every day it asks for work, so the week reads as days rather than as a list
+with the repeats filed at the bottom.</p>
+</footer>
+
+</div>
+<script>
+(function () {{
+  var btn = document.getElementById('all');
+  btn.addEventListener('click', function () {{
+    var jobs = document.querySelectorAll('details.job');
+    var opening = btn.dataset.open !== 'yes';
+    jobs.forEach(function (d) {{ d.open = opening; }});
+    btn.dataset.open = opening ? 'yes' : 'no';
+    btn.textContent = opening ? 'Close every task' : 'Open every task';
+  }});
+}})();
+{chrome.ticks_js(slug)}
+</script>
+</body>
+</html>
+"""
+
+
+# ------------------------------------------------------- every job, in full
+
+TASKS_CSS = """
+.jump { position:sticky; top:2.6rem; z-index:10; background:#fff;
+  border-bottom:1px solid var(--rule); display:flex; gap:.15em;
+  overflow-x:auto; padding:.4em 0; margin:0 0 1em; scrollbar-width:none; }
+.jump::-webkit-scrollbar { display:none; }
+.jump a { flex:0 0 auto; font-size:.8rem; text-decoration:none;
+  padding:.25em .6em; border-radius:999px; background:var(--band);
+  border:1px solid var(--rule); white-space:nowrap; }
+.jump a:hover { border-color:var(--accent); }
+
+h2.month { position:relative; margin:2.2em 0 .6em; }
+article.task { border:1px solid var(--rule); border-left:4px solid var(--rule);
+  border-radius:8px; padding:.8em 1em 1em; margin:.7em 0;
+  scroll-margin-top:5.5rem; }
+article.task.crit { border-left-color:var(--crit); }
+article.task.done { opacity:.62; }
+article.task h3 { margin:0; font-size:1.06rem; color:var(--ink);
+  display:flex; gap:.5em; align-items:baseline; flex-wrap:wrap; }
+article.task h3 a.self { margin-left:auto; font-size:.72rem; color:var(--muted);
+  text-decoration:none; font-variant-numeric:tabular-nums; }
+article.task h3 a.self:hover { color:var(--accent); }
+.meta { color:var(--muted); font-size:.86rem; margin:.2em 0 .6em;
+  display:flex; gap:.5em; flex-wrap:wrap; align-items:baseline; }
+.badge { font-size:.68rem; text-transform:uppercase; letter-spacing:.05em;
+  border:1px solid var(--rule); border-radius:999px; padding:.05em .55em;
+  color:var(--muted); white-space:nowrap; }
+.badge.crit { color:var(--crit); border-color:var(--crit); font-weight:700; }
+.badge.kind { color:var(--accent); border-color:var(--accent); }
+
+dl.f { margin:0; display:grid; grid-template-columns:8rem 1fr; gap:.25em .9em;
+  font-size:.93rem; }
+dl.f dt { color:var(--muted); font-size:.79rem; padding-top:.2em;
+  text-transform:uppercase; letter-spacing:.04em; }
+dl.f dd { margin:0; }
+dl.f dd ol, dl.f dd ul { margin:.1em 0; padding-left:1.2em; }
+dl.f dd li { margin:.25em 0; }
+dl.f dd.gate { background:#fef3c7; color:#78350f; border-radius:5px;
+  padding:.35em .6em; }
+
+table.place { border-collapse:collapse; width:100%; font-size:.9rem; }
+table.place td { padding:.3em .5em .3em 0; vertical-align:top;
+  border-bottom:1px solid var(--rule); }
+table.place td.spot { color:var(--muted); white-space:nowrap; width:9rem; }
+table.place td.sp i { color:var(--muted); font-size:.85rem; }
+table.place .miss { color:var(--warnline); font-size:.8rem; }
+
+.shots { display:flex; flex-wrap:wrap; gap:.5em; margin:.5em 0 0; }
+figure.shot { margin:0; width:8.2rem; border:1px solid var(--rule);
+  border-radius:7px; overflow:hidden; }
+figure.shot img { display:block; width:100%; height:5.6rem;
+  object-fit:contain; background:var(--band); }
+figure.shot figcaption { padding:.3em .45em .45em; font-size:.7rem;
+  line-height:1.35; color:var(--muted); }
+figure.shot figcaption b { display:block; color:var(--ink); font-size:.74rem; }
+
+.more a { display:inline-block; margin:.15em .5em .15em 0; font-size:.88rem; }
+.more .dead { color:var(--warnline); font-size:.82rem; }
+
+section.maps figure { margin:1em 0; border:1px solid var(--rule);
+  border-radius:8px; overflow:hidden; scroll-margin-top:5.5rem; }
+section.maps img { display:block; width:100%; }
+section.maps figcaption { padding:.5em .8em; font-size:.85rem;
+  color:var(--muted); background:var(--band); }
+"""
+
+
+def _sort_key(t):
+    """When a task happens, for ordering, whatever shape its date is in."""
+    if t.get("date"):
+        return _date(t["date"])
+    if t.get("window"):
+        return _date(t["window"][0])
+    return _date(t["repeat"]["from"])
+
+
+def _photo_figure(pic, root, link_images):
+    """One plant photograph with the credit it has to travel with."""
+    e = html.escape
+    src = pic.get("web") or pic["image"]
+    return (f'<figure class="shot">'
+            f'<a href="{e(pic.get("commons") or "#")}">'
+            f'<img src="{e(src)}" alt="{e(pic["binomial"])}" loading="lazy">'
+            f'</a><figcaption><b>{e(pic.get("name") or pic["binomial"])}</b>'
+            f'<i>{e(pic["binomial"])}</i><br>{e(pic.get("artist") or "")} '
+            f'&middot; {e(pic.get("licence") or "")}</figcaption></figure>')
+
+
+def _task_article(t, root, maps, link_images):
+    """One job, in full, with every deeper explanation as a link.
+
+    Nothing in here reproduces prose that lives in a document. The technique
+    for sowing a carrot is in SOWING-CALENDAR.md and stays there; this carries
+    the link to the exact heading. Two copies of a method is one copy nobody
+    can trust, and the reader cannot tell which they are holding.
+    """
+    e = html.escape
+    rows = []
+    w = t.get("where") or {}
+
+    if t.get("placements"):
+        cells = ""
+        for p in t["placements"]:
+            spot = p.get("at") or (", ".join(p.get("squares") or []) or "&mdash;")
+            if p.get("bed") and p.get("at"):
+                spot = f"{p['bed']} {p['at']}"
+            elif p.get("bed"):
+                spot = f"{p['bed']} {spot}"
+            named = "".join(
+                f' <i>{e(n["binomials"][0])}</i>' if n["binomials"] else ""
+                for n in p["named"][:1])
+            flag = ('<span class="miss"> &mdash; names no plant in the '
+                    'design</span>') if p["unmatched"] and p["positional"] \
+                else ""
+            cells += (f'<tr><td class="spot">{spot}</td>'
+                      f'<td class="sp">{e(p["text"])}{named}{flag}</td></tr>')
+        rows.append(("Goes where", f'<table class="place">{cells}</table>'))
+    elif where_of(t):
+        rows.append(("Where", e(where_of(t))))
+    if w.get("note"):
+        rows.append(("Note", e(w["note"])))
+
+    if t.get("photos"):
+        rows.append(("What they look like",
+                     '<div class="shots">'
+                     + "".join(_photo_figure(p, root, link_images)
+                               for p in t["photos"]) + "</div>"))
+
+    if t.get("how"):
+        steps = "".join(f"<li>{e(str(h))}</li>" for h in t["how"])
+        rows.append(("How", f"<ol>{steps}</ol>"))
+
+    g = t.get("gate") or {}
+    if g.get("below_f"):
+        rows.append(("Gate", f'<span class="gate">Only if the soil is under '
+                             f'{g["below_f"]} &deg;F</span>'))
+    elif g.get("depends"):
+        rows.append(("Gate", f'<span class="gate">Depends on '
+                             f'{e(g["depends"])}'
+                             + (f' &mdash; {e(g["unless"])}'
+                                if g.get("unless") else "") + "</span>"))
+    if g.get("early"):
+        rows.append(("Earlier", e(g["early"])))
+    for value, lbl in ((g.get("miss"), "If the window closes"),
+                       (t.get("miss"), "If it slips")):
+        if value:
+            rows.append((lbl, e(value)))
+    for key, lbl in (("why", "Why"), ("warn", "Watch out"), ("then", "Then"),
+                     ("decides", "Decides"), ("answer", "Answer")):
+        if t.get(key):
+            rows.append((lbl, e(str(t[key]))))
+    if t.get("date_inferred") and t.get("date_note"):
+        rows.append(("Where the date came from", e(t["date_note"])))
+
+    more = []
+    if w.get("map") and w["map"] in maps:
+        more.append(f'<a href="#{maps[w["map"]]}">the bed map</a>')
+    for l in t.get("links", []):
+        if l["url"]:
+            more.append(f'<a href="{e(l["url"])}">{e(l["label"])}</a>')
+        elif l["kind"] == "doubt":
+            more.append(f'<a href="INDEX.html#{e(l["ref"])}">'
+                        f'open question {e(l["ref"])}</a>')
+        else:
+            more.append(f'<span class="dead">{e(l["error"] or l["ref"])}</span>')
+    if more:
+        rows.append(("Read more", '<span class="more">'
+                     + " ".join(more) + "</span>"))
+
+    badges = f'<span class="badge kind">{e(t["kind"])}</span>'
+    if t.get("critical"):
+        badges += '<span class="badge crit">cannot slip</span>'
+
+    body = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
+    cls = "task" + (" crit" if t.get("critical") else "")
+    return (f'<article class="{cls}" id="{e(t["id"])}">'
+            f'<h3>{chrome.tick(t)}{e(t["title"])}'
+            f'<a class="self" href="#{e(t["id"])}">{e(t["id"])}</a></h3>'
+            f'<div class="meta">{e(t["when"])}'
+            + (f' &middot; {hours(t["minutes"])}' if t.get("minutes") else "")
+            + f" {badges}</div>"
+            + (f'<dl class="f">{body}</dl>' if body else "")
+            + "</article>")
+
+
+def render_tasks_html(slug, data=None, link_images=False):
+    """Every job on one page, each at its own anchor, each linking out.
+
+    One page rather than one per task, because every other screen wants to
+    point at a job and a single file with `#t016` in it is the cheapest thing
+    that can be pointed at — from the week, from the calendar, from the call
+    card, and later from an app that keeps the same ids as its routes.
+    """
+    from . import bundle, buildhtml, plantphotos
+
+    e = html.escape
+    data = data or bundle.build(slug)
+    root = yards.yard_dir(slug)
+    tasks = sorted(data["tasks"], key=_sort_key)
+
+    # Each distinct bed map once, at its own anchor, with every task that uses
+    # it linking here. Twenty-seven tasks share four maps.
+    maps, figs = {}, []
+    for t in tasks:
+        rel = (t.get("where") or {}).get("map")
+        if not rel or rel in maps:
+            continue
+        small = plantphotos.web_copy(root, rel) or rel
+        anchor = "map-" + links.slug(os.path.splitext(os.path.basename(rel))[0])
+        maps[rel] = anchor
+        users = [x["id"] for x in tasks
+                 if (x.get("where") or {}).get("map") == rel]
+        figs.append(f'<figure id="{anchor}"><img src="{e(small)}" '
+                    f'alt="{e(rel)}" loading="lazy">'
+                    f'<figcaption><code>{e(rel)}</code> &middot; used by '
+                    f'{len(users)} job{"s" if len(users) != 1 else ""}'
+                    f'</figcaption></figure>')
+
+    months, order = {}, []
+    for t in tasks:
+        d = _sort_key(t)
+        key = (d.year, d.month)
+        if key not in months:
+            months[key] = []
+            order.append(key)
+        months[key].append(t)
+
+    jump = "".join(
+        f'<a href="#m{y}-{m:02d}">{ABBR[m]} {str(y)[2:]} '
+        f'<b>{len(months[(y, m)])}</b></a>' for y, m in order)
+
+    body = ""
+    for y, m in order:
+        body += (f'<h2 class="month" id="m{y}-{m:02d}">{MONTHS[m]} {y}'
+                 f' <span class="badge">{len(months[(y, m)])} jobs</span></h2>')
+        body += "".join(_task_article(t, root, maps, link_images)
+                        for t in months[(y, m)])
+
+    mapsec = ""
+    if figs:
+        mapsec = ('<h2 id="maps">The bed maps</h2><p class="sub">Each one '
+                  'once. Every job above that needs a map links down to it '
+                  'rather than carrying its own copy.</p>'
+                  '<section class="maps">' + "".join(figs) + "</section>")
+
+    dead = sum(1 for t in tasks for l in t["links"] if l["error"])
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{e(data['yard']['name'])} &mdash; every job</title>
+<style>{chrome.BASE_CSS}{chrome.NAV_CSS}{chrome.TICKS_CSS}{TASKS_CSS}</style>
+</head>
+<body>
+{chrome.nav(root, 'TASKS.html', data['yard']['name'])}
+<div class="wrap">
+<h1>Every job, in full</h1>
+<p class="sub">{len(tasks)} jobs, in the order they happen. Each one is at its
+own address, so the week and the calendar link straight to it.</p>
+{chrome.tools()}
+<div class="jump">{jump}</div>
+{body}
+{mapsec}
+<footer>
+<p>Built from <code>tasks.json</code> and <code>design.json</code> on
+{data['built']} by <code>python3 -m lib.site {e(slug)}</code>.</p>
+<p>Nothing here repeats prose that lives in a document. &ldquo;Read more&rdquo;
+goes to the section that explains the job, so correcting it there corrects it
+everywhere.{f' {dead} reference(s) currently resolve to nothing and say so '
+             f'in place.' if dead else ''}</p>
+<p>Plant photographs are from Wikimedia Commons under the licence printed with
+each. A species with no verified photograph shows none, because a picture of
+the wrong plant is worse than no picture.</p>
+<p>Ticks are kept in this browser only. <code>Copy the done list</code> hands
+them back as text, and <code>python3 -m lib.week {e(slug)} --sync &lt;file&gt;
+</code> folds them into <code>tasks.json</code>, which is the record.</p>
+</footer>
+</div>
+<script>{chrome.ticks_js(slug)}</script>
+</body>
+</html>
+"""
+    if not link_images:
+        page = buildhtml.embed_images(page, root)
+    return page
+
+
+# ----------------------------------------------------------- the whole run
+
+CALENDAR_CSS = """
+table.year { border-collapse:collapse; width:100%; font-size:.9rem;
+  margin:.5em 0 2em; }
+table.year th { position:sticky; top:2.6rem; z-index:5; background:var(--accent);
+  color:#fff; font-size:.72rem; text-transform:uppercase; letter-spacing:.05em;
+  text-align:left; padding:.5em .6em; font-weight:600; }
+table.year td { padding:.5em .6em; border-bottom:1px solid var(--rule);
+  vertical-align:top; }
+table.year tr.past { color:var(--muted); background:#fcfcfc; }
+table.year tr.past a { color:var(--muted); }
+table.year tr.now td { background:#fff8e1; }
+table.year tr.now td.wk { border-left:4px solid var(--warnline); }
+table.year tr.quiet td { color:var(--muted); }
+table.year tr.blackout td.wk { border-left:4px solid var(--crit); }
+td.wk { white-space:nowrap; width:9.5rem; border-left:4px solid transparent; }
+td.wk b { display:block; font-size:.95rem; }
+td.wk span { color:var(--muted); font-size:.76rem; }
+td.hrs { white-space:nowrap; width:5.5rem; font-variant-numeric:tabular-nums; }
+td.hrs b { font-size:1rem; }
+td.hrs span { display:block; color:var(--muted); font-size:.72rem; }
+td.work a { text-decoration:none; }
+td.work a:hover { text-decoration:underline; }
+td.work .crit { color:var(--crit); font-weight:600; }
+td.work .sep { color:var(--rule); }
+td.buy { width:12rem; font-size:.84rem; color:var(--muted); }
+td.buy b { color:var(--ink); font-weight:600; }
+.mrow td { background:var(--band); font-weight:650; font-size:.82rem;
+  text-transform:uppercase; letter-spacing:.06em; color:var(--accent);
+  border-bottom:2px solid var(--accent); }
+.legend { color:var(--muted); font-size:.82rem; margin:.4em 0 1.2em; }
+@media (max-width:640px) {
+  table.year, table.year tbody, table.year tr, table.year td { display:block;
+    width:auto; }
+  table.year thead { display:none; }
+  table.year tr { border-bottom:1px solid var(--rule); padding:.5em 0; }
+  table.year td { border:0; padding:.15em .4em; }
+  td.wk { border-left:4px solid transparent; }
+  table.year tr.now td.wk, table.year tr.blackout td.wk { border-left-width:4px; }
+  td.hrs { width:auto; } td.buy { width:auto; } }
+"""
+
+
+def render_calendar_html(slug, data=None, today=None):
+    """Every week from the first job to the last, one line each.
+
+    The document this replaces put every task's full detail inline, week after
+    week, and ran to nine thousand words. Somebody trying to find out what
+    November looks like had to read October to get there. So a row here says
+    only what a week is: how long it takes, what in it cannot slip, what has
+    to be bought. The detail is one click away in TASKS.html, which is the
+    only place it exists.
+    """
+    from . import bundle
+
+    e = html.escape
+    data = data or bundle.build(slug)
+    tasks = load(slug)
+    root = yards.yard_dir(slug)
+    today = today or datetime.date.today()
+    this = monday_of(today)
+    cond = yards.load_conditions(slug) or {}
+    first, last = span_of(tasks)
+
+    rows, month = [], None
+    weeks = totalmin = 0
+    mon = first
+    while mon <= last:
+        sun = mon + datetime.timedelta(days=6)
+        grid, loose = week_grid(tasks, mon)
+        buys = buys_for(tasks, mon)
+        s = week_shape(grid, loose, buys)
+        blocks = week_blackout(tasks, cond, mon)
+        weeks += 1
+        totalmin += s["fixed"]
+
+        if (mon.year, mon.month) != month:
+            month = (mon.year, mon.month)
+            rows.append(f'<tr class="mrow"><td colspan="4">'
+                        f'{MONTHS[mon.month]} {mon.year}</td></tr>')
+
+        jobs = []
+        seen = set()
+        for d in sorted(grid):
+            for t, standing in grid[d]:
+                if t["id"] in seen or standing:
+                    continue
+                seen.add(t["id"])
+                cls = ' class="crit"' if t.get("critical") else ""
+                jobs.append(f'<a href="TASKS.html#{e(t["id"])}"{cls}>'
+                            f'{e(t["title"])}</a>')
+        for t in loose:
+            if t["id"] not in seen:
+                seen.add(t["id"])
+                jobs.append(f'<a href="TASKS.html#{e(t["id"])}">'
+                            f'{e(t["title"])}</a>')
+        standing = {t["id"] for items in grid.values() for t, st in items if st}
+
+        work = '<span class="sep"> &middot; </span>'.join(jobs) \
+            or '<span class="sep">&mdash;</span>'
+        if standing:
+            work += (f'<span class="sep"> &middot; </span>'
+                     f'<span class="sep">{len(standing)} standing job'
+                     f'{"s" if len(standing) > 1 else ""}</span>')
+
+        buycell = "".join(
+            f'<div><b>{e(b["item"][:38])}</b> by '
+            f'{_date(b["by"]):%-d %b}</div>' for b in buys[:3])
+        if len(buys) > 3:
+            buycell += f"<div>and {len(buys) - 3} more</div>"
+
+        cls = []
+        if mon == this:
+            cls.append("now")
+        elif mon < this:
+            cls.append("past")
+        if not jobs and not standing and not buys:
+            cls.append("quiet")
+        if blocks:
+            cls.append("blackout")
+
+        hrs = hours(s["fixed"]) if s["fixed"] else "&mdash;"
+        note = ("no-build week" if blocks else
+                f'{len(seen)} job{"s" if len(seen) != 1 else ""}'
+                if seen else "")
+        label = "This week" if mon == this else f"{mon:%-d %b}"
+        rows.append(
+            f'<tr class="{" ".join(cls)}">'
+            f'<td class="wk"><b>{label}</b>'
+            f'<span>{mon:%-d %b} &ndash; {sun:%-d %b}</span></td>'
+            f'<td class="hrs"><b>{hrs}</b><span>{note}</span></td>'
+            f'<td class="work">{work}</td>'
+            f'<td class="buy">{buycell}</td></tr>')
+        mon += datetime.timedelta(weeks=1)
+
+    done = sum(1 for t in data["tasks"] if t.get("done"))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{e(data['yard']['name'])} &mdash; the calendar</title>
+<style>{chrome.BASE_CSS}{chrome.NAV_CSS}{CALENDAR_CSS}</style>
+</head>
+<body>
+{chrome.nav(root, 'CALENDAR.html', data['yard']['name'])}
+<div class="wrap">
+<h1>{first:%B %Y} to {last:%B %Y}</h1>
+<p class="sub">{weeks} weeks, {len(data['tasks'])} jobs, {hours(totalmin)} of
+dated work. {done} done so far.</p>
+<p class="legend">A red edge is a no-build week. A job in red cannot slip.
+Every job name goes straight to the full instructions.</p>
+<table class="year">
+<thead><tr><th>Week</th><th>Work</th><th>What happens</th>
+<th>To buy</th></tr></thead>
+<tbody>{"".join(rows)}</tbody>
+</table>
+<footer>
+<p>Built from <code>tasks.json</code> on {data['built']} by
+<code>python3 -m lib.site {e(slug)}</code>. A row says what a week is; the
+instructions live once, in <a href="TASKS.html">every job, in full</a>.</p>
+</footer>
+</div>
+</body>
+</html>
+"""
 
 
 def yard_name(slug):
@@ -1233,16 +2068,47 @@ def report(slug, when=None):
               f"{stamp(problems)}.\n  `--check` says what to do about each.")
 
 
+def _report_links(findings, slug):
+    """What `--links` found, in the two groups a person fixes differently."""
+    if not findings:
+        print("  every task reference resolves, and every plant a task "
+              "places is in design.json")
+        return
+    refs = [f for f in findings if f["kind"] == "reference"]
+    beds = [f for f in findings if f["kind"] == "placement"]
+    if refs:
+        print(f"\n  {len(refs)} reference(s) that point nowhere. A task with "
+              f"one of these\n  loses its explanation on every page that "
+              f"shows it:\n")
+        for f in refs:
+            print(f"      {f['message']}")
+        print(f"\n      Write it as FILE.md#anchor. "
+              f"`python3 -m lib.links {slug}` lists every anchor.")
+    if beds:
+        print(f"\n  {len(beds)} placement(s) naming a plant design.json does "
+              f"not hold. The\n  prose and the design disagree about what "
+              f"goes in the ground:\n")
+        for f in beds:
+            print(f"      {f['message']}")
+        print(f"\n      `python3 -m lib.plants {slug}` lists every name the "
+              f"design knows.")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("slug", nargs="?")
     ap.add_argument("--week", help="any date in the week you want")
     ap.add_argument("--calendar", action="store_true", help="write CALENDAR.md")
+    ap.add_argument("--html", action="store_true",
+                    help="write WEEK.html — one week, seven days, detail on a click")
     ap.add_argument("--shop", nargs="?", type=int, const=3, default=None,
                     metavar="WEEKS", help="buying due in the next N weeks")
     ap.add_argument("--check", action="store_true",
                     help="where tasks.json and the plan documents disagree")
+    ap.add_argument("--links", action="store_true",
+                    help="references that point nowhere, and placements "
+                         "naming a plant the design does not hold")
     ap.add_argument("--restamp", action="store_true",
                     help="record the sources as read, after reading them")
     ap.add_argument("--publish", action="store_true",
@@ -1256,6 +2122,10 @@ def main():
 
     if not args.slug:
         print(__doc__)
+        return
+
+    if args.links:
+        _report_links(link_check(args.slug), args.slug)
         return
 
     if args.check:
@@ -1272,10 +2142,26 @@ def main():
         if clashes:
             _report_blackout(clashes, conditions.blackout_records(
                 yards.load_conditions(args.slug) or {}))
+        _report_links(link_check(args.slug), args.slug)
         raise SystemExit(1 if problems else 0)
 
     if args.restamp:
         restamp(args.slug)
+        return
+
+    if args.html:
+        mon = monday_of(_date(args.week) if args.week else datetime.date.today())
+        path = yards.write_text(args.slug, "WEEK.html",
+                                render_week_html(args.slug, mon))
+        print(f"wrote {path}")
+        # The page is a view of tasks.json, so a disagreement with the plan
+        # documents does not make it wrong. It does make it incomplete, and
+        # saying so here is cheaper than finding out on a Saturday.
+        problems = check(args.slug)
+        if problems:
+            print(f"  {len(problems)} disagreement"
+                  f"{'s' if len(problems) > 1 else ''} with the plan "
+                  f"documents: {stamp(problems)}. `--check` says what to do.")
         return
 
     if args.publish:
