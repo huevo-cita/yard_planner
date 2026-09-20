@@ -675,6 +675,107 @@ def span_of(data):
     return monday_of(min(ds)), monday_of(max(ds))
 
 
+def week_id(monday):
+    """The stable id of a week: `w` and the ISO date of its Monday.
+
+    A week is now a thing pages address, so it needs an id of the same kind as
+    `t016`, `b15` and `c306`: one form, derivable, and the same in every file
+    that names it. `WEEK.html` gives each week that id, `CALENDAR.html` links
+    to `WEEK.html#w2026-10-19`, `bundle.json` carries it, and the script that
+    picks the current week builds it from the device clock. Nothing stores a
+    week number, because a number is only meaningful beside the plan that
+    counted it, and the plan moves.
+    """
+    return "w" + monday.isoformat()
+
+
+def week_monday(wid):
+    """The Monday back out of a week id."""
+    return _date(str(wid).lstrip("w"))
+
+
+#: How far past the end of the record to look for the next piece of work. The
+#: search runs over occurrences rather than dates, so it needs a stop.
+_HORIZON_DAYS = 365 * 12
+
+
+def next_work(data, after):
+    """The first day after `after` that the record asks for work, and the task.
+
+    Occurrences, not dates, so a standing job that runs on past the last one-off
+    is named rather than passed over. Returns `(day, task)`, or None where the
+    record asks for nothing more.
+    """
+    a = after + datetime.timedelta(days=1)
+    z = after + datetime.timedelta(days=_HORIZON_DAYS)
+    best = None
+    for t in data.get("tasks", []):
+        days = _occurrences(t, a, z)
+        if not days:
+            continue
+        day = min(days)
+        if best is None or (day, t["id"]) < (best[0], best[1]["id"]):
+            best = (day, t)
+    return best
+
+
+def target_of(data):
+    """The date the plan is built towards, or None where none is recorded."""
+    return _date(data["target_date"]) if data.get("target_date") else None
+
+
+def beyond_plan(monday, target):
+    """Is this whole week later than the date the plan runs to.
+
+    The week that holds the target is not beyond it. Every week whose Monday
+    falls after the target is, and the distinction is the one an empty week
+    turns on: before the target an empty week is planned and clear, after it
+    nobody has planned that far.
+    """
+    return bool(target and monday > target)
+
+
+def week_spine(data, cond=None, target=None):
+    """Every week from the first job to the last, as one row of facts each.
+
+    The spine is what the density strip, the calendar and the index all count
+    from, and it goes into `bundle.json` so none of them counts it twice.
+    """
+    if not data or not data.get("tasks"):
+        return []
+    target = target or target_of(data)
+    first, last = span_of(data)
+    out, mon = [], first
+    total = ((last - first).days // 7) + 1
+    n = 0
+    while mon <= last:
+        n += 1
+        sun = mon + datetime.timedelta(days=6)
+        grid, loose = week_grid(data, mon)
+        buys = buys_for(data, mon)
+        s = week_shape(grid, loose, buys)
+        blocks = week_blackout(data, cond or {}, mon)
+        jobs = s["jobs"] + len(loose)
+        out.append({
+            "id": week_id(mon),
+            "monday": mon.isoformat(),
+            "sunday": sun.isoformat(),
+            "minutes": s["fixed"],
+            "standing_minutes": s["standing"],
+            "jobs": jobs,
+            "buys": len(buys),
+            "critical": len(s["critical"]),
+            "blackout": bool(blocks),
+            "beyond": beyond_plan(mon, target),
+            "empty": not jobs and not buys,
+            "label": f"{mon:%-d %b}",
+            "title": f"{mon:%A %-d %B} to {sun:%A %-d %B}",
+            "position": f"week {n} of {total}",
+        })
+        mon += datetime.timedelta(weeks=1)
+    return out
+
+
 def minutes_in(days, starting):
     """Hours a person has to find this week.
 
@@ -1091,6 +1192,49 @@ h2 { font-size:1.05rem; margin:2em 0 .4em; padding-bottom:.2rem;
   border-bottom:2px solid var(--accent); }
 .warn { border-left:4px solid var(--todayline); background:#fef3c7;
   color:#78350f; padding:.7em 1em; border-radius:0 8px 8px 0; margin:1em 0; }
+
+/* Every week of the plan is in the page and one of them is shown. The
+   fallback, with no script running, is the week the build chose. */
+section.wk { display:none; }
+section.wk.on { display:block; }
+
+.weeknav { display:flex; flex-wrap:wrap; gap:.4em; align-items:baseline;
+  margin:0 0 .5em; }
+.weeknav button { font:inherit; font-size:.85rem; cursor:pointer;
+  background:var(--band); border:1px solid var(--rule); border-radius:999px;
+  padding:.3em 1em; color:var(--accent); }
+.weeknav button:hover { background:#eceee8; border-color:var(--accent); }
+.weeknav button[disabled] { opacity:.38; cursor:default; }
+.weeknav .notnow { color:var(--todayline); font-size:.82rem; font-weight:600; }
+.weeknav .pos { margin-left:auto; color:var(--muted); font-size:.8rem; }
+
+/* Hours a week, across the whole plan. A strip and not a slider: 129 weeks
+   give a slider about two pixels of thumb travel on a phone. It scrolls, the
+   current week is scrolled into the middle of it, and the buttons above are
+   the controls that a thumb is meant to use. */
+.density { display:flex; align-items:flex-end; gap:1px; height:2.3rem;
+  overflow-x:auto; background:var(--band); border:1px solid var(--rule);
+  border-radius:8px; padding:3px; margin:0 0 .25em; scrollbar-width:none;
+  -webkit-overflow-scrolling:touch; }
+.density::-webkit-scrollbar { display:none; }
+.density a.bar { flex:0 0 6px; height:100%; display:flex; align-items:flex-end;
+  text-decoration:none; border-radius:2px; }
+.density a.bar i { display:block; width:100%; min-height:2px;
+  background:#b9c9ba; border-radius:1px; }
+.density a.bar.beyond i { background:#e0e0d8; }
+.density a.bar.crit i { background:var(--accent); }
+.density a.bar.now i { background:var(--todayline); }
+.density a.bar.at { background:rgba(47,93,52,.2); }
+.density a.bar:hover i { background:#24482a; }
+p.dnote { margin:0 0 1.1em; color:var(--muted); font-size:.76rem; }
+
+.note { border-left:4px solid var(--rule); background:var(--band);
+  padding:.8em 1em; border-radius:0 8px 8px 0; margin:1em 0; }
+.note.beyond { border-left-color:var(--todayline); background:#fff8e1; }
+.note b { display:block; margin-bottom:.25em; }
+.note p { margin:.35em 0; font-size:.93rem; }
+.tagline { color:var(--todayline); font-size:.82rem; font-weight:600;
+  margin:0 0 .6em; }
 footer { margin-top:2.5rem; padding-top:1em; border-top:1px solid var(--rule);
   color:var(--muted); font-size:.8rem; }
 code { font:.87em ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -1150,16 +1294,74 @@ def _job_html(t, standing, show_cadence=True, root=None):
             + f'</summary><dl class="detail">{body}</dl></details>')
 
 
-def render_week_html(slug, monday, today=None):
-    """One week on one page: the shape, the seven days, the detail behind a click."""
+def _runs_to(target, note):
+    """The date the plan runs to, as a page says it."""
+    said = f"{target:%A %-d %B %Y}"
+    return said + (f" &mdash; {html.escape(str(note))}" if note else "")
+
+
+def _quiet_note(target, note):
+    """An empty week the plan reaches: nothing to do, and it means it."""
+    if not target:
+        return ('<div class="note quiet"><b>Nothing is planned for this '
+                'week.</b><p>This yard records no target date, so nothing '
+                'here can say whether the plan reaches this week or stops '
+                'before it.</p></div>')
+    return ('<div class="note quiet"><b>Nothing is planned for this week.</b>'
+            f'<p>The plan runs to {_runs_to(target, note)}, and it leaves '
+            f'this week clear.</p></div>')
+
+
+def _beyond_note(data, monday, target, note):
+    """An empty week past the target: the plan stops, and says where.
+
+    A blank week and a finished week look the same on a page, and this is the
+    difference between them. The plan runs to a date; after that date nobody
+    has planned the week rather than nothing needing doing in it. The five
+    jobs that do sit past the target are two years behind a run of blank
+    weeks, so each blank week names the next one and links to it.
+    """
     e = html.escape
-    data = load(slug)
-    root = yards.yard_dir(slug)
-    today = today or datetime.date.today()
     sunday = monday + datetime.timedelta(days=6)
+    nxt = next_work(data, sunday)
+    out = ['<div class="note beyond"><b>Beyond the plan.</b>',
+           f'<p>The plan runs to {_runs_to(target, note)}. This week is after '
+           f'that. So the record does not say the week is clear; it says '
+           f'nobody has planned this far.</p>']
+    if nxt:
+        day, t = nxt
+        out.append(
+            f'<p>The next dated job is <a href="TASKS.html#{e(t["id"])}">'
+            f'<code>{e(t["id"])}</code> {e(t["title"])}</a>, on '
+            f'{day:%A %-d %B %Y}. '
+            f'<a class="goweek" href="#{week_id(monday_of(day))}">'
+            f'Open that week</a>.</p>')
+    else:
+        out.append('<p>The record asks for no work after this week.</p>')
+    out.append("</div>")
+    return "".join(out)
+
+
+def _week_body(slug, data, cond, monday, root, target=None, note=None):
+    """One week: the shape, the seven days, what to buy, the detail on a click.
+
+    Every week of the plan is rendered this way and all of them travel in the
+    page, because the page is read on a phone that is often offline and the
+    build cannot know which day it will be opened on. The script picks; it
+    never composes a sentence.
+    """
+    e = html.escape
     grid, loose = week_grid(data, monday)
     buys = buys_for(data, monday)
     s = week_shape(grid, loose, buys)
+    beyond = beyond_plan(monday, target)
+
+    if not s["jobs"] and not loose and not buys:
+        return (_beyond_note(data, monday, target, note) if beyond
+                else _quiet_note(target, note))
+
+    tag = (f'<p class="tagline">Beyond the plan, which runs to '
+           f'{_runs_to(target, note)}.</p>') if beyond else ""
 
     stats = [(hours(s["fixed"]), "dated work"),
              (hours(s["standing"]) if s["standing"] else "none",
@@ -1192,7 +1394,7 @@ def render_week_html(slug, monday, today=None):
         gist.append("<p>A quiet week. Nothing on it cannot move.</p>")
 
     banner = ""
-    blocks = week_blackout(data, yards.load_conditions(slug) or {}, monday)
+    blocks = week_blackout(data, cond or {}, monday)
     for b in blocks:
         banner += (f'<div class="warn"><b>No-build week.</b> The '
                    f'{b["from"]:%-d %b}&ndash;{b["to"]:%-d %b} blackout bars '
@@ -1206,9 +1408,10 @@ def render_week_html(slug, monday, today=None):
         d = monday + datetime.timedelta(days=i)
         items = grid[d]
         f, st = s["per_day"][d]
+        # Which day is today is a fact about the reader's device, so the
+        # script marks it. The build stamps the day it belongs to and nothing
+        # more, because a baked "today" is wrong from the next morning on.
         cls = "day" + (" weekend" if d.weekday() >= 5 else "")
-        if d == today:
-            cls += " today"
         mins = " + ".join(x for x in
                           [hours(f) if f else "", f"{st} min standing" if st
                            else ""] if x)
@@ -1216,7 +1419,8 @@ def render_week_html(slug, monday, today=None):
                         for t, standing in items) \
             or '<div class="empty">Nothing dated.</div>'
         daysout.append(
-            f'<section class="{cls}"><div class="dayhead">'
+            f'<section class="{cls}" data-day="{d.isoformat()}">'
+            f'<div class="dayhead">'
             f'<span class="dow">{d:%A}</span>'
             f'<span class="dat">{d:%-d %B}</span>'
             f'<span class="mins">{mins or "&mdash;"}</span></div>'
@@ -1253,52 +1457,293 @@ def render_week_html(slug, monday, today=None):
                     '<th>Item</th><th>By</th><th>Cost</th><th>Where</th>'
                     f'</tr></thead><tbody>{rows}</tbody></table>')
 
+    return (tag
+            + f'<div class="shape">{strip}</div>'
+            + f'<div class="gist">{"".join(gist)}</div>'
+            + banner + "".join(daysout) + buytable)
+
+
+#: Picking the week, moving between weeks, and marking the day.
+#:
+#: Everything this does is a choice between things Python already wrote. It
+#: shows one of the rendered weeks, copies that week's own title into the
+#: heading, and adds a class to the day the device says it is. It composes no
+#: sentence and computes no hours, so it cannot disagree with the page it is
+#: in. The date arithmetic it leans on is in `chrome.DATES_JS`.
+WEEK_JS = """
+(function () {
+  var weeks = [].slice.call(document.querySelectorAll('section.wk'));
+  if (!weeks.length) return;
+  var out = document.getElementById('wkout');
+  var ttl = document.getElementById('wkttl');
+  var pos = document.getElementById('wkpos');
+  var notnow = document.getElementById('notnow');
+  var prev = document.getElementById('prevwk');
+  var next = document.getElementById('nextwk');
+  var strip = document.getElementById('density');
+  var index = {}, at = -1;
+  weeks.forEach(function (s, i) { index[s.id] = i; });
+
+  function bars() {
+    return strip ? [].slice.call(strip.querySelectorAll('a.bar')) : [];
+  }
+
+  function mark_today() {
+    var day = yard.today(), id = yard.weekId(day);
+    [].forEach.call(document.querySelectorAll('.day.today'), function (el) {
+      el.classList.remove('today');
+    });
+    [].forEach.call(document.querySelectorAll('.day[data-day="' + day + '"]'),
+      function (el) { el.classList.add('today'); });
+    bars().forEach(function (b) {
+      b.classList.toggle('now', b.getAttribute('data-week') === id);
+    });
+  }
+
+  function show(i) {
+    if (i < 0 || i >= weeks.length) return;
+    if (out) out.hidden = true;
+    weeks.forEach(function (s, k) { s.classList.toggle('on', k === i); });
+    at = i;
+    var s = weeks[i], id = s.id;
+    if (ttl) ttl.textContent = s.getAttribute('data-title');
+    if (pos) pos.textContent = s.getAttribute('data-pos');
+    if (prev) prev.disabled = i === 0;
+    if (next) next.disabled = i === weeks.length - 1;
+    if (notnow) notnow.hidden = id === yard.weekId(yard.today());
+    bars().forEach(function (b) {
+      b.classList.toggle('at', b.getAttribute('data-week') === id);
+    });
+    var here = strip && strip.querySelector('a.bar[data-week="' + id + '"]');
+    // Scrolled by hand rather than with scrollIntoView, which also scrolls
+    // the page and throws the reader to the top of the strip on load.
+    if (here) strip.scrollLeft = here.offsetLeft - strip.clientWidth / 2;
+    if (window.yardTally) window.yardTally();
+    if (window.history && history.replaceState)
+      history.replaceState(null, '', '#' + id);
+  }
+
+  function outside() {
+    weeks.forEach(function (s) { s.classList.remove('on'); });
+    at = -1;
+    if (out) out.hidden = false;
+    if (ttl && out) ttl.textContent = out.getAttribute('data-title');
+    if (pos) pos.textContent = '';
+    if (notnow) notnow.hidden = true;
+    if (prev) prev.disabled = false;
+    if (next) next.disabled = false;
+  }
+
+  function step(n) {
+    if (at < 0) { show(n > 0 ? 0 : weeks.length - 1); return; }
+    show(Math.min(weeks.length - 1, Math.max(0, at + n)));
+  }
+
+  function now() {
+    var id = yard.weekId(yard.today());
+    mark_today();
+    if (id in index) show(index[id]); else outside();
+  }
+
+  function from_hash() {
+    var h = (location.hash || '').slice(1);
+    return (h && h in index) ? index[h] : -1;
+  }
+
+  if (prev) prev.addEventListener('click', function () { step(-1); });
+  if (next) next.addEventListener('click', function () { step(1); });
+  var back = document.getElementById('thiswk');
+  if (back) back.addEventListener('click', now);
+
+  window.addEventListener('hashchange', function () {
+    var i = from_hash();
+    if (i >= 0) show(i);
+  });
+
+  document.addEventListener('keydown', function (ev) {
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    var el = ev.target;
+    if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '')) return;
+    if (ev.key === 'ArrowLeft') { step(-1); ev.preventDefault(); }
+    else if (ev.key === 'ArrowRight') { step(1); ev.preventDefault(); }
+    else if (ev.key === 't' || ev.key === 'T') { now(); }
+  });
+
+  // The same two handlers under a thumb. A drag to the left moves forward,
+  // the way a page turns. The density strip scrolls sideways itself, so a
+  // touch that starts in it is left alone.
+  var x0 = null, y0 = null;
+  document.addEventListener('touchstart', function (ev) {
+    if (ev.touches.length !== 1 ||
+        (ev.target.closest && ev.target.closest('#density'))) {
+      x0 = null;
+      return;
+    }
+    x0 = ev.touches[0].clientX;
+    y0 = ev.touches[0].clientY;
+  }, {passive: true});
+
+  document.addEventListener('touchend', function (ev) {
+    if (x0 === null) return;
+    var t = ev.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    step(dx < 0 ? 1 : -1);
+  }, {passive: true});
+
+  var all = document.getElementById('all');
+  if (all) all.addEventListener('click', function () {
+    var jobs = document.querySelectorAll('section.wk.on details.job');
+    var opening = all.dataset.open !== 'yes';
+    [].forEach.call(jobs, function (d) { d.open = opening; });
+    all.dataset.open = opening ? 'yes' : 'no';
+    all.textContent = opening ? 'Close every task' : 'Open every task';
+  });
+
+  var i = from_hash();
+  mark_today();
+  if (i >= 0) show(i); else now();
+})();
+"""
+
+
+def _density_strip(spine):
+    """Hours a week across the whole plan, as one bar each.
+
+    Orientation, and the reason paging through empty weeks is bearable. The
+    clusters of real work are visible as shape, and a bar is a link to its own
+    week. It is not a slider: 129 weeks give a slider about two pixels of
+    thumb travel, so this scrolls and the buttons do the moving.
+    """
+    if not spine:
+        return ""
+    top = max(w["minutes"] + w["standing_minutes"] for w in spine) or 1
+    bars = []
+    for w in spine:
+        mins = w["minutes"] + w["standing_minutes"]
+        pct = max(6, round(100.0 * mins / top)) if mins else 0
+        cls = "bar" + (" beyond" if w["beyond"] else "") \
+                    + (" crit" if w["critical"] else "")
+        note = (f'{w["label"]} &middot; {hours(w["minutes"])} &middot; '
+                f'{w["jobs"]} job{"s" if w["jobs"] != 1 else ""}'
+                + (" &middot; beyond the plan" if w["beyond"] else ""))
+        bars.append(f'<a class="{cls}" href="#{w["id"]}" '
+                    f'data-week="{w["id"]}" title="{note}" '
+                    f'aria-label="{note}"><i style="height:{pct}%"></i></a>')
+    return ('<div class="density" id="density">' + "".join(bars) + "</div>")
+
+
+def render_week_html(slug, monday=None, today=None, data=None):
+    """Every week of the plan on one page, with the device clock picking one.
+
+    The page used to hold one week, chosen on the day it was built. It then
+    said the same seven days for as long as nobody rebuilt it, which on a
+    phone read overnight is wrong by the next morning and says nothing about
+    being wrong. So the build ships the whole span and the script picks. The
+    page is correct on any day it is opened, offline, with no rebuild.
+
+    `monday` is the week the page shows when no script runs. `--week` sets it,
+    and it is a fallback rather than the answer.
+    """
+    e = html.escape
+    tasks = load(slug)
+    root = yards.yard_dir(slug)
+    cond = yards.load_conditions(slug) or {}
+    today = today or datetime.date.today()
+    target = target_of(tasks or {})
+    note = (tasks or {}).get("target_note")
+    spine = week_spine(tasks or {}, cond, target)
     name = yard_name(slug)
-    built = datetime.date.today().isoformat()
+    built = (data or {}).get("built") or datetime.date.today().isoformat()
+
+    if not spine:
+        first = last = monday_of(monday or today)
+        spine = [{"id": week_id(first), "monday": first.isoformat(),
+                  "sunday": (first + datetime.timedelta(days=6)).isoformat(),
+                  "minutes": 0, "standing_minutes": 0, "jobs": 0, "buys": 0,
+                  "critical": 0, "blackout": False, "beyond": False,
+                  "empty": True, "label": f"{first:%-d %b}",
+                  "title": f"{first:%A %-d %B} to "
+                           f"{first + datetime.timedelta(days=6):%A %-d %B}",
+                  "position": "week 1 of 1"}]
+
+    want = week_id(monday_of(monday or today))
+    ids = [w["id"] for w in spine]
+    default = want if want in ids else ids[0]
+
+    sections = []
+    for w in spine:
+        mon = _date(w["monday"])
+        body = _week_body(slug, tasks or {}, cond, mon, root, target, note)
+        on = " on" if w["id"] == default else ""
+        sections.append(
+            f'<section class="wk{on}" id="{w["id"]}" '
+            f'data-monday="{w["monday"]}" data-title="{e(w["title"])}" '
+            f'data-pos="{e(w["position"])}">{body}</section>')
+
+    first, last = _date(spine[0]["monday"]), _date(spine[-1]["sunday"])
+    outside = (
+        f'<section class="note beyond" id="wkout" '
+        f'data-title="Outside the plan" hidden>'
+        f'<b>Today is outside this plan.</b>'
+        f'<p>The plan covers {first:%-d %B %Y} to {last:%-d %B %Y}, and today '
+        f'is not in it. Nothing below is wrong; none of it is about this '
+        f'week.</p>'
+        f'<p><a class="goweek" href="#{spine[0]["id"]}">Open the first week'
+        f'</a> &middot; <a class="goweek" href="#{spine[-1]["id"]}">open the '
+        f'last week</a>.</p></section>')
+
+    shown = next(w for w in spine if w["id"] == default)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{e(name)} &mdash; week of {monday:%-d %B}</title>
-<style>{WEEK_CSS}{chrome.NAV_CSS}{chrome.TICKS_CSS}</style>
+<title>{e(name)} &mdash; this week</title>
+<style>{WEEK_CSS}{chrome.NAV_CSS}{chrome.TICKS_CSS}{chrome.STALE_CSS}</style>
 </head>
 <body>
 {chrome.nav(root, 'WEEK.html', name)}
 <div class="wrap">
-
-<h1>{monday:%A %-d %B} to {sunday:%A %-d %B}</h1>
+{chrome.stale_banner(slug, built)}
+<h1 id="wkttl">{e(shown['title'])}</h1>
 <p class="sub">{e(name)} &middot; every day of the week, with the detail behind
-a click. Any job opens to its full instructions in
+a click. The week follows this device's clock, so opening the page tomorrow
+moves it on. Any job opens to its full instructions in
 <a href="TASKS.html">every job, in full</a>.</p>
 
-<div class="shape">{strip}</div>
-<div class="gist">{"".join(gist)}</div>
-{banner}
+<p class="weeknav">
+<button type="button" id="prevwk">&larr; Previous</button>
+<button type="button" id="thiswk">This week</button>
+<button type="button" id="nextwk">Next &rarr;</button>
+<span class="notnow" id="notnow" hidden>Not the current week</span>
+<span class="pos" id="wkpos">{e(shown['position'])}</span>
+</p>
+
+{_density_strip(spine)}
+<p class="dnote">Hours of dated work, week by week, over the whole plan. Each
+bar opens its week. Arrow keys move a week at a time, and so does a swipe.</p>
+
 {chrome.tools('<button type="button" id="all">Open every task</button>')}
-{"".join(daysout)}
-{buytable}
+{"".join(sections)}
+{outside}
 
 <footer>
 <p>Built from <code>tasks.json</code> on {built} by
-<code>python3 -m lib.week {e(slug)} --html</code>. A standing job appears on
-every day it asks for work, so the week reads as days rather than as a list
-with the repeats filed at the bottom.</p>
+<code>python3 -m lib.week {e(slug)} --html</code>. Every week of the plan is
+in this file and the clock picks one, so the page is right on any day it is
+opened, offline. A week is addressed as
+<code>WEEK.html#{e(shown['id'])}</code>, which is the Monday's date.</p>
+<p>A standing job appears on every day it asks for work, so the week reads as
+days rather than as a list with the repeats filed at the bottom.</p>
 </footer>
 
 </div>
+{chrome.dates_js()}
 <script>
-(function () {{
-  var btn = document.getElementById('all');
-  btn.addEventListener('click', function () {{
-    var jobs = document.querySelectorAll('details.job');
-    var opening = btn.dataset.open !== 'yes';
-    jobs.forEach(function (d) {{ d.open = opening; }});
-    btn.dataset.open = opening ? 'yes' : 'no';
-    btn.textContent = opening ? 'Close every task' : 'Open every task';
-  }});
-}})();
-{chrome.ticks_js(slug)}
+{WEEK_JS}
+{chrome.ticks_js(slug, scope='section.wk.on')}
+{chrome.STALE_JS}
 </script>
 </body>
 </html>
@@ -1612,7 +2057,13 @@ table.year tr.quiet td { color:var(--muted); }
 table.year tr.blackout td.wk { border-left:4px solid var(--crit); }
 td.wk { white-space:nowrap; width:9.5rem; border-left:4px solid transparent; }
 td.wk b { display:block; font-size:.95rem; }
+td.wk b a { text-decoration:none; }
+td.wk b a:hover { text-decoration:underline; }
 td.wk span { color:var(--muted); font-size:.76rem; }
+td.wk em { display:none; font-style:normal; color:var(--warnline);
+  font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; }
+table.year tr.now td.wk em { display:block; }
+table.year tr.click { cursor:pointer; }
 td.hrs { white-space:nowrap; width:5.5rem; font-variant-numeric:tabular-nums; }
 td.hrs b { font-size:1rem; }
 td.hrs span { display:block; color:var(--muted); font-size:.72rem; }
@@ -1635,6 +2086,33 @@ td.buy b { color:var(--ink); font-weight:600; }
   td.wk { border-left:4px solid transparent; }
   table.year tr.now td.wk, table.year tr.blackout td.wk { border-left-width:4px; }
   td.hrs { width:auto; } td.buy { width:auto; } }
+"""
+
+
+#: The year view, corrected by the device clock, and made a way in.
+#:
+#: Two jobs and no third. It moves the `now` mark onto the week the device
+#: says it is, because a build from three weeks ago marks the wrong row; and
+#: it makes the whole row open its week, because the row is the map and the
+#: week page is the detail. It writes no text.
+CALENDAR_JS = """
+(function () {
+  var rows = [].slice.call(document.querySelectorAll('tr[data-monday]'));
+  if (!rows.length) return;
+  var here = yard.mondayOf(yard.today());
+  var was = document.getElementById('now');
+  if (was) was.removeAttribute('id');
+  rows.forEach(function (r) {
+    var mon = r.getAttribute('data-monday');
+    r.classList.toggle('now', mon === here);
+    r.classList.toggle('past', mon < here);
+    if (mon === here) r.id = 'now';
+    r.addEventListener('click', function (ev) {
+      if (ev.target.closest && ev.target.closest('a')) return;
+      location.href = 'WEEK.html#' + r.getAttribute('data-week');
+    });
+  });
+})();
 """
 
 
@@ -1720,10 +2198,17 @@ def render_calendar_html(slug, data=None, today=None):
         note = ("no-build week" if blocks else
                 f'{len(seen)} job{"s" if len(seen) != 1 else ""}'
                 if seen else "")
-        label = "This week" if mon == this else f"{mon:%-d %b}"
+        # The row is the map and the week page is the detail, so the row is
+        # the way into it. `now` is stamped for the build day and re-applied
+        # by the script from the device clock, which is what keeps it true.
+        wid = week_id(mon)
+        cls.append("click")
         rows.append(
-            f'<tr class="{" ".join(cls)}">'
-            f'<td class="wk"><b>{label}</b>'
+            f'<tr class="{" ".join(cls)}"'
+            + (' id="now"' if mon == this else "")
+            + f' data-week="{wid}" data-monday="{mon.isoformat()}">'
+            f'<td class="wk"><b><a href="WEEK.html#{wid}">{mon:%-d %b}</a></b>'
+            f'<em>This week</em>'
             f'<span>{mon:%-d %b} &ndash; {sun:%-d %b}</span></td>'
             f'<td class="hrs"><b>{hrs}</b><span>{note}</span></td>'
             f'<td class="work">{work}</td>'
@@ -1737,16 +2222,19 @@ def render_calendar_html(slug, data=None, today=None):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(data['yard']['name'])} &mdash; the calendar</title>
-<style>{chrome.BASE_CSS}{chrome.NAV_CSS}{CALENDAR_CSS}</style>
+<style>{chrome.BASE_CSS}{chrome.NAV_CSS}{chrome.STALE_CSS}{CALENDAR_CSS}</style>
 </head>
 <body>
 {chrome.nav(root, 'CALENDAR.html', data['yard']['name'])}
 <div class="wrap">
+{chrome.stale_banner(slug, data['built'])}
 <h1>{first:%B %Y} to {last:%B %Y}</h1>
 <p class="sub">{weeks} weeks, {len(data['tasks'])} jobs, {hours(totalmin)} of
 dated work. {done} done so far.</p>
 <p class="legend">A red edge is a no-build week. A job in red cannot slip.
-Every job name goes straight to the full instructions.</p>
+Every job name goes straight to the full instructions, and every week row
+opens that week in <a href="WEEK.html">this week</a>.
+<a href="#now">Go to the current week</a>.</p>
 <table class="year">
 <thead><tr><th>Week</th><th>Work</th><th>What happens</th>
 <th>To buy</th></tr></thead>
@@ -1756,8 +2244,15 @@ Every job name goes straight to the full instructions.</p>
 <p>Built from <code>tasks.json</code> on {data['built']} by
 <code>python3 -m lib.site {e(slug)}</code>. A row says what a week is; the
 instructions live once, in <a href="TASKS.html">every job, in full</a>.</p>
+<p>The year view is the map and the week view is the detail. A week is
+addressed by its Monday, as <code>WEEK.html#w2026-09-14</code>.</p>
 </footer>
 </div>
+{chrome.dates_js()}
+<script>
+{CALENDAR_JS}
+{chrome.STALE_JS}
+</script>
 </body>
 </html>
 """
