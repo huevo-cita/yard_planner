@@ -142,10 +142,44 @@ the shop selling the thing. So a yard keeps them in `tasks.json`, with the
 position down to the square or the foot-mark, the gate, the fallback and the
 supplier, and `CALENDAR.md` is generated from it: the current week first with its
 hours and what to buy before which day, then every week to the target date.
-`yard week <slug>` puts the same week on one screen; `--shop 3` groups the next
-three weeks of buying into supplier trips. It publishes to one Google Doc whose
+`yard week <slug>` puts the same week on one screen, and `--html` writes
+`WEEK.html`: the seven days laid out Monday to Sunday with the hours on each,
+and every task's detail behind a click. A standing job shows on each day it
+asks for work, rather than in a list of repeats under the days, because
+"which of these lands on Tuesday" is the question a week view has to answer.
+`--shop 3` groups the next three weeks of buying into supplier trips. It publishes to one Google Doc whose
 checkboxes tick, and `--sync` reads the ticks back, so the file also becomes the
 record of what was actually done.
+
+**One navigable set of screens, not a folder of loose pages.** A yard used to
+publish a dozen unrelated HTML files: you opened one, read it, and had no way
+to reach the others. `yard site <slug>` builds them as a set. Every page
+carries the same bar, `INDEX.html` is the front door, `TASKS.html` gives every
+job its own address, and `CALENDAR.html` is one line per week that links into
+it. Each page is rendered from one `bundle.json` — documents with their
+anchors, tasks with their links already resolved, plants, shopping, doubts —
+so two screens cannot disagree about a date, and a phone app later reads the
+same bundle rather than extracting it all again.
+
+**A page links to prose; it never repeats it.** A task page that inlined the
+sowing method would put that method in two files, and the day one is corrected
+the other becomes a trap with no way to tell which you are holding. So a task
+cites its method as `SOWING-CALENDAR.md#8` and the page turns that into a link
+to the heading. One slug function in `lib.links` decides both the id the
+publisher writes and the anchor a link predicts, so the click lands rather
+than happening to land. `yard week <slug> --links` reports every reference
+that resolves to nothing, and every planting position naming a plant
+`design.json` does not hold.
+
+**Says the binomial out loud at the nursery counter.** A common name maps to
+more than one species and the wrong one comes home; "milkweed" in an Austin
+autumn is *Asclepias curassavica*, which does harm. `yard callcard <slug>`
+builds a page with a photograph of the right plant beside the wrong one. The
+pairs are not a list somebody typed — they are found in the call's own script
+and shopping lines, split by genus, so correcting the record corrects the
+card. `yard plantphotos <slug>` fetches each photograph from Wikimedia only
+when the file carries that exact binomial, and a species with no match shows
+none rather than borrowing a neighbour's picture.
 
 **And refuses to render over a plan it no longer agrees with.** The plan
 documents keep their own dated sections, so a date can move in one and not the
@@ -224,9 +258,17 @@ yard bom      <slug>              # bill of materials, netted against what is he
 yard bom      <slug> --price-gaps # the estimated lines, by dollars at risk
 yard schedule <slug>              # the weekend plan, back-planned from the date
 yard week     <slug>              # what to do this week, on one screen
+yard week     <slug> --html       # Mon-Sun, hours per day, detail on a click -> WEEK.html
 yard week     <slug> --calendar   # every week to the target date -> CALENDAR.md
 yard week     <slug> --shop 3     # the next three weeks of buying, by supplier
 yard week     <slug> --check      # has the plan drifted from the dated actions
+yard week     <slug> --links      # references that point nowhere, plants nobody knows
+yard site     <slug>              # every page, built as one linked set -> INDEX.html
+yard callcard <slug>              # what to ask a nursery, with pictures -> CALL-CARD.html
+yard plantphotos <slug>           # verified Wikimedia photographs, and small copies
+yard links    <slug>              # every anchor a page can be linked into
+yard plants   <slug> --match      # which plant each placement line names
+yard bundle   <slug>              # the joined data every page renders from
 yard sandbox  new <slug>          # a working copy, to try something on
 yard sandbox  diff <slug>         # what a rehearsal changed
 yard --help                       # every module
@@ -348,9 +390,15 @@ reputation, distance and access evidence), a prose `profile.md`, and `maps/`,
 
 The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 `SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true
-now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else,
-and `CALENDAR.md` is rendered from `tasks.json` and is the one to read on a
-Saturday morning.
+now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else.
+
+The screens are generated and are read as HTML: `INDEX.html` is the front
+door, `WEEK.html` is the seven days in front of you, `TASKS.html` holds every
+job at its own address, `CALENDAR.html` is the year one line per week, and
+`CALL-CARD.html` is the nursery call. All five come out of `bundle.json`,
+which is itself derived — delete it and rebuild. `CALENDAR.md` is no longer a
+document anybody reads; it stays as the intermediate that `--publish` turns
+into the Google Doc.
 
 `site.json`, `conditions.json` and `vision.json` are the sources of truth.
 Correct one and re-run, and every drawing, figure and cost regenerates.

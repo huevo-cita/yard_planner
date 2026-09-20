@@ -44,6 +44,7 @@ written and none of this touches personal data.
 """
 
 import argparse
+import datetime
 import json
 import os
 import shutil
@@ -556,6 +557,342 @@ def check_column_widths():
     shutil.rmtree(os.path.dirname(md), ignore_errors=True)
 
 
+# ------------------------------------------------- the one navigable set
+
+# A second yard, because these checks want a design, a call and two shapes of
+# placement, and bending the first fixture to carry them would weaken the
+# checks it already makes.
+SCREENS = "testyard-screens"
+
+S_PLAN = """# Screens — the plan
+
+## 1. Sowing
+
+How to sow.
+
+## 2. Pests
+
+What eats what.
+
+### Sources
+
+One list of sources.
+
+## Sources
+
+Another heading with the same words, lower down.
+"""
+
+S_DESIGN = {
+    "yard": SCREENS,
+    "plants": [
+        {"zone": "bed_a", "name": "Cedar sedge", "count": 5,
+         "botanical": "Carex planostachys", "note": "dry shade"},
+        {"zone": "bed_a", "name": "Gulf muhly", "count": 3,
+         "botanical": "Muhlenbergia capillaris"},
+        {"zone": "bed_a", "name": "Pale-leaf yucca", "count": 1,
+         "botanical": "Yucca pallida"},
+        {"zone": "bed_a", "name": "Milkweed - ASK FOR Asclepias tuberosa",
+         "count": 2, "botanical": "Asclepias tuberosa / A. asperula"},
+        {"zone": "bed_a", "name": "Rosemary 'Tuscan Blue' (upright)",
+         "count": 1, "botanical": "Salvia rosmarinus"},
+        {"zone": "bed_raised", "name": "Lettuce (mesclun)", "count": 3},
+    ],
+    "cut_and_why": [{"item": "Autumn sage x3", "reason": "area, not light"}],
+}
+
+S_SOURCING = {"yard": SCREENS, "suppliers": [
+    {"id": "nursery", "name": "A Nursery", "address": "1 Road",
+     "phone": "(512) 555-0100", "hours": "9-5", "distance_mi": 4.1}]}
+
+S_TASKS = {
+    "yard": SCREENS, "schema_version": 1, "sources": {}, "suppliers": {},
+    "shopping": [{"id": "b01", "item": "The plant order", "supplier": "nursery",
+                  "by": "2026-09-25", "cost_usd": [100, 120],
+                  "confidence": "estimated", "source": [],
+                  "ask": ("Yucca pallida NOT Y. recurvifolia, which trunks. "
+                          "Asclepias tuberosa or A. asperula by name - "
+                          "anything sold as milkweed here is A. curassavica. "
+                          "No Autumn sage, which left the design.")}],
+    "tasks": [
+        {"id": "t101", "date": "2026-09-21", "minutes": 20, "kind": "call",
+         "title": "Phone the nursery", "where": {"place": "phone",
+                                                 "supplier": "nursery"},
+         "buy": ["b01"], "source": [], "done": False,
+         "how": ["Ask for Carex planostachys and DO NOT ACCEPT 'Texas sedge', "
+                 "which is C. texensis, the wrong plant for dry shade",
+                 "Same trap as the Yucca above: the label is not the plant"]},
+        {"id": "t102", "date": "2026-10-24", "minutes": 120, "kind": "plant",
+         "title": "Plant bed a", "source": [], "done": False,
+         "technique": "PLAN.md#1", "reference": "PLAN.md section 2",
+         "doubts": ["d01", "d02"],
+         "where": {"bed": "bed a", "placements": [
+             {"bed": "a", "at": "ft 1", "plant": "Gulf muhly, cedar sedge x2"},
+             {"bed": "a", "at": "ft 6", "plant": "Texas sedge x2"},
+             {"bed": "a", "at": "ft 9", "plant": "Rosemary"}]}},
+        {"id": "t103", "date": "2026-11-01", "minutes": 20, "kind": "harvest",
+         "title": "Harvest the bed", "source": [], "done": False,
+         "where": {"bed": "raised bed", "placements": [
+             {"squares": ["1-1"], "plant": "Cut the mesclun"}]}},
+        {"id": "t104", "minutes": 10, "kind": "water", "source": [],
+         "title": "Water the new plants", "done": False,
+         "where": {"bed": "bed a"},
+         "repeat": {"from": "2026-10-19", "to": "2026-11-15", "every": "day"}},
+    ],
+}
+
+S_DOUBTS = {"yard": SCREENS, "cards": [
+    {"id": "d01", "question": "Which Carex does the nursery actually stock?",
+     "status": "open", "blocks": ["design"], "effort": "one phone call"},
+    {"id": "d02", "question": "Is bed a in shade after noon?",
+     "status": "settled", "answer": "yes, from two o'clock"},
+]}
+
+
+def make_screens(root):
+    d = os.path.join(root, SCREENS)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "PLAN.md"), "w") as f:
+        f.write(S_PLAN)
+    for name, obj in (("design.json", S_DESIGN), ("sourcing.json", S_SOURCING),
+                      ("tasks.json", S_TASKS), ("doubts.json", S_DOUBTS)):
+        with open(os.path.join(d, name), "w") as f:
+            json.dump(obj, f, indent=2)
+    return d
+
+
+def check_one_slug(yard):
+    """The anchor a link predicts is the anchor the publisher actually writes.
+
+    This is the property the whole navigable set rests on, and it used to hold
+    by accident: two separate slug functions that happened to agree. Proved
+    here by publishing the document and looking for the predicted id in it,
+    rather than by comparing the two functions to each other — which would
+    pass just as happily if both were wrong in the same way.
+    """
+    from lib import buildhtml, links
+
+    out, _, _ = buildhtml.convert(os.path.join(yard, "PLAN.md"))
+    with open(out, encoding="utf-8") as fh:
+        page = fh.read()
+
+    for ref in ("PLAN.md#1", "PLAN.md#2"):
+        url, sec, err = links.target(yard, ref)
+        anchor = (url or "#").split("#", 1)[1]
+        ok(not err and f'id="{anchor}"' in page,
+           f"{ref} predicts an anchor the published page really has", err or url)
+
+    # Two headings read "Sources". The publisher numbers the second, and a
+    # prediction that does not number it lands at the wrong one.
+    secs = [s for s in links.anchored(os.path.join(yard, "PLAN.md"))
+            if s["text"] == "Sources"]
+    ok(len(secs) == 2 and secs[0]["anchor"] == "sources"
+       and secs[1]["anchor"] == "sources-1",
+       "a repeated heading is numbered the way the publisher numbers it",
+       [s["anchor"] for s in secs])
+    ok(all(f'id="{s["anchor"]}"' in page for s in secs),
+       "and both of those ids are in the page")
+
+    ok(links.target(yard, "PLAN.md#nope")[2],
+       "an anchor that matches no heading is an error, not a guess")
+    ok(links.target(yard, "https://example.org/x")[0]
+       == "https://example.org/x",
+       "an external URL passes through rather than being reported broken")
+
+
+def check_matcher(yard):
+    """Every plant a line names, not the first one that happens to match."""
+    from lib import plants, yards
+
+    design = yards.load(SCREENS, "design.json")
+    idx = plants.index(design)
+
+    hits = [n for n, _ in plants.match("Gulf muhly, cedar sedge x2", idx)]
+    ok(hits == ["gulf muhly", "cedar sedge"],
+       "a line naming two plants resolves to both, in the order written", hits)
+
+    ok(not plants.match("Texas sedge x2", idx),
+       "a name the design does not hold matches nothing, rather than 'sedge'")
+
+    ok([n for n, _ in plants.match("Rosemary", idx)] == ["rosemary"],
+       "a cultivar is found by the plain name a person says out loud")
+
+    milkweed = next(p for p in design["plants"] if "Milkweed" in p["name"])
+    ok(plants.binomials(milkweed)
+       == ["Asclepias tuberosa", "Asclepias asperula"],
+       "an abbreviated second species is expanded against its own genus",
+       plants.binomials(milkweed))
+
+    ok("milkweed" in idx,
+       "a name is indexed with the reader's aside taken off", sorted(idx))
+
+
+def check_bundle(yard):
+    """The join every page renders from, including what it could not join."""
+    from lib import bundle
+
+    data = bundle.build(SCREENS)
+    t102 = next(t for t in data["tasks"] if t["id"] == "t102")
+
+    good = [l for l in t102["links"] if l["kind"] == "technique"]
+    ok(good and good[0]["url"] == "PLAN.html#1-sowing",
+       "a resolvable technique becomes a real page anchor",
+       good and good[0]["url"])
+
+    bad = [l for l in t102["links"] if l["kind"] == "reference"]
+    ok(bad and bad[0]["url"] is None and bad[0]["error"],
+       "a reference written as prose is kept, carrying why it failed",
+       bad and bad[0]["error"])
+
+    rows = {p["at"]: p for p in t102["placements"]}
+    ok(len(rows["ft 1"]["named"]) == 2 and not rows["ft 1"]["unmatched"],
+       "a placement carries every plant it names")
+    ok(rows["ft 6"]["unmatched"] and rows["ft 6"]["positional"],
+       "a bed-and-foot-mark line naming nothing is both unmatched and positional")
+
+    t103 = next(t for t in data["tasks"] if t["id"] == "t103")
+    ok(t103["placements"][0]["unmatched"]
+       and not t103["placements"][0]["positional"],
+       "a square line is unmatched but not positional, so it is not a fault")
+
+    ok(any(d["file"] == "PLAN.md" and d["sections"] for d in data["documents"]),
+       "the bundle carries each document's anchors for anything that links in")
+
+
+def check_link_report(yard):
+    """The report names the real disagreement and stays quiet about the rest."""
+    from lib import week as W
+
+    found = W.link_check(SCREENS)
+    refs = [f for f in found if f["kind"] == "reference"]
+    beds = [f for f in found if f["kind"] == "placement"]
+
+    ok(len(refs) == 1 and refs[0]["subject"] == "t102",
+       "the reference written as prose is reported once",
+       [f["message"] for f in refs])
+    ok(len(beds) == 1 and "Texas sedge" in beds[0]["message"],
+       "the planting position naming no design plant is reported",
+       [f["message"] for f in beds])
+    ok(not any(f["subject"] == "t103" for f in beds),
+       "and harvesting prose in the raised bed is not, so the check stays usable")
+
+
+def check_callcard(yard):
+    """Traps found in the record, one per genus, never one half of a pair."""
+    from lib import bundle, callcard
+
+    data = bundle.build(SCREENS)
+    task = next(t for t in data["tasks"] if t["id"] == "t101")
+    traps, dropped = callcard.find_traps(SCREENS, data, task)
+    by_genus = {t["genus"]: t for t in traps}
+
+    ok(set(by_genus) == {"Carex", "Yucca", "Asclepias"},
+       "one trap per genus the record actually pairs up", sorted(by_genus))
+    ok(by_genus["Carex"]["buy"] == ["Carex planostachys"]
+       and by_genus["Carex"]["refuse"] == ["Carex texensis"],
+       "the wanted species and the refused one land on the right sides")
+    ok(by_genus["Asclepias"]["buy"]
+       == ["Asclepias asperula", "Asclepias tuberosa"],
+       "a record accepting two species keeps both as things to buy",
+       by_genus["Asclepias"]["buy"])
+    ok(by_genus["Yucca"]["refuse"] == ["Yucca recurvifolia"],
+       "and an abbreviated refusal is expanded", by_genus["Yucca"]["refuse"])
+
+    # "Same trap as the Yucca above" contributes a Yucca and nothing to buy.
+    ok(all(t["buy"] and t["refuse"] for t in traps),
+       "no panel is published with only one half of a trap")
+    ok([n for n, _ in dropped] == ["Autumn sage"],
+       "a plant named in the call and dropped from the design is reported once",
+       dropped)
+
+    page = callcard.build(SCREENS, data=data, link_images=True)
+    ok(page and "Carex texensis" in page and "REFUSE THIS" in page,
+       "and the page says so in as many words")
+
+
+def check_pages(yard):
+    """Every screen builds, and they point at each other rather than repeating.
+
+    Built through `site.build_all` rather than one renderer at a time, because
+    the property under test is that they form a set: the bar only offers a
+    screen whose file is on disk, and the index only advertises what exists.
+    Rendering each in isolation would pass while the set stayed broken.
+    """
+    from lib import site
+
+    made, _ = site.build_all(SCREENS, link_images=True)
+    ok({"INDEX.html", "TASKS.html", "CALENDAR.html", "WEEK.html",
+        "PLAN.html", "CALL-CARD.html"} <= set(made),
+       "one command builds every screen", sorted(made))
+
+    def page(name):
+        with open(os.path.join(yard, name), encoding="utf-8") as fh:
+            return fh.read()
+
+    tasks_page = page("TASKS.html")
+    ok('id="t102"' in tasks_page,
+       "every job has its own address on the task page")
+    ok('href="PLAN.html#1-sowing"' in tasks_page,
+       "and its method is a link into the document, not a copy of it")
+    ok("How to sow." not in tasks_page,
+       "the prose that explains a job stays in the one file that holds it")
+
+    ok('href="TASKS.html#t102"' in page("CALENDAR.html"),
+       "the calendar points at the job rather than restating it")
+
+    index = page("INDEX.html")
+    ok('href="TASKS.html"' in index and 'nav class="screens"' in index,
+       "the index reaches the set, and carries the same bar as every page")
+    ok('nav class="screens"' in page("PLAN.html"),
+       "and so does a published markdown document")
+
+    # This fixture has nothing dated to the current week, which is the point:
+    # an empty week still has to belong to the set rather than dead-end.
+    wk = page("WEEK.html")
+    ok('href="TASKS.html"' in wk and 'nav class="screens"' in wk,
+       "a week with nothing in it still reaches the rest of the set")
+    ok('data-task="t102"' in tasks_page and 'data-task="t101"' in tasks_page,
+       "a task carries its id as the checkbox key, so a tick means one thing")
+
+    # A link to a doubt is the one link nothing else proves, because the card
+    # it points at is written by a different module onto a different page.
+    ok('href="INDEX.html#d01"' in tasks_page,
+       "a job held up by a question links to the card")
+    ok('id="d01"' in index,
+       "and the index gives that card the anchor the link asks for")
+    ok('href="INDEX.html#d02"' not in tasks_page
+       and "settled question d02" in tasks_page,
+       "a card already settled is named rather than linked, because it has "
+       "left the index")
+
+
+def check_standing_ticks(yard):
+    """One standing job is one tick, on whichever day it is read.
+
+    A repeat draws a box on every day it asks for work, so the same job holds
+    several boxes on one page. Each carries the same id, which is what makes
+    the tick mean one thing when it comes home — and what makes ticking one
+    box leave its twins looking undone unless the script keeps them together.
+    """
+    from lib import week as W
+
+    monday = datetime.date(2026, 10, 19)
+    monday -= datetime.timedelta(days=monday.weekday())
+    page = W.render_week_html(SCREENS, monday, today=monday)
+    if not isinstance(page, str) or "<" not in page:
+        with open(os.path.join(yard, "WEEK.html"), encoding="utf-8") as fh:
+            page = fh.read()
+
+    boxes = page.count('data-task="t104"')
+    ok(boxes > 1, f"a daily job draws a box on each day it asks for work "
+                  f"(drew {boxes})")
+    ok("function twins(" in page and "twins(id).forEach" in page,
+       "and ticking one of them ticks the rest, rather than only the one "
+       "that was clicked")
+    ok("function each_job(" in page and "each_job(function" in page,
+       "the tally counts the job once, not once per day it lands on")
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser(description=__doc__,
@@ -591,6 +928,22 @@ def main():
         check_sync(week, yard)
         print("\n the published table widths")
         check_column_widths()
+
+        screens = make_screens(root)
+        print("\n one anchor scheme")
+        check_one_slug(screens)
+        print("\n which plant a line names")
+        check_matcher(screens)
+        print("\n the bundle every page renders from")
+        check_bundle(screens)
+        print("\n what --links reports")
+        check_link_report(screens)
+        print("\n the traps the record states")
+        check_callcard(screens)
+        print("\n the set of screens")
+        check_pages(screens)
+        print("\n one standing job, one tick")
+        check_standing_ticks(screens)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

@@ -80,17 +80,27 @@ Four subagents do the context-heavy work: **parcel-scout** for county GIS,
 inspiration boards, **sourcing-scout** for local suppliers and prices.
 
 **Everything dated lands in one file.** `tasks.json` holds every action with a
-day on it, from whichever stage produced it, and `CALENDAR.md` is generated from
-it — one document showing the week entire, with the positions and the shopping
-list for that week beside the work. The plan documents are the reference behind
-it: the beds, the rules, the budget, the technique. Answering "what do I do this
+day on it, from whichever stage produced it, and every screen is generated
+from it — the week entire, with the positions and the shopping list for that
+week beside the work. The plan documents are the reference behind it: the
+beds, the rules, the budget, the technique. Answering "what do I do this
 weekend" out of three hand-written documents is how this went wrong before.
 
 ```bash
 python3 -m lib.week <slug>               # this week
-python3 -m lib.week <slug> --calendar    # -> CALENDAR.md
+python3 -m lib.site <slug>               # every page, linked into one set
 python3 -m lib.week <slug> --check       # has the prose drifted from the file
+python3 -m lib.week <slug> --links       # does every reference still land
 ```
+
+**And the pages are one set, not a folder.** `lib.site` writes `INDEX.html` as
+the front door and gives every page the same bar, so the person reading
+`WEEK.html` on a Saturday can reach the plan, the bed and the change log
+without going back to a folder. Send them `INDEX.html` and nothing else.
+
+A page links to prose and never repeats it. When a task needs explaining, the
+explanation stays in the document that owns the subject and the task cites it
+as `FILE.md#anchor`. Two copies of a method is one copy nobody can trust.
 
 ## Step 3 — Report the gaps after every stage
 

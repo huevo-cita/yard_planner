@@ -35,7 +35,7 @@ import re
 
 import markdown as md_lib
 
-from . import yards
+from . import chrome, links, yards
 
 IMG_RE = re.compile(r'<img\s+([^>]*?)src="([^"]+)"([^>]*?)/?>', re.I)
 
@@ -143,6 +143,7 @@ PAGE = """<!DOCTYPE html>
 <style>{css}</style>
 </head>
 <body>
+{nav}
 <div class="wrap">
 {toc}
 {body}
@@ -170,13 +171,16 @@ def embed_images(html, base):
 
 
 def slug(text, seen):
-    s = re.sub(r'[^\w\s-]', '', re.sub(r'<[^>]+>', '', text)).strip().lower()
-    s = re.sub(r'[\s_-]+', '-', s) or 'section'
-    n, out = seen.get(s, 0), s
-    if n:
-        out = '%s-%d' % (s, n)
-    seen[s] = n + 1
-    return out
+    """The id a heading gets here, and the one a deep link is computed against.
+
+    One implementation, in lib.links, because this used to be two. A task cites
+    a section as `SOWING-CALENDAR.md#8` and something has to work out the id
+    that heading will have in the published page; when that something was a
+    separate copy of this function, the two agreed by luck rather than by
+    construction, and the day they stopped agreeing every deep link would have
+    landed at the top of the page instead of at the section.
+    """
+    return links.slug(text, seen)
 
 
 def add_anchors(html):
@@ -273,8 +277,13 @@ def convert(md_path, out_path=None, link_images=False):
                 f'copy. Nothing here describes the real yard.</p>' + html)
 
     out = out_path or os.path.splitext(os.path.abspath(md_path))[0] + '.html'
+    # The bar is built against the yard the source sits in, not against the
+    # output, because -o can send the page anywhere and the sibling documents
+    # it links to are the source's siblings either way.
     page = PAGE.format(
-        title=title, css=CSS, toc=build_toc(entries), body=html,
+        title=title, css=CSS + chrome.NAV_CSS,
+        nav=chrome.nav(base, os.path.basename(out)),
+        toc=build_toc(entries), body=html,
         source=name + (f' &middot; {stamp}' if stamp else ''),
         stamp=__import__('datetime').date.today().isoformat())
     with open(out, 'w', encoding='utf-8') as fh:

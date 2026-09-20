@@ -216,14 +216,15 @@ because autumn planting establishes better in most climates.
 
 Every dated action the back-plan produced goes into `<slug>/tasks.json` before
 any of it is written as prose. That file is the single source for what happens on
-a day, and `CALENDAR.md` — the document somebody actually reads on a Saturday
-morning — is generated from it:
+a day, and every screen somebody reads is generated from it:
 
 ```bash
-python3 -m lib.week <slug> --calendar    # -> CALENDAR.md, then buildhtml it
+python3 -m lib.site <slug>               # every page, as one linked set
 python3 -m lib.week <slug>               # this week, to the terminal
 python3 -m lib.week <slug> --shop 3      # the next three weeks, grouped by supplier
 python3 -m lib.week <slug> --check       # has the prose drifted from the file
+python3 -m lib.week <slug> --links       # does every reference still land
+python3 -m lib.week <slug> --calendar    # -> CALENDAR.md, for the Google Doc
 ```
 
 A task carries the day, the duration, the position down to the square or the
@@ -234,7 +235,48 @@ silently disagreeing. `--calendar` refuses while it does.
 
 The schema and the two checks are in [AGENTS.md](../../AGENTS.md), under "A date
 goes in tasks.json". Do not hand-write `CALENDAR.md`; it is overwritten on the
-next render.
+next render, and it is now only the intermediate for the Google Doc.
+
+### Write a reference as `FILE.md#anchor`, never as prose
+
+`technique`, `reference` and `source` are turned into real links on every page
+that shows the task. So they have to name a heading a program can find:
+
+```json
+"technique": "SOWING-CALENDAR.md#8",
+"reference": "research-irrigation.md#one-hydraulic-zone",
+"source": ["PLAN.md#2"]
+```
+
+`"research-irrigation.md section 1"` names a section a person can find and a
+program cannot, and the task loses its method on every screen. An anchor is a
+section number or any words from the heading; where two headings share a
+number, use words. `python3 -m lib.links <slug>` lists every anchor a page can
+be linked into, and `--links` reports the ones that resolve to nothing.
+
+An external URL goes in bare, with no sentence around it.
+
+### A generated page links to prose. It never repeats it
+
+When a task needs explaining, the explanation goes in the document that owns
+the subject, and the task points at it. Do not copy the paragraph into the
+task, into `PLAN.md`, or into anything a renderer emits.
+
+This was tried the other way. Inlining a technique into the task page reads
+better exactly once, and then the method is in two files. The day one is
+corrected the other becomes a trap, and a reader holding one of them has no
+way to tell which. Correct it once, and every screen follows.
+
+### A placement names a plant `design.json` holds
+
+A placement line in a designed bed carries `bed`, `at` and the plant, and the
+plant name has to be one the design knows, because the pages match it to get
+the photograph, the count and the bed. `--links` reports a position naming
+something the design does not hold — which is how "Texas sedge" was caught
+sitting in a task after the design had moved to cedar sedge.
+
+Raised-bed lines use `squares` and are held to no such rule: "Cut the mesclun"
+is a job, not a purchase.
 
 ## Step 8 — Deliver the plan
 
@@ -242,8 +284,8 @@ next render.
 a suggestion, because the alternative was tried: "write the plan as markdown" is
 what the instruction used to say, and one plan reached 9,522 words.
 
-It opens with a line pointing at `CALENDAR.md` for what to do this week, because
-the plan is the reference and the calendar is the instruction.
+It opens with a line pointing at `WEEK.html` for what to do this week, because
+the plan is the reference and the week is the instruction.
 
 ```
 # <address> — the plan to <target date>
@@ -289,12 +331,33 @@ The full rule, with the phrase list that should trigger it, is in
 its own document with its own budget, not a section bolted onto the plan, and its
 dates go into `tasks.json` along with everything else's.
 
-For something printable:
+## Step 9 — Publish it as one set of screens
+
+The plan is read on a phone, so the last step is one command:
+
+```bash
+python3 -m lib.site <slug>       # every page, linked into one set
+```
+
+That converts each markdown document, writes `bundle.json`, and renders
+`WEEK.html`, `TASKS.html`, `CALENDAR.html`, the nursery `CALL-CARD.html` and
+`INDEX.html`. Every page carries the same bar, so any of them reaches all of
+them. Send the person `INDEX.html`.
+
+Fetch the plant photographs once per yard, because it needs the network:
+
+```bash
+python3 -m lib.plantphotos <slug>            # design species and the trap species
+python3 -m lib.callcard <slug> --traps       # what the record states, and where
+```
+
+For something printable, or for the Google Doc:
 
 ```bash
 python3 -m lib.builddoc plan.md -o plan.docx     # .docx, with the maps embedded
-python3 -m lib.buildhtml <slug>/PLAN.md --strict # HTML, refusing on narration
+python3 -m lib.buildhtml <slug>/PLAN.md --strict # one document, refusing on narration
                                                  # add --budget to refuse on length too
+python3 -m lib.week <slug> --publish             # the calendar Doc and its checkbox runs
 ```
 
 `builddoc` embeds the maps and produces real tables. Upload with
@@ -316,6 +379,10 @@ is not, and next season's plan is only as good as what this one wrote down.
 - Never present a provisional total or a provisional calendar without saying so.
   A quantity in doubt is a quantity bought twice, and the doubt is cheaper to
   settle than the second delivery
+- Never copy prose into a generated page. Link to the section that holds it.
+  Two copies of a method is one copy nobody can trust
+- Never write a reference as prose. `FILE.md#anchor`, checked with `--links`
+  before the plan is delivered
 - Never schedule work into a stated travel gap, and never quietly drop the tasks
   that no longer fit
 - A task the person has not done before gets the how-to, in the schedule, at the

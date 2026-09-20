@@ -218,6 +218,44 @@ def check_calendar():
     return ok
 
 
+def check_links():
+    """Per yard: does every reference land, and does every placement name a plant.
+
+    A warning rather than a failure, and the line between the two is what a
+    fault costs. A stale digest can put somebody in the garden on the wrong
+    day, so `check_calendar` fails over it. A reference that resolves to
+    nothing costs the reader the explanation behind a job on every page that
+    shows it, which is worth a sweep noticing and is not worth calling the
+    checkout broken.
+    """
+    from lib import week, yards
+
+    slugs = [s for s in yards.list_yards()
+             if os.path.exists(os.path.join(yards.yard_dir(s), "tasks.json"))]
+    if not slugs:
+        print("  ok    no yard has task references to resolve yet")
+        return True
+
+    for slug in slugs:
+        findings = week.link_check(slug)
+        if not findings:
+            print(f"  ok    {slug}: every task reference resolves, and every "
+                  f"plant a task places is in design.json")
+            continue
+        refs = sum(1 for f in findings if f["kind"] == "reference")
+        beds = len(findings) - refs
+        bits = []
+        if refs:
+            bits.append(f"{refs} reference{'s' if refs != 1 else ''} "
+                        f"resolving to nothing")
+        if beds:
+            bits.append(f"{beds} placement{'s' if beds != 1 else ''} naming "
+                        f"a plant design.json does not hold")
+        print(f"  warn  {slug}: {', and '.join(bits)}. "
+              f"`yard week {slug} --links`")
+    return True
+
+
 def check_reconcile():
     """Per yard: do `lib.schedule` and `tasks.json` still tell the same story.
 
@@ -327,6 +365,8 @@ def main():
     f = check_gate()
     print("\n dated tasks")
     g = check_calendar()
+    print("\n references and plant names")
+    check_links()
     print("\n schedule against tasks.json")
     check_reconcile()
     print("\n sourcing")
