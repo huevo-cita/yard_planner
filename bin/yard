@@ -10,6 +10,7 @@
 #   yard <module> [args]          run any lib module: sunmodel, gaps, design ...
 #   yard sourcing <slug>          where to buy it, ranked by reputation then distance
 #   yard week <slug>              what to do this week, in one place
+#   yard reconcile <slug>         where lib.schedule and tasks.json disagree
 #   yard week <slug> --calendar   the whole run, as CALENDAR.md
 #   yard doubts <slug>            what is still in question, and what it blocks
 #   yard changelog <slug>         what changed, and why the plan reads as it does
@@ -37,7 +38,7 @@ cd "$REPO"
 
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
 photomeasure soil climate conditions gaps doubts inputs changelog vision niches
-design sourcing bom schedule week builddoc buildhtml vault"
+design sourcing bom schedule reconcile week builddoc buildhtml vault"
 
 case "${1:-}" in
   ""|list)

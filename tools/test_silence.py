@@ -87,15 +87,24 @@ def show(objs):
 
 # --------------------------------------------------------------- the fixtures
 
-# One plant carrying every field the three checks read, so a missing input is
-# the only reason any of them could fail to run. `ph_range` makes the pH branch
+# One plant carrying every field the checks read, so a missing input is the only
+# reason any of them could fail to run. `ph_range` makes the pH branch
 # applicable, `soil_drainage` the drainage branch, `water: high` the hose
 # branch. Without those the checks are inapplicable rather than blind, which is
 # a different thing and must not report.
+#
+# `bloom` is here for the same reason and is the newest of them: a plant naming
+# neither `months` nor `bloom` is judged over `DEFAULT_LIGHT_MONTHS`, and
+# check_coverage now says so. That note is about a missing field on the PLANT,
+# where every other note in this file is about a missing field on the SITE or
+# the CONDITIONS, so leaving it to fire here would put a sixth objection in
+# every count below and test nothing this file is for. It is trapped properly in
+# tools/test_cropseason.py, which owns the light window.
 PLANT = {"name": "Rosmarinus officinalis", "zone": "West bed", "count": 6,
          "light": "full sun", "water": "high", "ph_range": [6.0, 7.5],
          "soil_drainage": "sharp", "mature_spread_ft": 2.5,
-         "mature_height_ft": 2.0, "source": "test fixture"}
+         "mature_height_ft": 2.0, "bloom": ["Apr", "May"],
+         "source": "test fixture"}
 
 
 def blind_site():

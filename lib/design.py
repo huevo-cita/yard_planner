@@ -3,6 +3,7 @@
 
     python3 -m lib.design <slug>            summary and every objection
     python3 -m lib.design <slug> --init     empty design.json
+    python3 -m lib.design <slug> --layout   the bed maps against the plant list
     python3 -m lib.design <slug> --json     objections, machine-readable
 
 This is a linter for a garden. It does not choose plants; that is research, and
@@ -41,6 +42,32 @@ both of them were a wrong answer on a real bed before they existed:
                counting both at full spread double-books ground that only one
                of them occupies at a time.
 
+A third optional field decides whether the plant is judged on winter light:
+
+    winter_active   true where the plant carries live foliage through the dark
+                    months and is expected to look like something. That is a
+                    different claim from `evergreen`, which says only that the
+                    leaves do not fall, and the two come apart in both
+                    directions — a grass holding dry seed heads all winter
+                    reads beautifully in December and photosynthesises none of
+                    it, and a root-hardy shrub cut to the ground in November is
+                    absent by design rather than failing. It wants a
+                    `winter_active_why` beside it saying what settled it,
+                    because it is a judgement about a plant rather than a
+                    measurement of the yard.
+
+A fourth says what was done to the ground under one planting:
+
+    drainage_amendment  a mound, a raised pocket, a gravel bed — the position's
+                    own answer to ground that drains too slowly for the plant
+                    standing in it. It is a fact about THIS planting and not
+                    about the plant, which is the whole point: the same
+                    rosemary is a different proposition on a grit mound and
+                    flush in clay, and a checker that cannot tell them apart
+                    refuses a bed whose plan already answers it. It carries
+                    `source`, and an amendment nobody has scheduled is worth
+                    less than one somebody has.
+
 What the objections mean
 ------------------------
     blocking    the plant will not survive, or the design contradicts a `must`.
@@ -57,7 +84,7 @@ import datetime
 import json
 import re
 
-from . import doubts, solar, vision as vision_mod, yards
+from . import conditions, doubts, solar, vision as vision_mod, yards
 
 # Hours of direct sun each nursery label actually needs, and what it looks like
 # when it is short. These are the thresholds sunmodel reports against.
@@ -74,11 +101,44 @@ LIGHT_ORDER = ["deep shade", "shade", "part shade", "part sun", "full sun"]
 # nobody thinks of sun as something a plant can have too much of.
 SCORCH_MARGIN = 3.0
 
+# What makes a month hot enough for a scorch objection to be allowed to name it:
+# the mean number of days in it that top 95 F, from the yard's own weather
+# record. Six days is about one day in five, and the bar is there because a
+# shade plant does not burn on a single hot afternoon — the claim the objection
+# makes is about sustained heat, and a month with four hot days in it cannot
+# support one.
+#
+# This is a policy threshold and not a fact about a yard, which is why it is
+# here and why the series it is applied to is in `site.json`. `climate.heat`
+# carried only an annual count, and an annual count cannot answer which months
+# are hot: it was being quoted at a cyclamen lifted in March to prove it would
+# scorch in July.
+HOT_MONTH_DAYS = 6.0
+
 WATER_NEED = {"low": 0, "moderate": 1, "high": 2}
 
 MONTHS = list(solar.MONTH_DOY.keys()) if hasattr(solar, "MONTH_DOY") else \
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# The months `LIGHT_NEED` is compared against when a plant names none of its
+# own. Not a second definition — `solar.GROWING_SEASON` is the only one, and
+# `sunmodel` classes the whole yard on the same window — but named here because
+# it is the default this module applies, and a test that asserts the two are
+# the same object is what stops them drifting apart again.
+#
+# The default used to be all twelve months, which docked every bed more than an
+# hour of open sky before an obstruction was counted and withdrew four full-sun
+# plants from a real design on the strength of December light they were never
+# going to be alive in.
+DEFAULT_LIGHT_MONTHS = solar.GROWING_SEASON
+
+# The months a winter-active plant's second light test is measured over, and
+# again not a definition of its own — `solar.STANDING_SEASON` is the only one,
+# and `lib.niches` reports a bed's winter figure over the same constant, so the
+# number a person is shown when choosing for a bed is the number this module
+# then judges the choice on.
+WINTER_LIGHT_MONTHS = solar.STANDING_SEASON
 
 
 def blank(slug):
@@ -130,6 +190,10 @@ def _norm(s):
     return "".join(c for c in str(s).lower() if c.isalnum())
 
 
+def _n(count, word):
+    return f"{count} {word}" + ("" if count == 1 else "s")
+
+
 def resolve_site_zone(site, zone):
     """A design's zone name, resolved to the key `site.json` files it under.
 
@@ -156,20 +220,237 @@ def _series(sun, site, zone, months, field):
     if name is None:
         return []
     z = _table(sun).get(name) or {}
-    keys = [m for m in (months or z.keys()) if m in z]
+    keys = [m for m in (months or DEFAULT_LIGHT_MONTHS) if m in z]
     return [z[m].get(field) for m in keys
             if isinstance(z[m], dict) and z[m].get(field) is not None]
 
 
 def zone_hours(sun, site, zone, months=None):
-    """Effective sun hours for a zone, averaged over the months given."""
+    """Effective sun hours for a zone, averaged over the months given.
+
+    With no months, over `DEFAULT_LIGHT_MONTHS`. Callers that want the
+    twelve-month mean have to ask for it by name — `solar.MONTHS` — because a
+    figure whose window nobody stated is how the two windows got confused in
+    the first place.
+    """
     vals = _series(sun, site, zone, months, "effective")
     return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def window_label(months):
+    """Which months a sun figure is a mean of, in words.
+
+    Every objection quoting an hour figure has to say what it averaged, because
+    the reader's next move is to hold it against a nursery tag and the two are
+    only comparable if they cover the same season. The message this replaces
+    said "over the year" whatever it had actually measured.
+    """
+    ms = list(months or DEFAULT_LIGHT_MONTHS)
+    if ms == list(MONTHS):
+        return "the year"
+    if ms == list(DEFAULT_LIGHT_MONTHS):
+        return f"the growing season, {ms[0]}-{ms[-1]}"
+    if ms == list(WINTER_LIGHT_MONTHS):
+        return f"the standing season, {ms[0]}-{ms[-1]}"
+    return ", ".join(ms)
 
 
 def zone_best(sun, site, zone, months=None):
     vals = _series(sun, site, zone, months, "best_cell")
     return round(max(vals), 2) if vals else None
+
+
+def hot_months(site):
+    """The months this yard's own record says top 95 F often enough to burn.
+
+    Returns None where the yard has never been asked, which is a third answer
+    and not an empty list: a record with no monthly heat series cannot say
+    whether July is hot here, and a coastal yard whose every month comes back
+    under the bar genuinely has nothing to scorch anything. `check_coverage`
+    reports the first case rather than letting the scorch check disappear.
+
+    The fact lives in `site.json` because it is a fact about a place, and it is
+    `derived` rather than assumed — `lib.climate --heat-months` decomposes the
+    same thirty years of ERA5 daily maxima the annual count already came from,
+    and prints the annual figure recomputed beside the stored one so the two can
+    be seen to agree.
+    """
+    by_month = ((site.get("climate") or {}).get("heat") or {}) \
+        .get("days_over_95f_by_month")
+    if not isinstance(by_month, dict) or not by_month:
+        return None
+    return [m for m in MONTHS
+            if (by_month.get(m) or 0) >= HOT_MONTH_DAYS]
+
+
+def standing_months(plant):
+    """The months the plant is physically in the ground, which is not its window.
+
+    `check_light` judges a plant over `months`, else `bloom`, else the growing
+    season, and that is the right window for asking whether it gets enough light
+    to grow. It is the wrong window for asking whether it burns, and the two
+    came apart in both directions at once on one yard:
+
+      the cyclamen    lifted in March, judged over Dec-Mar, and told that
+                      5.45 h of winter sun meant it would scorch in July
+      the sedge       evergreen, judged over a Mar-Apr bloom, standing in the
+                      bed all summer with nothing looking at August at all
+
+    So `bloom` is not consulted here for anything perennial. A bloom list says
+    when a plant flowers; it says nothing about when it is present, and using it
+    as a proxy for presence is what hid August from an evergreen. `months` IS
+    consulted, for annual and perennial alike, because a planting that states
+    its own months has answered this question directly.
+    """
+    if plant.get("months"):
+        return list(plant["months"])
+    if plant.get("annual"):
+        return list(plant.get("bloom") or DEFAULT_LIGHT_MONTHS)
+    return list(MONTHS)
+
+
+def _scorch(plant, want, need, sun, site):
+    """A shade plant burning in the months it is standing through the heat.
+
+    Two things were wrong with the version of this that read
+    `climate.heat.days_over_95f_per_year`, and they compounded. The heat figure
+    was annual, so it said "45.8 days over 95 F a year" for a plant that would
+    be composted before the first of them; and the hour figure beside it was a
+    mean over the plant's own window, so the sentence "it will scorch in July"
+    was printed under a number that had never looked at July. Three of the four
+    objections this raised on one yard were about plants that were either not
+    there in summer or had been measured somewhere else in the calendar.
+
+    The window is now the overlap of two things: the months the plant is
+    standing in the ground, and the months this yard is hot. Where that overlap
+    is empty the check says nothing, which is the whole of the cyclamen case.
+
+    Where it is not empty the objection is decided on ONE month — the hottest
+    the plant stands through — and it is the same month the sentence names. That
+    identity is the point of the fix rather than a detail of it. The old message
+    said July because July is when things burn, and measured whatever window the
+    light check happened to be using, so the month in the claim and the month in
+    the number had nothing to do with each other. Any version of this that
+    triggers on one month and reports another brings the same bug back with
+    better wording.
+
+    Hottest rather than brightest, and that is a real choice with a real cost.
+    Averaging the hot months together is out for the reason `_winter_light`
+    gives: a mean over June, July and August dilutes the month that does the
+    damage, and on one real bed it reports 4.48 h where August is 4.91. Taking
+    the brightest instead is defensible and was tried, and it reads badly on the
+    ground — g01 runs 8.96 h in June against 8.00 in August, so the objection
+    came out naming June, a month with 7.1 days over 95 F, in preference to
+    August's 18.2. Sun is what the bed has too much of and heat is what turns it
+    into scorch, so the month worth judging is the one where the heat is worst
+    and the sun figure is that month's own. What this gives up is the bed that is
+    blazing in June and shaded by August; nothing on this yard is shaped that
+    way, and an objection quoting June in Austin is one nobody would act on.
+    """
+    hot = hot_months(site)
+    if not hot:
+        return []
+    by_month = ((site.get("climate") or {}).get("heat") or {}) \
+        .get("days_over_95f_by_month", {})
+    burn = [m for m in standing_months(plant) if m in hot]
+    if not burn:
+        return []
+    zone = plant["zone"]
+    worst = max(burn, key=lambda m: (by_month.get(m) or 0,
+                                     zone_hours(sun, site, zone, [m]) or 0))
+    have, days = zone_hours(sun, site, zone, [worst]), by_month.get(worst)
+    if have is None or have <= need + SCORCH_MARGIN:
+        return []
+    return [_obj("serious", plant["name"],
+                 f"is a {want} plant and it is standing in this bed through "
+                 f"{worst}, the hottest month it is here for — {days} days over "
+                 f"95 F in an average year, on a lot whose hot months are "
+                 f"{', '.join(hot)}. Zone {zone} averages {have} h in {worst} "
+                 f"against the {need} h its {want} rating wants. It will scorch "
+                 f"in {worst} whatever the watering",
+                 "move it to the shaded end, or give it afternoon "
+                 "shade specifically — morning sun of the same length "
+                 "is a different thing entirely")]
+
+
+def winter_active(plant):
+    """Whether this plant is working through the dark months, or just standing.
+
+    `evergreen` is deliberately not the answer, and the temptation to use it is
+    the whole reason this exists. It is a statement about leaves falling off,
+    and the question the winter light check needs answered is whether the plant
+    is photosynthesising and expected to look presentable while everything
+    around it is dormant. On the yard this was written for, the two disagree in
+    both directions at once: inland sea oats holds papery seed heads that are
+    the best thing in the bed on 13 December and is `evergreen: false`, while
+    an autumn sage flagged `evergreen: true` is semi-evergreen at best and gets
+    nipped by a 28 F night.
+
+    The other rejected mechanism was reading the `december` prose each entry
+    carries — "ratty to dormant", "brown, deliberately", "absent by design".
+    That prose is the EVIDENCE for setting this field and must not become the
+    mechanism: it is free text written for a person, its wording will drift the
+    first time somebody rewrites an entry, and a check that turns on the word
+    "ratty" fails silently and in the direction of saying nothing.
+
+    Returns None where nothing has been decided, which is a third answer and
+    not a no — `check_coverage` reports it rather than guessing.
+    """
+    v = plant.get("winter_active")
+    return v if isinstance(v, bool) else None
+
+
+def _winter_light(plant, want, need, sun, site, already_short):
+    """The second light test, for a plant that has to work through winter.
+
+    A plant's own window is `months`, or failing that `bloom`. For anything
+    that dies back that is right, and a dormant crown does not care what
+    December is doing. For a plant still in leaf it is the wrong window, and
+    wrong in a way that hides itself: bloom months are selected for being
+    bright, so winter is not ignored but DILUTED. The four-nerve daisy in g04
+    is judged over a bloom list of Mar-Jun plus Sep-Dec, clears its 4.0 h floor
+    by 0.25 h, and reads 3.66 h across the months it is the only green thing in
+    the bed.
+
+    Two deliberate restraints, because a check that fires twice for one fault
+    is the check somebody switches off.
+
+    It says nothing where the plant is ALREADY refused for want of light on its
+    own window. The rosemary in g03 blooms Nov-Mar, which is the standing
+    season exactly, so its winter figure and its judged figure are the same
+    3.06 h; a second objection would repeat a number and offer no new decision.
+
+    And it offers no sunniest-cell escape. The primary check can honestly say
+    "this may work in one corner", because its window is a season the plant is
+    growing in throughout. Over a window whose entire point is that it contains
+    the dark months, the brightest cell is by construction March's, and on g04
+    that is 5.67 h against a bed reading 3.66 — offering it would be this
+    check's own failure mode reappearing one level down, in the escape hatch.
+
+    The level is `serious` and never `blocking`, which is a judgement and not
+    an oversight. A plant here has already cleared the light it needs to grow;
+    what it is short of is the light to look like something in the months it
+    was planted to carry. That is the module's own definition of `serious` —
+    it will survive and disappoint — and calling it blocking would put a thin
+    winter rosette beside a shrub in soil that will kill it.
+    """
+    if winter_active(plant) is not True:
+        return []
+    zone = plant["zone"]
+    have = zone_hours(sun, site, zone, list(WINTER_LIGHT_MONTHS))
+    if have is None or have >= need or already_short:
+        return []
+    return [_obj("serious", plant["name"],
+                 f"is marked winter-active, so it is in leaf through the dark "
+                 f"months, and zone {zone} averages {have} h over "
+                 f"{window_label(WINTER_LIGHT_MONTHS)} against the {need} h "
+                 f"its {want} rating wants — {round(need - have, 2)} h short. "
+                 f"It passes on its own window because those months are "
+                 f"brighter. This is how it looks in winter rather than "
+                 f"whether it lives",
+                 "accept a thin winter on it and say so, move it to ground "
+                 "that keeps its light past November, or carry this bed's "
+                 "winter structure with something rated lower")]
 
 
 def check_light(plant, sun, site):
@@ -187,7 +468,7 @@ def check_light(plant, sun, site):
                      "name matches site.json")]
 
     need, symptom = LIGHT_NEED[want]
-    window = "over " + ", ".join(months) if months else "over the year"
+    window = window_label(months)
     if have < need:
         best = zone_best(sun, site, zone, months)
         fix = None
@@ -197,20 +478,12 @@ def check_light(plant, sun, site):
         out.append(_obj("blocking" if have < need - 1.5 else "serious",
                         plant["name"],
                         f"wants {want} ({need}+ h) and zone {zone} averages "
-                        f"{have} h {window}. It {symptom}",
+                        f"{have} h over {window}. It {symptom}",
                         fix or f"move it to a brighter zone, or swap for "
                                f"something rated {_label_for(have)}"))
-    if want in ("shade", "part shade") and have > need + SCORCH_MARGIN:
-        hot = (site.get("climate") or {}).get("heat", {}) \
-            .get("days_over_95f_per_year")
-        if hot and hot > 20:
-            out.append(_obj("serious", plant["name"],
-                            f"is a {want} plant in a zone averaging {have} h, in "
-                            f"a climate with {hot} days over 95 F a year. It will "
-                            f"scorch in July whatever the watering",
-                            "move it to the shaded end, or give it afternoon "
-                            "shade specifically — morning sun of the same length "
-                            "is a different thing entirely"))
+    out += _winter_light(plant, want, need, sun, site, already_short=have < need)
+    if want in ("shade", "part shade"):
+        out += _scorch(plant, want, need, sun, site)
     return out
 
 
@@ -251,7 +524,8 @@ def check_sun_timing(design, sun, site):
             "serious", f"zone {zone}",
             f"takes {int(late * 100)} percent of its direct sun after 1 p.m."
             f"{when}, in a climate with {hot} days over 95 F a year. The "
-            f"{have} h figure reads like part sun and behaves like full "
+            f"{have} h figure — a mean over {window_label(None)} — reads like "
+            f"part sun and behaves like full "
             f"afternoon sun, which is the harshest exposure there is. It "
             f"applies to everything here: "
             f"{', '.join(sorted(set(names))[:4])}"
@@ -300,6 +574,139 @@ def check_water(plant, cond, site):
     return out
 
 
+def rooting_depth(plant):
+    """How deep this plant's feeding roots go, in inches, or None.
+
+    A researched per-plant fact carried exactly like `light`, `ph_range` and
+    `soil_drainage`, with a `rooting_depth_source` beside it. None where nobody
+    has looked it up, which is a third answer and not a shallow one: a check
+    that picks a depth in order to have one is the same bug as the yard-wide pH
+    it exists to replace, one field along.
+
+    A scalar rather than a range, and that is a deliberate narrowing. Roots vary
+    with soil, season and how the plant was raised, and the honest interval for
+    most of these is wide. But the question every caller asks is *which layers
+    does this plant occupy*, the layers here are inches thick, and a range would
+    put half the yard permanently in the maybe column while reading as more
+    precise than the source it came from. The uncertainty goes where it can be
+    argued with: `rooting_depth_source` says what the figure is, whose class it
+    came from, and what claim the design is actually leaning on.
+    """
+    v = plant.get("rooting_depth_in")
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        return None
+    return float(v)
+
+
+# What one layer says about one plant's pH range.
+#
+#   ok        this layer suits it, whatever else does
+#   out       this layer does not, and the record is definite about that
+#   depends   the layer's pH has never been measured, and the plant's range
+#             covers part of what it plausibly is and not the rest
+#   unknown   the layer's pH has never been measured and nothing says what it
+#             plausibly is, so there is nothing to compare
+#
+# `depends` and `unknown` are separated from `out` because they are not
+# findings about the plant, they are findings about the record, and
+# `check_coverage` owns those. Rolling them into an objection would put a
+# sentence about a plant in front of somebody when the thing that is wrong is
+# that nobody has tested the soil.
+PH_OK, PH_OUT, PH_DEPENDS, PH_UNKNOWN = "ok", "out", "depends", "unknown"
+
+
+def ph_verdict(layer, rng):
+    """Whether one layer suits a plant's pH range.
+
+    A plausible band is consulted **only** where the layer carries no reading of
+    its own, and never in place of one. That line is the difference between this
+    and softening every objection on the yard: the native layer here has a
+    value — an assumed, map-derived 8.2, but a value the whole plant palette was
+    chosen against — and turning it into the 7.8-8.3 interval its own note
+    quotes would drop every remaining pH objection to a shrug. A layer with
+    nothing recorded is a different case, because the alternative there is not a
+    weaker objection, it is no information at all.
+    """
+    if not rng or len(rng) != 2:
+        return PH_OK
+    lo, hi = float(rng[0]), float(rng[1])
+    ph = layer.get("ph")
+    if ph is not None:
+        return PH_OK if lo <= float(ph) <= hi else PH_OUT
+    band = layer.get("ph_plausible")
+    if isinstance(band, (list, tuple)) and len(band) == 2:
+        blo, bhi = float(band[0]), float(band[1])
+        if lo <= blo and bhi <= hi:
+            return PH_OK           # anything it plausibly is suits this plant
+        if bhi < lo or blo > hi:
+            return PH_OUT          # nothing it plausibly is would
+        return PH_DEPENDS
+    return PH_UNKNOWN
+
+
+def ph_by_layer(plant, layers):
+    """Every layer this plant's roots reach, with its verdict and how sure.
+
+    Returns a list of `(layer, verdict, certain)`. Shared with `check_coverage`
+    so that the objection and the report of what could not be checked are two
+    readings of one computation rather than two implementations of one rule.
+    """
+    rng = plant.get("ph_range")
+    if not rng:
+        return []
+    certain, possible = conditions.reached(layers, rooting_depth(plant))
+    return ([(l, ph_verdict(l, rng), True) for l in certain]
+            + [(l, ph_verdict(l, rng), False) for l in possible])
+
+
+def _layer_name(layer):
+    return str(layer.get("name") or layer.get("material") or "that layer")
+
+
+def _layer_where(layer, depth):
+    """`the native layer, from 6 in down` — with the share of the root zone."""
+    top = float(layer.get("top_in") or 0)
+    bottom = layer.get("bottom_in")
+    span = (f"the top {bottom:g} in" if top <= 0 and bottom
+            else f"the top of the bed" if top <= 0
+            else f"from {top:g} in down")
+    share = conditions.share_of_root_zone(layer, depth)
+    if share is None:
+        return f"the {_layer_name(layer)} layer, {span}"
+    return (f"the {_layer_name(layer)} layer, {span}, which holds "
+            f"{share * 100:.0f} percent of a {depth:g} in root zone")
+
+
+def _ph_by_depth(plant, layers):
+    """The pH objection, judged against the layers the roots are actually in.
+
+    Only a `certain` verdict of `out` raises an objection here. Where the layer
+    that does not suit the plant is one the roots *might* reach and nobody has
+    researched the depth, the finding is that the depth is unresearched, and
+    that belongs to `check_coverage` — an objection resting on a rooting depth
+    this module chose for itself would be the yard-wide 8.2 all over again.
+    """
+    rng = plant.get("ph_range")
+    bad = [(l, c) for l, v, c in ph_by_layer(plant, layers) if v == PH_OUT]
+    if not any(c for _, c in bad):
+        return []
+    depth = rooting_depth(plant)
+    where = "; ".join(_layer_where(l, depth) for l, c in bad if c)
+    reads = "; ".join(
+        (f"{l['ph']}" if l.get("ph") is not None
+         else f"plausibly {l['ph_plausible'][0]}-{l['ph_plausible'][1]}")
+        for l, c in bad if c)
+    rooted = (f"roots {depth:g} in" if depth else "roots into the surface layer")
+    return [_obj("serious", plant["name"],
+                 f"wants pH {rng[0]}-{rng[1]} and {rooted}, which puts it in "
+                 f"{where} — reading {reads}. The imported soil above is not "
+                 f"the whole of what this plant is standing in",
+                 "amending pH is a losing fight in open ground and a deeper "
+                 "imported layer only postpones it. Either choose something "
+                 "suited to the layer the roots reach, or grow this one in a "
+                 "container where the medium is yours")]
+
+
 def check_soil(plant, cond, site=None):
     """Whether the soil suits the plant — where the plant is in soil at all.
 
@@ -307,31 +714,152 @@ def check_soil(plant, cond, site=None):
     holding a potted plant to the yard's pH refuses it for a reason that does
     not apply — and this function's own advice for a pH mismatch is to *grow it
     in a container where the medium is yours*, which it then objected to.
+
+    Where the bed has a layered record the checks run against the layers, and
+    the two arms deliberately part company. pH is asked of the layers the roots
+    are in; drainage is asked of the profile, because water leaves through the
+    slowest layer whatever the rooting depth. See `lib.conditions`.
     """
     out = []
-    if site is not None and plant.get("zone"):
-        key = resolve_site_zone(site, plant["zone"]) or plant["zone"]
+    key = plant.get("zone")
+    if site is not None and key:
+        key = resolve_site_zone(site, key) or key
         if zone_kind(site, key) == "container":
             return out
     soil = (cond or {}).get("soil") or {}
-    ph = soil.get("ph")
-    rng = plant.get("ph_range")
-    if ph is not None and rng and not (rng[0] <= ph <= rng[1]):
-        out.append(_obj("serious", plant["name"],
-                        f"wants pH {rng[0]}-{rng[1]} and the soil reads {ph}",
-                        "amending pH is a losing fight in open ground. Either "
-                        "choose something suited to the soil, or grow this one "
-                        "in a container where the medium is yours"))
-    drain = (soil.get("drainage") or "").lower()
-    if plant.get("soil_drainage") == "sharp" and \
-            ("slow" in drain or "poor" in drain):
-        out.append(_obj("blocking", plant["name"],
-                        f"needs sharp drainage and the soil drains {drain}. This "
-                        f"is the classic way to kill rosemary and lavender, and "
-                        f"it takes two years so nobody connects it to the soil",
-                        "plant it on a mound or in a raised pocket with grit, "
-                        "with the crown set high"))
+    layers = conditions.bed_layers(cond, key)
+
+    if layers:
+        out += _ph_by_depth(plant, layers)
+    else:
+        ph = soil.get("ph")
+        rng = plant.get("ph_range")
+        if ph is not None and rng and not (rng[0] <= ph <= rng[1]):
+            out.append(_obj("serious", plant["name"],
+                            f"wants pH {rng[0]}-{rng[1]} and the soil reads "
+                            f"{ph}",
+                            "amending pH is a losing fight in open ground. "
+                            "Either choose something suited to the soil, or "
+                            "grow this one in a container where the medium is "
+                            "yours"))
+
+    if plant.get("soil_drainage") == "sharp":
+        if layers:
+            out += _sharp_by_depth(plant, layers)
+        else:
+            drain = (soil.get("drainage") or "").lower()
+            if "slow" in drain or "poor" in drain:
+                out += _sharp_drainage(plant, drain)
     return out
+
+
+def _sharp_by_depth(plant, layers):
+    """A sharp-drainage plant over a layered profile.
+
+    Depth is asked and deliberately does not change the answer, which is the
+    whole content of this function. Six inches of good soil over group D clay
+    does not drain: the clay is where the water has to go, it cannot, and the
+    water stands upward from that interface. A plant rooting entirely in the
+    imported layer is therefore inside the perched zone rather than above it,
+    and reading across from the pH rule — shallow roots, imported soil, no
+    objection — would be exactly wrong. What depth buys is a better sentence,
+    not a different verdict.
+    """
+    lim = conditions.limiting_layer(layers)
+    if lim is None:
+        return []
+    drain = str(lim.get("drainage") or "").lower()
+    top = float(lim.get("top_in") or 0)
+    depth = rooting_depth(plant)
+    above = [l for l in layers if float(l.get("top_in") or 0) < top]
+    over = (f"{top:g} in of {_layer_name(above[0])} soil over "
+            f"{_layer_name(lim)}" if above and top > 0
+            else f"{_layer_name(lim)} from the surface")
+    where = (f", and it roots {depth:g} in, so it is "
+             + ("inside" if depth <= top else "through")
+             + " the layer that perches" if depth else "")
+    ground = (f"this bed is {over}, which drains {drain}. Water leaves through "
+              f"the slowest layer whatever the rooting depth, and it stands "
+              f"upward from that interface{where}")
+    return _sharp_drainage(plant, drain, ground=ground)
+
+
+def drainage_amendment(plant):
+    """What was done to the ground under this planting, where anything was.
+
+    A dict or None. Read `describe` for the shape of it.
+    """
+    a = plant.get("drainage_amendment")
+    return a if isinstance(a, dict) and a.get("describe") else None
+
+
+def _sharp_drainage(plant, drain, ground=None):
+    """A sharp-drainage plant in slow ground, and whether the plan answers it.
+
+    Without this the objection is unanswerable, which is a specific and bad
+    kind of wrong: the fix it printed was *plant it on a mound with grit*, and
+    on this yard that mound was already designed, dated, funded and on the
+    shopping list before the objection was ever raised. So the check refused
+    nine plants and then recommended the thing the plan already said to do, on
+    every run, forever. An objection that cannot be satisfied by doing the
+    right thing is one people learn to scroll past, and the next real one goes
+    with it.
+
+    What it deliberately does NOT do is decide that a mound is enough. Nobody
+    knows that — the drainage reading here is `assumed` and the percolation
+    test has been declined twice. The amendment moves the objection from a
+    claim about the SOIL, which the plan cannot change, to a claim about a
+    TASK, which can be checked, slip, or be dropped. That is a better place for
+    the risk to sit and it is not the same as the risk going away, so the note
+    says what the plant is depending on and where to find it.
+
+    Three levels, and the difference between them is evidence and not severity:
+
+      blocking   nothing recorded. Unchanged, and this is still the right
+                 answer where the ground is slow and nobody has said otherwise.
+      serious    an amendment asserted with no `source`. Weaker than nothing
+                 recorded would be honest about, because it reads like an
+                 answer while resting on nobody, so it is called out rather
+                 than believed.
+      note       an amendment with a source. The design is answered; what is
+                 left is doing it.
+
+    `ground` is the sentence describing what is wrong with the soil. It is a
+    parameter so that a layered bed can say which layer perches and how deep it
+    is, through the same three levels rather than a second copy of them; the
+    default is the flat reading every yard had before profiles existed.
+    """
+    a = drainage_amendment(plant)
+    ground = ground or f"the soil drains {drain}"
+    if not a:
+        return [_obj("blocking", plant["name"],
+                     f"needs sharp drainage and {ground}. This "
+                     f"is the classic way to kill rosemary and lavender, and "
+                     f"it takes two years so nobody connects it to the soil",
+                     "plant it on a mound or in a raised pocket with grit, "
+                     "with the crown set high, and record it as a "
+                     "`drainage_amendment` on the planting so this check can "
+                     "see it")]
+    src = [s for s in (a.get("source") or []) if str(s).strip()]
+    if not src:
+        return [_obj("serious", plant["name"],
+                     f"needs sharp drainage, {ground}, and the "
+                     f"planting claims {a['describe']} — but nothing says "
+                     f"where that is written down, so there is no way to tell "
+                     f"whether it is a plan or a hope. An amendment nobody has "
+                     f"scheduled is not one",
+                     "add `source` to the amendment pointing at the task or "
+                     "plan line that builds it, or drop the claim and let the "
+                     "drainage objection stand")]
+    return [_obj("note", plant["name"],
+                 f"needs sharp drainage and {ground}, and it is "
+                 f"planted on {a['describe']} — {', '.join(str(s) for s in src)}"
+                 + (f". {a['why']}" if a.get("why") else "")
+                 + f". The soil objection is answered by the planting position "
+                   f"rather than by the ground, so this plant lives or dies on "
+                   f"that being built as written",
+                 f"if that step is dropped or skipped on the day, this plant "
+                 f"goes into the ground it was refused for")]
 
 
 def footprint(plant):
@@ -357,7 +885,108 @@ def footprint(plant):
 # plants that lose are the slow expensive ones. `lib.niches` budgets its slots
 # against this same band, so a planting picked there passes here by
 # construction rather than by luck.
+#
+# Which is worth reading twice, because it is also how this check went blind.
+# Sharing the band means a slate assembled there lands inside it here BY
+# CONSTRUCTION — the two cannot disagree about area, so their agreement about
+# area says nothing. `bed_g05` was handed three rows summing to 6.5 ft of
+# spread in a bed 3.708 ft deep and passed at 1.10x, because 1.10x was the only
+# question either side asked. Anything the band cannot see has to be measured
+# on a different axis, against a different number, or it is not measured at
+# all. `row_stack` below is that axis.
 COVER_FLOOR, COVER_CEILING = 0.45, 1.15
+
+# The ranks of a border, back to front, as `layer` records them on a plant.
+# Anything else — an `accent`, or a typo — is still standing in the bed and
+# still occupying depth, so it is counted as a band of its own and NAMED, never
+# quietly dropped. A guard that skips what it does not recognise is how seven
+# `lib.schedule` archetypes went unreachable reading `kind` where the design
+# wrote `item`.
+ROWS = ("back", "middle", "front")
+
+
+def row_stack(plants):
+    """(depth_ft, ranks) — the depth a layered planting consumes front to back.
+
+    Ranks in a border do not interleave. A rank whose widest plant spreads *s*
+    feet occupies *s* feet of the bed's depth, because the rank behind it has to
+    stand clear of it or it shades the one in front out, which is the entire
+    point of planting in layers. Put the centres at (s_back + s_front) / 2 apart
+    — the closest they can be — and add the half-spread hanging off each end,
+    and the total comes to exactly the SUM of the ranks' spreads. Three rows at
+    2.5, 2.5 and 1.5 ft need 6.5 ft of depth. There is no arrangement of them
+    that needs less.
+
+    No area calculation can find that, and this is the second axis rather than a
+    refinement of the first: 32.45 sq ft of bed holds 35.7 sq ft of plants at
+    1.10x, comfortably inside the coverage band, in a bed 3.708 ft deep. The two
+    numbers are not in tension because they are not about the same thing.
+
+    A rank is as deep as its WIDEST member, not as deep as its mean. Six plants
+    in the back row of g02 spread 1.2 to 3.0 ft; the band has to be 3.0 ft wide
+    where the plateau goldeneye stands, and the slack elsewhere along the run is
+    length, not depth. Taking the max is also the lenient reading, which is the
+    right direction for a check that objects.
+
+    Vines are excluded on the same grounds `footprint` excludes them: the canopy
+    is carried on a trellis overhead and the ground under it still plants.
+    """
+    ranks = {}
+    for p in plants:
+        layer = p.get("layer")
+        if layer == "vine":
+            continue
+        spread = p.get("mature_spread_ft") or 0
+        if not spread:
+            continue
+        # Every unrecognised layer shares one band rather than getting one
+        # each: three plants filed `accent` are three plants in the same rank
+        # until somebody says otherwise, and inventing three ranks out of one
+        # word would object to a bed that is fine.
+        key = layer if layer in ROWS else "other"
+        wide, name, count = ranks.get(key, (0.0, None, 0))
+        if float(spread) > wide:
+            wide, name = float(spread), p.get("name")
+        ranks[key] = (wide, name, count + 1)
+    order = ROWS + ("other",)
+    out = [(k, ranks[k][0], ranks[k][1], ranks[k][2])
+           for k in order if k in ranks]
+    return row_stack_depth([d for _k, d, _n, _c in out]), out
+
+
+def row_stack_depth(spreads):
+    """The depth a set of ranks consumes. Named so both modules read one rule.
+
+    `lib.niches` spends this budget when it proposes rows and `check_space`
+    measures it against what was actually planted, and they must not each carry
+    their own copy of the arithmetic — that is how `check_space` and
+    `lib.niches` came to agree about g05's area while both were wrong about it.
+
+    One rule in one place is not the same as two modules agreeing, and the
+    difference is what they feed it: niches feeds it the MIDPOINT spread of a
+    size class, `check_space` feeds it the spread of the plant somebody actually
+    bought. A slot that fits at the midpoint of `medium` fails at the top of it,
+    and the linter is where that surfaces.
+    """
+    return sum(float(s) for s in spreads)
+
+
+def depth_room(site, key):
+    """Feet of depth a rank stack may occupy in this zone.
+
+    Usable depth plus whatever canopy overhang the zone declares, which is the
+    same allowance `_check_depth` already gives an individual plant and for the
+    same reason: a top may lean out over a stone apron its roots could never
+    occupy. Undeclared means none, deliberately — whether the front rank may
+    lean out over what is in front of the soil is a judgement about how the bed
+    should look, not something recoverable from the measurements, so the
+    objection names the declaration as its remedy rather than assuming a figure.
+    """
+    z = (site.get("zones") or {}).get(key) or {}
+    depth = z.get("usable_depth_ft")
+    if not depth:
+        return None
+    return float(depth) + z_overhang(site, key)
 
 
 def check_space(design, site, sun):
@@ -383,9 +1012,13 @@ def check_space(design, site, sun):
             out += _check_grid(z, plants, site, key)
             continue
 
-        usable = areas.get(key)
-        if not usable:
+        soil = areas.get(key)
+        if not soil:
             continue                # reported by check_coverage, not passed over
+        # Canopies are judged against the ground a canopy can occupy, roots
+        # against the soil. Where no apron is declared these are the same
+        # number and nothing below changes.
+        usable, allowance = zone_canopy_room(site, key, soil)
 
         # Annuals and perennials in one bed are a succession, not a crowd: the
         # violas come out before the perennials have their summer size. Judging
@@ -402,15 +1035,35 @@ def check_space(design, site, sun):
                     f"perennials rather than after them would read "
                     f"{both / usable:.2f}x, and they are a succession.")
 
+        room = ""
+        if allowance:
+            room = (f" The {usable:.0f} sq ft is {soil:.0f} of soil plus the "
+                    f"{allowance:.0f} sq ft of apron this zone's "
+                    f"{z_overhang(site, key):g} ft canopy overhang allows the "
+                    f"tops to lean out over.")
+
         if need > usable * COVER_CEILING:
             over = round(need / usable, 2)
             out.append(_obj("serious", f"zone {z}",
                             f"the plants at mature spread need {need:.0f} sq ft "
                             f"and the zone has {usable:.0f}. That is {over}x "
-                            f"overplanted",
+                            f"overplanted" + room,
                             "cut the count. A first-year bed that looks full is "
                             "overplanted, and the plants that lose are usually "
                             "the expensive slow ones"))
+        elif allowance and need > soil * COVER_CEILING:
+            # Passes only because the tops are allowed out over the apron. True,
+            # and worth saying: the roots are still in the soil figure, and if
+            # the apron is ever planted or paved the bed is overplanted again.
+            out.append(_obj("note", f"zone {z}",
+                            f"the planting fits at {need / usable:.2f}x only "
+                            f"because the tops may lean out over the apron — "
+                            f"against soil alone it is "
+                            f"{need / soil:.2f}x.{room} The roots are all still "
+                            f"in the {soil:.0f} sq ft",
+                            "no change needed, but do not later plant or pave "
+                            "the apron without revisiting the count, and expect "
+                            "the front rank to lean"))
         elif need < usable * COVER_FLOOR:
             out.append(_obj("note", f"zone {z}",
                             f"the planting covers about "
@@ -421,7 +1074,62 @@ def check_space(design, site, sun):
                             "leave deliberate open ground rather than accidental "
                             "gaps"))
         out += _check_depth(z, plants, site, key)
+        out += _check_row_depth(z, plants, site, key)
     return out
+
+
+def _check_row_depth(zone, plants, site, key):
+    """The ranks, added up, against the depth there is. See `row_stack`.
+
+    `_check_depth` below asks whether any ONE plant is wider than the bed, which
+    is a real question and a narrower one: every plant in g05's derived slate
+    passes it — 2.5, 2.5 and 1.5 ft in a bed 3.708 ft deep, not one of them
+    over — and the three of them together need 6.5 ft. What a layered planting
+    consumes is the sum, and nothing was reading it.
+    """
+    room = depth_room(site, key)
+    if not room:
+        return []
+    stack, ranks = row_stack(plants)
+    # One rank is `_check_depth`'s question with extra words. Reported there,
+    # against the individual plants, where the remedy is per plant.
+    if len(ranks) < 2 or stack <= room:
+        return []
+
+    z = (site.get("zones") or {}).get(key) or {}
+    depth = float(z.get("usable_depth_ft"))
+    named = ", ".join(
+        f"{k} {d:g} ft" + (f" ({n})" if n else "")
+        for k, d, n, _c in ranks)
+    allowed = ("" if room == depth else
+               f" — {depth:g} ft of usable depth plus the {room - depth:g} ft "
+               f"of overhang this zone allows the front rank to lean out over")
+    unranked = next((c for k, _d, _n, c in ranks if k == "other"), 0)
+    guessed = ""
+    if unranked:
+        layers = sorted({str(p.get("layer")) for p in plants
+                         if p.get("layer") not in ROWS
+                         and p.get("layer") != "vine"
+                         and (p.get("mature_spread_ft") or 0)})
+        guessed = (f" {unranked} of these "
+                   f"{'is' if unranked == 1 else 'are'} filed as "
+                   f"{', '.join(repr(x) for x in layers)} rather than as one of "
+                   f"{', '.join(ROWS)}, so they were counted as a single band "
+                   f"of their own; if they in fact stand within another rank, "
+                   f"say so with `layer` and this number falls.")
+    return [_obj("serious", f"zone {zone}",
+                 f"the ranks add up to {stack:g} ft of depth and the bed has "
+                 f"{room:g}{allowed}. That is {stack / room:.2f}x on depth, "
+                 f"against {named}, each rank as deep as its widest plant. "
+                 f"Area is not the constraint and cannot see this: the ranks "
+                 f"cannot overlap without the back one shading out the front "
+                 f"one, so what a layered bed consumes is the sum."
+                 + guessed,
+                 f"lose a rank, or take the widest rank down a size class — "
+                 f"{stack - room:g} ft has to come out of the stack. Setting "
+                 f"`canopy_overhang_ft` on the zone is the other answer, and "
+                 f"only if the front rank may really lean out over whatever is "
+                 f"in front of the soil")]
 
 
 def _check_depth(zone, plants, site, key):
@@ -439,10 +1147,10 @@ def _check_depth(zone, plants, site, key):
         return []
     # A canopy and a root ball are different constraints, and a bed with a
     # gravel or stone apron in front of it can hold a plant whose top leans out
-    # over ground its roots could never occupy. That has to be declared per
-    # zone, because whether the apron may be shaded is a judgement about how the
-    # bed should look, not something derivable from the measurements.
-    reach = float(depth) + float(z.get("canopy_overhang_ft") or 0)
+    # over ground its roots could never occupy. One helper, because
+    # `_check_row_depth` needs the same figure and two copies of "depth plus
+    # whatever overhang is declared" is one copy too many.
+    reach = depth_room(site, key)
     over = [(p["name"], p["mature_spread_ft"], p.get("count", 1))
             for p in plants
             if p.get("layer") != "vine"
@@ -550,7 +1258,115 @@ def check_coverage(design, site, cond, sun):
                         "`unplantable_sqft` for any gravel or stone inside the "
                         "bed), or `containers` where the bed is pots"))
 
-    # --- soil
+    # --- light, and which season it was judged over
+    #
+    # Not a missing input, which is what the rest of this function reports, but
+    # the same silence: a plant carrying neither `months` nor `bloom` is judged
+    # over `DEFAULT_LIGHT_MONTHS`, and the objection list gives no sign of it.
+    # On the yard this was written against, thirteen autumn-sown vegetables were
+    # measured over the seven months not one of them was in the ground - 6.46 h
+    # against 5.41 h for their own season - and it took someone reading three
+    # confident objections about spinach scorching in July to notice.
+    #
+    # A default is the right behaviour and this does not change it. What it
+    # changes is that the default stops being invisible.
+    defaulted = [p["name"] for p in plants
+                 if p.get("zone") and (p.get("light") or "").lower() in LIGHT_NEED
+                 and not p.get("months") and not p.get("bloom")]
+    if defaulted:
+        out.append(_obj("note", "light",
+                        f"{len(defaulted)} plants name neither their growing "
+                        f"months nor a bloom season, so their light was judged "
+                        f"over {window_label(None)} — "
+                        f"{', '.join(sorted(defaulted)[:6])}"
+                        + (" and others" if len(defaulted) > 6 else "")
+                        + ". For anything whose season is winter that is the "
+                          "wrong half of the year, and it reads as a verdict "
+                          "either way",
+                        "set `months` on each from whatever document owns its "
+                        "dates, listing the months one by one so a season that "
+                        "crosses New Year does not come out empty"))
+
+    # --- heat, and whether the scorch check could run at all
+    #
+    # The same silence as the section above, and this one used to be worse than
+    # silence: the check ran on an annual hot-day count, which every hot climate
+    # has, and so it never went quiet and never named a month. Requiring a
+    # monthly series means a yard that has not got one gets no scorch objections
+    # at all, and that has to be said out loud or the check has simply vanished.
+    tender = [p for p in plants
+              if p.get("zone") and (p.get("light") or "").lower()
+              in ("shade", "part shade")]
+    if hot_months(site) is None and tender:
+        out.append(_obj("note", "heat",
+                        f"no monthly hot-day series on record, so nothing "
+                        f"checked whether {len(tender)} shade-rated plants are "
+                        f"standing in too much sun in the months this yard is "
+                        f"actually hot. An annual count of days over 95 F "
+                        f"cannot answer that: it is the same figure in a yard "
+                        f"whose plant is lifted in March",
+                        "run `python3 -m lib.climate " + (site.get("yard") or
+                        "<slug>") + " --heat-months`, which derives it from the "
+                        "same thirty years the annual count came from"))
+
+    # --- winter, and which plants nobody has decided about
+    #
+    # The same silence one field over. `winter_active` governs whether a plant
+    # is judged on winter light at all, and an entry that has never been asked
+    # the question is indistinguishable in the objection list from one that was
+    # asked and answered no.
+    #
+    # `evergreen: true` is the prompt here and deliberately not the mechanism.
+    # It is where the question ARISES — something that keeps its leaves is
+    # worth deciding about — and using it as the answer is what this whole
+    # field exists to avoid, because it would object about four plants that are
+    # brown, cut to the ground or standing in dry seed heads and do not care
+    # what December is doing.
+    undecided = [p["name"] for p in plants
+                 if p.get("evergreen") and p.get("zone")
+                 and (p.get("light") or "").lower() in LIGHT_NEED
+                 and winter_active(p) is None]
+    if undecided:
+        out.append(_obj("note", "winter",
+                        f"{len(undecided)} plants keep their leaves and none "
+                        f"of them says whether it is actually working through "
+                        f"winter, so the winter light check did not run for "
+                        f"them — {', '.join(sorted(undecided)[:6])}"
+                        + (" and others" if len(undecided) > 6 else "")
+                        + ". Evergreen is not the same claim: a grass holding "
+                          "dry seed heads looks like winter and needs no light "
+                          "for it",
+                        "set `winter_active` on each, with a "
+                        "`winter_active_why` saying what settled it — the "
+                        "entry's own December note is usually the evidence"))
+    unsourced = [p["name"] for p in plants
+                 if winter_active(p) is not None
+                 and not str(p.get("winter_active_why") or "").strip()]
+    if unsourced:
+        out.append(_obj("note", "winter",
+                        f"{len(unsourced)} plants declare `winter_active` with "
+                        f"no reason beside it — "
+                        f"{', '.join(sorted(unsourced)[:6])}"
+                        + (" and others" if len(unsourced) > 6 else "")
+                        + ". It is a judgement about a plant rather than a "
+                          "measurement of the yard, so an undefended one is a "
+                          "verdict nobody can disagree with",
+                        "add `winter_active_why` naming the evidence"))
+
+    # --- soil, layer by layer
+    #
+    # Three silences, and they are the ones this whole mechanism creates. The
+    # depth-aware pH check is quieter than the yard-wide one it replaces, and
+    # most of that quiet is correct — a viola rooting five inches into imported
+    # garden soil was never in the caliche. But some of it is a check that could
+    # not run, and if that is invisible then the yard has traded a confidently
+    # wrong answer for a confidently blank one, which is the worse trade.
+    #
+    # Aggregated per finding rather than per plant, the same as everything else
+    # here. Nineteen lines saying "nobody has measured the imported soil" is
+    # nineteen ways of not reading it once.
+    out += check_layer_coverage(plants, site, cond)
+
     soil = (cond or {}).get("soil") or {}
     fussy = [p for p in plants if p.get("ph_range")]
     if soil.get("ph") is None and fussy:
@@ -589,6 +1405,123 @@ def check_coverage(design, site, cond, sun):
     return out
 
 
+def _bed_key(site, zone):
+    """The site's own key for a design zone, or the design's key unchanged.
+
+    `site` is optional here for the same reason it is optional on `check_soil`:
+    the layered record is keyed by bed and a caller that only has beds should
+    not have to fabricate a site to ask about them.
+    """
+    if site is None:
+        return zone
+    return resolve_site_zone(site, zone) or zone
+
+
+def check_layer_coverage(plants, site, cond):
+    """What the depth-aware soil check could not settle, said out loud.
+
+    The pH arm of `check_soil` now answers a narrower question than the yard-wide
+    scalar did, and it answers it correctly for far fewer plants. Everything it
+    stops saying has to land somewhere, and there are exactly three places it
+    can land: the layer suits the plant (silence is right), the layer's pH has
+    never been measured (nobody knows), or the plant's rooting depth has never
+    been researched (nobody looked). Only the first of those is a pass.
+    """
+    out = []
+    unmeasured, no_depth, blank_layer, unprofiled = [], [], [], []
+    discontinuous = {}
+    any_profile = bool(((cond or {}).get("soil", {}).get("layers") or {})
+                       .get("profiles"))
+
+    for p in plants:
+        zone = p.get("zone")
+        if not zone:
+            continue
+        key = _bed_key(site, zone)
+        if site is not None and zone_kind(site, key) == "container":
+            continue
+        layers = conditions.bed_layers(cond, key)
+        if layers is None:
+            if any_profile and p.get("ph_range"):
+                unprofiled.append(key)
+            continue
+        if key not in discontinuous:
+            gaps = conditions.layer_gaps(layers)
+            if gaps:
+                discontinuous[key] = gaps
+        for layer, verdict, certain in ph_by_layer(p, layers):
+            if verdict == PH_DEPENDS:
+                unmeasured.append(p["name"])
+            elif verdict == PH_UNKNOWN:
+                blank_layer.append(p["name"])
+            elif verdict == PH_OUT and not certain:
+                no_depth.append(p["name"])
+
+    if unmeasured:
+        names = sorted(set(unmeasured))
+        out.append(_obj("note", "soil",
+                        f"{len(unmeasured)} plantings root in an imported "
+                        f"layer whose "
+                        f"pH has never been measured, and their own range "
+                        f"covers part of what that layer plausibly is and not "
+                        f"the rest — {', '.join(names[:6])}"
+                        + (" and others" if len(names) > 6 else "")
+                        + ". They are not passing the pH check; the pH check "
+                          "cannot run on them. A bagged garden soil at the acid "
+                          "end of its plausible band sits under the floor these "
+                          "state",
+                        "one lab test settles the whole list. Sample the "
+                        "imported layer separately from the native one, or the "
+                        "blend destroys the distinction that makes this "
+                        "answerable"))
+    if blank_layer:
+        names = sorted(set(blank_layer))
+        out.append(_obj("note", "soil",
+                        f"{len(blank_layer)} plantings root in a layer that "
+                        f"records "
+                        f"neither a pH nor a plausible range, so nothing could "
+                        f"be compared at all — {', '.join(names[:6])}"
+                        + (" and others" if len(names) > 6 else ""),
+                        "set `ph` on the layer where it has been measured, or "
+                        "`ph_plausible` with a source where it has not. A layer "
+                        "with neither disables the check silently"))
+    if no_depth:
+        names = sorted(set(no_depth))
+        out.append(_obj("note", "soil",
+                        f"{len(no_depth)} plantings would be refused by a "
+                        f"layer their "
+                        f"roots may or may not reach, and no `rooting_depth_in` "
+                        f"is on record for them — {', '.join(names[:6])}"
+                        + (" and others" if len(names) > 6 else "")
+                        + ". The objection was not raised, because raising one "
+                          "on a depth this module picked for itself is the same "
+                          "fault as the yard-wide pH it replaced",
+                        "set `rooting_depth_in` and `rooting_depth_source` on "
+                        "each, from an effective-root-zone table rather than "
+                        "from the plant's height"))
+    for bed, gaps in sorted(discontinuous.items()):
+        out.append(_obj("note", "soil",
+                        f"{bed}'s profile does not join up: {'; '.join(gaps)}. "
+                        f"Every verdict here is decided from `top_in`, so this "
+                        f"changes no objection and is reported for that reason "
+                        f"— the boundary is stated twice and only one of the "
+                        f"two is being believed",
+                        "make each layer's `bottom_in` the next layer's "
+                        "`top_in`, and leave the deepest layer's `bottom_in` "
+                        "null so it runs past anything that will be planted"))
+    if unprofiled:
+        beds = sorted(set(unprofiled))
+        out.append(_obj("note", "soil",
+                        f"{', '.join(beds)} carries plants that state a pH "
+                        f"range and has no entry in `soil.layers.beds`, so it "
+                        f"was judged on the yard-wide scalar while the other "
+                        f"beds were judged layer by layer. Two rules on one "
+                        f"yard is worse than either",
+                        "add the bed to `soil.layers.beds`, naming the profile "
+                        "it actually has"))
+    return out
+
+
 def zone_areas(site):
     """Usable square feet per zone, net of anything declared unplantable.
 
@@ -616,6 +1549,43 @@ def zone_areas(site):
                 sq -= float(taken)
         out[name] = max(0.0, sq)
     return out
+
+
+def z_overhang(site, key):
+    """The canopy overhang a zone declares, in feet."""
+    z = (site.get("zones") or {}).get(key) or {}
+    return float(z.get("canopy_overhang_ft") or 0)
+
+
+def zone_canopy_room(site, key, soil):
+    """Square feet a CANOPY may occupy, which is not the same as the soil.
+
+    `zone_areas` nets off the river rock and the gravel, because nothing roots
+    in them. But a plant standing in the soil behind a stone apron leans its
+    top out over that apron perfectly happily, and `check_space` compares a sum
+    of mature SPREADS — canopy footprints — against the soil figure. So a bed
+    with an apron is judged on ground the tops were never going to need, and
+    reads as overplanted on the strength of its own hardscape.
+
+    `canopy_overhang_ft` already declares that this is allowed, and
+    `_check_depth` already honours it on the depth arm. It was never applied to
+    the area arm, so half the constraint used the allowance and half ignored it.
+
+    The allowance is the overhang depth along the bed's run, capped by the
+    unplantable area actually declared: a canopy cannot lean out over a strip
+    that is not there. The run is recovered as soil over usable depth rather
+    than asked for, because it is already implied by two numbers the zone
+    carries and a third would be a third thing to keep in step.
+    """
+    z = (site.get("zones") or {}).get(key) or {}
+    overhang = float(z.get("canopy_overhang_ft") or 0)
+    depth = float(z.get("usable_depth_ft") or 0)
+    strip = sum(float(z.get(k) or 0)
+                for k in ("unplantable_sqft", "rock_band_sqft"))
+    if overhang <= 0 or depth <= 0 or strip <= 0 or soil <= 0:
+        return soil, 0.0
+    run = soil / depth
+    return soil + min(overhang * run, strip), min(overhang * run, strip)
 
 
 def zone_containers(site, key):
@@ -805,6 +1775,449 @@ def check_grouping(design):
     return out
 
 
+# --------------------------------------------------- the maps against the list
+#
+# `lib.drawbeds` renders every bed map from `design.layout`, which is a SECOND,
+# hand-authored representation of the same planting: its own positions, its own
+# counts and its own written labels. Nothing compared it against
+# `design.plants`, and the raised bed has been showing the symptom for as long
+# as both have existed — 32 cells against 45 plant entries, with the linter's
+# only comment being that a count is the wrong way to read a grid.
+#
+# That comment is true and it is not an answer. The 13 are three crops planted
+# several to the square, which is the method. Naming them is a different thing
+# from tolerating the gap, and the difference is the whole of this section.
+
+#: What one mark on a bed map stands for, per zone kind. This is the asymmetry
+#: between the two representations, declared rather than absorbed into a
+#: tolerance, and read straight off what `lib.drawbeds` draws.
+#:
+#:   border     `plants` — a circle whose radius is half a mature spread. One
+#:              circle is one plant, so the counts have to match exactly.
+#:   grid       `cells` — a rectangle of soil one foot square. Square-foot
+#:              planting deliberately puts ten garlic cloves or six violas in
+#:              two squares, so the comparison is squares <= plants, per crop,
+#:              and a crop with MORE squares than plants is the failure.
+#:   container  nothing draws a barrel, and a map of three circles in a row
+#:              would carry no information the `containers` count does not.
+#:
+#: One tolerance over the whole yard would have swallowed the raised bed's
+#: 13-plant gap and g02's missing bluebonnet in the same shrug. Two rules keyed
+#: to what each bed actually is keeps the second one visible.
+LAYOUT_UNIT = {"border": "plant", "grid": "square", "container": None}
+
+#: Words a label may carry that describe the plant's STATE on the day rather
+#: than its identity, dropped before matching. The maps' own legends define
+#: them: g02's subtitle reads "HATCHED = dormant, cut back or bare on the day",
+#: and g03's note is "cut BOTH to the ground in the last week of November". A
+#: mark reading "Mint marigold CUT" names a plant that is still bought, still
+#: planted and still on the bill.
+LAYOUT_STATES = ("cut", "existing", "dormant", "bare", "stub")
+
+#: How short an abbreviation may be and still count as one. Two characters
+#: match by accident, and the accident is not hypothetical: `V` is a prefix of
+#: `Viola` in a bed that also holds sweet alyssum, `A` is a prefix of
+#: `alyssum` in the same bed, and a one-letter rule would have called the g03
+#: map reconciled on the strength of two initials. Those two labels are defined
+#: in a `side_notes` line reading "V = viola   A = sweet alyssum", which is a
+#: legend for a person and not one for anything else. The remedy is a `plant`
+#: key on the mark, which is why the objection asks for one.
+LABEL_ABBREV_MIN = 3
+
+_LABEL_BREAK = re.compile(r"-\s*\n\s*")
+_LABEL_WORD = re.compile(r"[A-Za-z0-9]+")
+
+
+def _label_tokens(text):
+    """A label's identity words, lowercased. Two typographic facts, not slack.
+
+    A hyphen at a line break is a hyphenation: `"Milk-\\nweed"` is one word, and
+    reading it as two loses every hyphenated label on these maps. And a label is
+    set inside a circle at five point, so where it is abbreviated it is
+    abbreviated by truncation — `Gregg's mistfl.`, `Mex. bush sage`.
+    """
+    text = _LABEL_BREAK.sub("", str(text or "")).replace("\n", " ")
+    return [w for w in (t.lower() for t in _LABEL_WORD.findall(text))
+            if w not in LAYOUT_STATES]
+
+
+def _label_say(label):
+    """A label as the map shows it. Labels carry newlines to fit inside a
+    circle, and `repr` of one prints `'PoB\\nstub'`, which is not what anybody
+    is looking at when they go and check.
+    """
+    return " ".join(str(label).split())
+
+
+def _token_hit(a, b):
+    """Whether two words are the same word, one possibly truncated."""
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= LABEL_ABBREV_MIN and long_.startswith(short)
+
+
+def _tokens_match(label, name):
+    """Every word of the label answered by a distinct word of the name.
+
+    Distinct matters: without it `"sage sage"` would match a name holding one
+    `sage`, and the direction of this check is that the LABEL must be fully
+    accounted for. Extra words in the plant name are expected — the records
+    carry buying instructions in them, like `Milkweed - ASK FOR Asclepias
+    tuberosa OR A. asperula BY NAME`.
+    """
+    spare = list(name)
+    for t in label:
+        hit = next((s for s in spare if _token_hit(t, s)), None)
+        if hit is None:
+            return False
+        spare.remove(hit)
+    return True
+
+
+def resolve_mark(label, records):
+    """(plant, how) for one map label against one zone's plant records.
+
+    `how` is why it matched, and it is reported rather than swallowed because
+    the weakest kind of match is the one worth seeing:
+
+        name          the label is the record's name
+        botanical     the label is the record's whole binomial
+        abbreviation  every word of the label truncates a word of the name
+        fragment      it matches nothing in the name and only part of the
+                      binomial. `Carex` against `Cedar sedge` / `Carex
+                      planostachys` — a genus, not a plant, and not a thing to
+                      say at a till
+        ambiguous     more than one record answers to it, so a person decides
+        None          nothing answers to it
+
+    Never guesses. A label two records could be is reported as ambiguous, not
+    assigned to the first: comparing a map against the wrong record and
+    reporting the result as a disagreement is worse than reporting the gap.
+    """
+    toks = _label_tokens(label)
+    if not toks:
+        return None, None
+    flat = "".join(toks)
+    for p in records:
+        if _norm(p.get("name")) == flat:
+            return p, "name"
+    for p in records:
+        if p.get("botanical") and _norm(p["botanical"]) == flat:
+            return p, "botanical"
+    # An initial is not an abbreviation. `LABEL_ABBREV_MIN` alone does not stop
+    # `A` matching, because a record's own name can contain a one-letter word:
+    # `Milkweed - ASK FOR Asclepias tuberosa OR A. asperula BY NAME` holds `A`,
+    # and exact equality was letting the g03 alyssum marker "resolve" against
+    # the g02 milkweed's buying instruction. Below this length only the whole
+    # name counts, and the two branches above have already asked.
+    if len(flat) < LABEL_ABBREV_MIN:
+        return None, None
+    for field, how in (("name", "abbreviation"), ("botanical", "fragment")):
+        hits = [p for p in records if p.get(field)
+                and _tokens_match(toks, _label_tokens(p[field]))]
+        if len(hits) == 1:
+            return hits[0], how
+        if len(hits) > 1:
+            return None, "ambiguous"
+    return None, None
+
+
+def layout_zone(site, bed):
+    """The zone key a layout bed draws, or None. Resolved, never guessed.
+
+    A layout bed is named for the file it writes — `g01-southeast-corner`,
+    `raised-bed` — and a zone is keyed `bed_g01`, `bed_raised`. Nothing joined
+    the two, which is most of the reason nothing ever compared them.
+
+    Three ways in order: an explicit `zone` on the bed, then `resolve_site_zone`
+    on the name, then a zone whose `label_short` appears as one of the name's
+    hyphen-separated words. The last has to be unique or this returns None,
+    because a bed compared against the wrong zone's records reports a
+    disagreement that is entirely its own invention.
+    """
+    if bed.get("zone"):
+        return resolve_site_zone(site, bed["zone"]) or bed["zone"]
+    name = bed.get("name") or ""
+    direct = resolve_site_zone(site, name)
+    if direct:
+        return direct
+    words = {w for w in _label_tokens(name.replace("-", " "))}
+    hits = [key for key, z in (site.get("zones") or {}).items()
+            if isinstance(z, dict) and z.get("label_short")
+            and _norm(z["label_short"]) in words]
+    return hits[0] if len(hits) == 1 else None
+
+
+#: What a mark means when it declares `"plant": null` — drawn on purpose and
+#: not a planting. g02's 'FROG' is the case: a marker for the pond frog
+#: ornament, on the map because it is a landmark for finding a bed edge in
+#: February. Distinguished from an ABSENT `plant` key, which says nothing.
+#: Without this, `--layout` reports an ornament as a plant the record forgot
+#: forever, and the only way to silence it is to delete it from the map.
+NOT_A_PLANT = object()
+
+
+def mark_declares(mark):
+    """What a mark says it draws: a name, NOT_A_PLANT, or None for silence.
+
+    Three states and not two, which is the whole point. `mark.get("plant")`
+    collapses a declared non-plant into an undeclared one, and the remedy this
+    module prints — `"plant": null` on anything that is deliberately not a
+    plant — would then have been advice to write a key nothing reads. That is
+    the failure being fixed here, so leaving it in the remedy text unimplemented
+    would be a fresh instance of it.
+    """
+    if "plant" not in mark:
+        return None
+    v = mark["plant"]
+    return NOT_A_PLANT if v is None else v
+
+
+def layout_marks(bed):
+    """(label, squares, declared) per mark, whatever the bed type calls them.
+
+    `squares` is how much grid a cell covers, so a 2x1 cell spanning two
+    squares counts as two rather than as one — otherwise a wide cell reads as a
+    single square and the total silently undercounts the bed.
+
+    `declared` is the mark's own answer to what it draws, kept apart from the
+    label it prints, because the two are different claims: a label is what the
+    map SAYS and a declaration is what it MEANS. Keeping them separate is what
+    lets an abbreviation stay short on a drawing that has to fit in a circle
+    while still being checkable — 'V' can go on staying 'V'.
+    """
+    if bed.get("type") == "grid":
+        return [(c.get("label"),
+                 max(1, int(c.get("w", 1)) * int(c.get("h", 1))),
+                 mark_declares(c))
+                for c in bed.get("cells") or []]
+    return [(p.get("label"), 1, mark_declares(p))
+            for p in bed.get("plants") or []]
+
+
+def reconcile_layout(design, site):
+    """One record per layout bed, comparing it against the plant records.
+
+    Reports rather than decides. The caller turns this into objections, and
+    `--layout` prints it whole, because "the two agree" is worth printing: the
+    argument for keeping two representations at all rests on their agreement
+    being evidence, and evidence nobody prints is not evidence.
+    """
+    plants = design.get("plants") or []
+    by_zone = {}
+    for p in plants:
+        if p.get("zone"):
+            key = resolve_site_zone(site, p["zone"]) or p["zone"]
+            by_zone.setdefault(key, []).append(p)
+
+    out = []
+    for bed in ((design.get("layout") or {}).get("beds") or []):
+        key = layout_zone(site, bed)
+        records = by_zone.pop(key, []) if key else []
+        kind = zone_kind(site, key) if key else "border"
+        rec = {"bed": bed.get("name"), "zone": key, "kind": kind,
+               "unit": LAYOUT_UNIT.get(kind, "plant"),
+               "marks": 0, "plants": sum(p.get("count", 1) for p in records),
+               "matched": [], "unresolved": {}, "fragments": {},
+               "ambiguous": {}, "unmarked": [], "declared": 0,
+               "not_plants": {}, "misdeclared": {}}
+        seen = {}
+        for label, squares, declared in layout_marks(bed):
+            if declared is NOT_A_PLANT:
+                # Not counted as a mark at all: the bed's plant total is being
+                # compared against its planting, and an ornament is neither.
+                say = _label_say(label) or "(unlabelled)"
+                rec["not_plants"][say] = rec["not_plants"].get(say, 0) + squares
+                rec["declared"] += 1
+                continue
+            rec["marks"] += squares
+            if declared is not None:
+                rec["declared"] += 1
+                hit = [p for p in records if p.get("name") == declared]
+                if not hit:
+                    # A declaration that names nothing is worse than no
+                    # declaration: it reads as checked and is not. Reported
+                    # under its own heading rather than as an unresolved label,
+                    # because the remedy is different — somebody wrote this.
+                    say = _label_say(label) or _label_say(declared)
+                    rec["misdeclared"][say] = declared
+                    continue
+                seen[declared] = seen.get(declared, 0) + squares
+                continue
+            plant, how = resolve_mark(label, records)
+            if plant is None:
+                bucket = ("ambiguous" if how == "ambiguous" else "unresolved")
+                say = _label_say(label)
+                rec[bucket][say] = rec[bucket].get(say, 0) + squares
+                continue
+            if how == "fragment":
+                rec["fragments"][_label_say(label)] = plant["name"]
+            seen[plant["name"]] = seen.get(plant["name"], 0) + squares
+        for p in records:
+            if p["name"] not in seen:
+                rec["unmarked"].append((p["name"], p.get("count", 1)))
+            else:
+                rec["matched"].append(
+                    (p["name"], seen[p["name"]], p.get("count", 1)))
+        out.append(rec)
+
+    # A zone with plants and no bed map at all. Containers are exempt by
+    # declaration above, not by omission: three circles in a row would tell
+    # nobody anything the `containers` count does not already say.
+    for key, records in by_zone.items():
+        if LAYOUT_UNIT.get(zone_kind(site, key)) is None:
+            continue
+        out.append({"bed": None, "zone": key, "kind": zone_kind(site, key),
+                    "unit": LAYOUT_UNIT.get(zone_kind(site, key), "plant"),
+                    "marks": 0,
+                    "plants": sum(p.get("count", 1) for p in records),
+                    "matched": [], "unresolved": {}, "fragments": {},
+                    "ambiguous": {}, "declared": 0, "not_plants": {},
+                    "misdeclared": {},
+                    "unmarked": [(p["name"], p.get("count", 1))
+                                 for p in records]})
+    return out
+
+
+def check_layout(design, site):
+    """Where the bed maps and the plant records stop agreeing."""
+    out = []
+    fragments = []
+    for rec in reconcile_layout(design, site):
+        z, unit = rec["zone"], rec["unit"]
+        if rec["bed"] is None:
+            out.append(_obj("serious", f"zone {z}",
+                            f"{rec['plants']} plants are planned here and no "
+                            f"bed map draws this zone, so there is nothing to "
+                            f"plant from and nothing to check the list against",
+                            f"add a bed to design.json's `layout` block for "
+                            f"{z}, then re-render with lib.drawbeds"))
+            continue
+        if rec["zone"] is None:
+            out.append(_obj("serious", "layout",
+                            f"bed map {rec['bed']!r} names no zone this site "
+                            f"holds, so its {rec['marks']} marks are compared "
+                            f"against nothing. It renders perfectly and could "
+                            f"say anything",
+                            "put a `zone` key on the bed naming the site.json "
+                            "zone it draws"))
+            continue
+
+        fragments += [(z, label, name)
+                      for label, name in sorted(rec["fragments"].items())]
+
+        # The count, under this bed's own unit. A grid cell is allowed to hold
+        # more than one plant and a border circle is not, and that is the whole
+        # asymmetry — stated per crop rather than absorbed into a margin. So a
+        # grid is only wrong when a crop has MORE squares than plants, and a
+        # border is wrong in either direction.
+        over = [(n, m, c) for n, m, c in rec["matched"]
+                if (m > c if unit == "square" else m != c)]
+        if unit == "square":
+            if over:
+                named = ", ".join(f"{n} in {m} squares against {c} plants"
+                                  for n, m, c in sorted(over))
+                out.append(_obj("serious", f"zone {z}",
+                                f"the map gives more squares to a crop than "
+                                f"there are plants to fill them — {named}. A "
+                                f"square may hold several of one thing; it "
+                                f"cannot hold a fraction of one",
+                                "raise the count in `plants`, or take the "
+                                "spare squares back on the map"))
+            multi = [(n, m, c) for n, m, c in rec["matched"] if c > m]
+            if multi:
+                named = ", ".join(f"{n} {c} in {m}" for n, m, c in sorted(multi))
+                spare = sum(c - m for _n, m, c in multi)
+                out.append(_obj("note", f"zone {z}",
+                                f"{rec['marks']} squares against "
+                                f"{rec['plants']} plants, and the "
+                                f"{spare}-plant difference is "
+                                f"{_n(len(multi), 'crop')} sown several to the "
+                                f"square, which is the method rather than a "
+                                f"discrepancy — {named}. This is the answer to "
+                                f"the count the grid check can only shrug at",
+                                None))
+        elif rec["marks"] != rec["plants"] or over:
+            # Both facts in one objection, and the per-plant list is never
+            # dropped just because the total already disagrees: "39 against 37"
+            # sends somebody to count a nineteen-foot border, and "Gulf muhly:
+            # 5 on the map, 3 on the list" sends them to the plant.
+            named = ", ".join(f"{n}: {m} on the map, {c} on the list"
+                              for n, m, c in sorted(over))
+            if rec["marks"] != rec["plants"]:
+                said = (f"the bed map draws {rec['marks']} plants and the "
+                        f"plant records hold {rec['plants']}. One circle is "
+                        f"one plant in a border, so these are two different "
+                        f"plantings, and the map is the one somebody plants "
+                        f"from" + (f" — {named}" if named else ""))
+            else:
+                said = (f"the totals agree and the plants do not — {named}. A "
+                        f"total is the one thing two opposite errors in the "
+                        f"same bed will always agree on")
+            out.append(_obj("serious", f"zone {z}", said,
+                            "reconcile the two, then re-render with "
+                            "lib.drawbeds"))
+
+        # Names, reported from both ends at once, because they are one finding:
+        # a mark nothing answers to and a plant nothing draws are the same gap
+        # seen from either side. Aggregated per zone and per distinct label —
+        # one line per marker would be sixty lines saying one thing, which is
+        # how a check gets switched off.
+        # A declaration naming no record. Serious rather than a note, and this
+        # is the one place the check is stricter about a marked-up map than an
+        # unmarked one: an unresolved label is silence, and a `plant` key that
+        # matches nothing is a false statement that reads as verified.
+        if rec["misdeclared"]:
+            named = ", ".join(f"{lab!r} claims {name!r}"
+                              for lab, name in sorted(rec["misdeclared"].items()))
+            out.append(_obj("serious", f"zone {z}",
+                            f"{_n(len(rec['misdeclared']), 'mark')} on this map "
+                            f"declares a plant this zone's records do not hold "
+                            f"— {named}. A wrong declaration is worse than "
+                            f"none: it reads as reconciled",
+                            "correct the `plant` key to the record's exact "
+                            "`name`, or move the record into this zone"))
+
+        blind = sum(rec["unresolved"].values()) + sum(rec["ambiguous"].values())
+        if blind or rec["unmarked"]:
+            labels = ", ".join(
+                f"{lab!r}" + (f" x{n}" if n > 1 else "")
+                for lab, n in sorted(rec["unresolved"].items()))
+            amb = ", ".join(f"{lab!r}" for lab in sorted(rec["ambiguous"]))
+            missing = ", ".join(
+                f"{n}" + (f" x{c}" if c > 1 else "")
+                for n, c in sorted(rec["unmarked"]))
+            said = (f"{blind} of {rec['marks']} marks on this map name nothing "
+                    f"in the plant records"
+                    + (f" — {labels}" if labels else "")
+                    + (f"; ambiguous: {amb}" if amb else "")
+                    + (f". And {_n(len(rec['unmarked']), 'plant record')} "
+                       f"{'is' if len(rec['unmarked']) == 1 else 'are'} drawn "
+                       f"by no mark — {missing}" if rec["unmarked"] else "")
+                    + f". The counts still balance at "
+                      f"{rec['marks']} to {rec['plants']}, so this is not "
+                      f"evidence the map is wrong; it is the point past which "
+                      f"nothing can tell whether it is")
+            out.append(_obj("note", f"zone {z}", said,
+                            "put a `plant` key on each mark naming the record "
+                            "it draws, and `\"plant\": null` on anything that "
+                            "is deliberately not a plant"))
+
+    if fragments:
+        named = "; ".join(f"{lab!r} in {z} for {name}"
+                          for z, lab, name in fragments)
+        out.append(_obj("serious", "layout",
+                        f"a bed map labels a plant with part of its botanical "
+                        f"name rather than with a name — {named}. A genus is "
+                        f"not a plant: nobody can buy from this label, and "
+                        f"asking for it by the part that is written is how the "
+                        f"wrong species comes home",
+                        "label the mark with the record's own name, so the map "
+                        "and the shopping list say the same word"))
+    return out
+
+
 def check(slug, force=False):
     design = yards.load(slug, "design.json") or {}
     site = yards.load(slug, "site.json") or {}
@@ -841,6 +2254,7 @@ def check(slug, force=False):
     out += check_vision(design, vis)
     out += check_season(design, vis, site)
     out += check_grouping(design)
+    out += check_layout(design, site)
 
     rank = {"blocking": 0, "serious": 1, "note": 2}
     out.sort(key=lambda o: rank[o["level"]])
@@ -879,11 +2293,62 @@ def report(slug, force=False):
         print()
 
 
+def report_layout(slug):
+    """The bed maps beside the plant records, agreement included.
+
+    Printed whole rather than only where it disagrees, because two independent
+    representations that match is the only argument for keeping both, and an
+    agreement nobody prints is not evidence of one.
+    """
+    design = yards.load(slug, "design.json") or {}
+    site = yards.load(slug, "site.json") or {}
+    recs = reconcile_layout(design, site)
+    if not recs:
+        print(f"{slug} has no `layout` block to reconcile")
+        return
+    print(f"{slug} — bed maps against plant records\n")
+    for rec in recs:
+        unit = rec["unit"]
+        rule = ("one circle is one plant" if unit == "plant"
+                else "a square may hold several of one crop")
+        print(f"  {rec['bed'] or '(no map)'}  ->  {rec['zone']}  "
+              f"[{rec['kind']}, {rule}]")
+        print(f"      {rec['marks']} {unit}s on the map, "
+              f"{rec['plants']} plants on the list")
+        for name, marks, count in sorted(rec["matched"]):
+            bad = marks > count if unit == "square" else marks != count
+            flag = "  <-- differs" if bad else ""
+            print(f"        ok   {name:<44s} {marks} : {count}{flag}")
+        for name, count in sorted(rec["unmarked"]):
+            print(f"        ??   {name:<44s} on the list, drawn by nothing "
+                  f"(x{count})")
+        for label, n in sorted(rec["unresolved"].items()):
+            print(f"        ??   {label!r} x{n} on the map, naming nothing on "
+                  f"the list")
+        for label, name in sorted(rec["fragments"].items()):
+            print(f"        !!   {label!r} is part of the botanical name of "
+                  f"{name}, not a name")
+        for label in sorted(rec["ambiguous"]):
+            print(f"        ??   {label!r} could be more than one record")
+        for label, name in sorted(rec["misdeclared"].items()):
+            print(f"        !!   {label!r} declares {name!r}, which this zone's "
+                  f"records do not hold")
+        for label, n in sorted(rec["not_plants"].items()):
+            print(f"        --   {label!r} x{n} declared not a plant, so it is "
+                  f"not counted either way")
+        if rec["declared"]:
+            print(f"        {rec['declared']} of these marks say what they draw; "
+                  f"the rest are matched by their label alone")
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("slug")
     ap.add_argument("--init", action="store_true")
+    ap.add_argument("--layout", action="store_true",
+                    help="the bed maps against the plant records, per zone")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="check against a board with open doubts; the "
@@ -895,6 +2360,9 @@ def main():
             print(f"{args.slug} already has a design.json; not overwriting")
             return
         print(f"wrote {yards.save(args.slug, 'design.json', blank(args.slug))}")
+        return
+    if args.layout:
+        report_layout(args.slug)
         return
     if args.json:
         print(json.dumps(check(args.slug, force=args.force), indent=2))

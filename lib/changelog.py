@@ -86,7 +86,7 @@ REQUIRED = {
 # Reference material is deliberately absent — `research-plants.md` is long
 # because the plant list is long, and that is the right length for it.
 ACTION_DOCS = ("PLAN.md", "SCHEDULE.md", "SOWING-CALENDAR.md",
-               "SOURCING.md", "SITE-WALK.md", "CALENDAR.md")
+               "SOURCING.md", "SITE-WALK.md", "CALENDAR.md", "ANT-PLAN.md")
 
 # An action document past this is not read, it is skimmed, and skimming a
 # schedule is how a dated task gets missed. Advisory, and counted apart from the

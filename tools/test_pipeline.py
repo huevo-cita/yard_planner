@@ -78,11 +78,18 @@ SITE = {
     "label": "scratch",
     "boundary": {"points": [[0, 0], [40, 0], [40, 30], [0, 30]]},
     "zones": {
+        # Deep enough to hold the slate below, which is a fixture requirement
+        # that only became visible once anything checked it. These were 3.5 and
+        # 2.0 ft, against back rows of 3.0 and 1.8 ft standing in front of
+        # middle and front rows: 6.2 ft of ranks in 3.5 ft of bed, and 2.8 in
+        # 2.0. The fixture asserted the bug, so it read as a passing test of a
+        # yard that cannot be built. `shady_border` stays under 3.5 ft on
+        # purpose — `Too Wide` below is 3.5 and has to stay refusable.
         "sunny_border": {"x": [2, 22], "y": [2, 5], "area_sqft": 60.0,
-                         "kind": "border", "usable_depth_ft": 3.5,
+                         "kind": "border", "usable_depth_ft": 6.5,
                          "style": "bed"},
         "shady_border": {"x": [2, 14], "y": [24, 26], "area_sqft": 24.0,
-                         "kind": "border", "usable_depth_ft": 2.0,
+                         "kind": "border", "usable_depth_ft": 3.2,
                          "style": "bed"},
         "raised": {"x": [26, 34], "y": [10, 14], "area_sqft": 32.0,
                    "kind": "grid", "usable_depth_ft": 4.0, "style": "bed",
@@ -612,6 +619,49 @@ def run(root):
        f"reopened away from {was}, offered {again.get('recommended')}")
     ok("but it is still on the slate, in case they decide it was fine",
        any(c["name"] == was for c in again["candidates"]))
+
+    head("a canopy is judged against ground a canopy can occupy, roots "
+         "against soil")
+    # check_space sums mature SPREADS — canopy footprints — and used to compare
+    # them against zone_areas, which nets off the river rock. So a bed with a
+    # stone apron was called overplanted on the strength of its own hardscape,
+    # while `canopy_overhang_ft` was honoured on the depth arm and ignored on
+    # the area arm. Half the constraint used the allowance and half did not.
+    from lib import design
+    S = yards.load_site(SLUG)
+    z = S["zones"]["sunny_border"]
+    z["area_sqft"] = 40.0
+    z["unplantable_sqft"] = 14.0
+    z["usable_depth_ft"] = 2.2
+    soil, _ = design.zone_areas(S)["sunny_border"], None
+    ok("with no overhang declared, canopy room is just the soil",
+       design.zone_canopy_room(S, "sunny_border", soil) == (soil, 0.0),
+       design.zone_canopy_room(S, "sunny_border", soil))
+
+    z["canopy_overhang_ft"] = 1.2
+    room, allow = design.zone_canopy_room(S, "sunny_border", soil)
+    ok("declaring an overhang adds room, and never more than the apron there is",
+       room > soil and allow <= z["unplantable_sqft"],
+       f"soil {soil:.1f}, room {room:.1f}, allowance {allow:.1f}, "
+       f"apron {z['unplantable_sqft']}")
+
+    z["canopy_overhang_ft"] = 99.0
+    room2, allow2 = design.zone_canopy_room(S, "sunny_border", soil)
+    ok("an absurd overhang is capped at the apron, not extrapolated past it",
+       abs(allow2 - z["unplantable_sqft"]) < 1e-6,
+       f"allowance {allow2:.2f} against a {z['unplantable_sqft']} sq ft apron")
+
+    z["canopy_overhang_ft"] = 1.2
+    plants = [{"name": "wide thing", "zone": "sunny_border", "count": 6,
+               "mature_spread_ft": 3.0}]
+    says = " ".join(o["say"] for o in
+                    design.check_space({"plants": plants}, S, {}))
+    ok("a bed passing only on the allowance says so, and still reports the "
+       "ratio against soil alone",
+       "lean out over the apron" in says and "against soil alone" in says,
+       says or "(no objection raised at all)")
+    ok("and it names where the roots actually are",
+       "roots are all still" in says, says)
 
 
 if __name__ == "__main__":

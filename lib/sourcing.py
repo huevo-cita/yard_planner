@@ -36,6 +36,14 @@ and small at the same time. The ladder below always returns a figure, always
 says which rung it came off, and the total carries the firm and estimated parts
 separately.
 
+**A budget that quietly assumes a sale.** A members-only price is a real number
+and it is not one anybody can walk in and pay. Averaged into a median it made a
+whole class read cheaper than the shelf, and the only warning was a clause at
+the end of the basis. A quote carrying `conditional` now climbs no rung: the
+planning figure is the retail one, and the sale price comes back as `upside`
+beside it, named and priced, so a good morning at the nursery reads as money
+saved rather than as the plan finally working.
+
 The division of labour
 ----------------------
 Judgement about a nursery needs a person or an agent reading reviews and forum
@@ -784,14 +792,18 @@ def quotes_index(data, reaches=("local", "regional", "mail")):
     return out
 
 
+def _is_conditional(q):
+    """Is this a price somebody has to do something else first to get?"""
+    return bool((q.get("conditional") or "").strip())
+
+
 def _conditions(quotes):
     """What has to be true for these prices to be the prices you pay.
 
     A members-only sale price and a shelf price are not the same claim, and
     averaging them into a median that says neither is how a budget comes to
     quietly assume a $60 membership and a trip on one particular Friday. A
-    quote may carry `conditional`, a short phrase naming the condition; it
-    rides along into the basis so the line that rests on it says so."""
+    quote may carry `conditional`, a short phrase naming the condition."""
     seen = []
     for q in quotes:
         c = (q.get("conditional") or "").strip()
@@ -800,12 +812,37 @@ def _conditions(quotes):
     return seen
 
 
-def _with_conditions(out, quotes):
-    conds = _conditions(quotes)
-    if conds:
-        out["conditional"] = conds
-        out["basis"] += " — conditional on " + "; ".join(conds)
-    return out
+def _upside(planning_usd, hits, where):
+    """A conditional price that would beat the planning figure, and its condition.
+
+    Naming the condition in the basis was not enough. A budget still rested on
+    the sale, and the only warning was a clause at the end of a sentence nobody
+    reads twice — so the plan came in at a number that was only reachable if a
+    $60 membership was bought and one particular Friday morning went well.
+
+    So the planning figure is now the retail one and this is what the sale would
+    have made it. Deleting the sale price instead would be the other failure: a
+    good morning at the nursery would then read as the plan finally working
+    rather than as money saved, which is the difference between a windfall and a
+    dependency."""
+    if not hits or planning_usd is None:
+        return None
+    vals = sorted(float(q["usd"]) for _sup, q, _r in hits)
+    usd = statistics.median(vals)
+    if usd >= planning_usd:
+        return None
+    sup, q, _r = min(hits, key=lambda h: float(h[1]["usd"]))
+    conds = _conditions(q for _s, q, _r in hits)
+    return {"usd": round(usd, 2), "saves_usd": round(planning_usd - usd, 2),
+            "conditional": conds, "n": len(vals),
+            "supplier": sup.get("id"), "supplier_name": sup.get("name"),
+            "as_of": q.get("as_of"), "url": q.get("url"),
+            "basis": (f"{sup.get('name')} has it at ${vals[0]:,.2f}"
+                      + (f", and {len(vals) - 1} other conditional price"
+                         f"{'s' if len(vals) > 2 else ''} agree" if len(vals) > 1
+                         else "")
+                      + (f" ({where})" if where else "")
+                      + ", conditional on " + "; ".join(conds))}
 
 
 def _from_quotes(hits, order):
@@ -824,49 +861,57 @@ def _from_quotes(hits, order):
     if len(usds) == 1:
         out.update({"usd": round(usds[0], 2), "rung": "published",
                     "basis": f"quoted by {sup.get('name')}"})
-        return _with_conditions(out, [q])
+        return out
     out.update({"usd": round(statistics.median(usds), 2),
                 "rung": "local median",
                 "supplier_usd": round(float(q["usd"]), 2),
                 "basis": (f"median of {len(usds)} local quotes, "
                           f"${usds[0]:,.2f}–${usds[-1]:,.2f}; "
                           f"{sup.get('name')} wants ${float(q['usd']):,.2f}")})
-    return _with_conditions(out, [h[1] for h in hits])
+    return out
 
 
 def _quote_class(q, unit):
     return q.get("class") or item_class(q.get("item"), q.get("unit") or unit)
 
 
-def _from_class(item, unit, index):
-    """Nobody quotes this item, but its class is quoted.
+def _class_hits(item, unit, index, conditional, need=2):
+    """Every quote in this item's price class, and where they came from.
 
     Local and regional quotes first, because the point of the class median is
     that it is what this class costs *here*. A basket of mail-order prices is a
     different claim and is only used when there is nothing nearby to average."""
     want = item_class(item, unit)
     if want is None:
-        return None
+        return [], None, None
     near, anywhere = [], []
     for hits in index.values():
-        for _sup, q, reach in hits:
-            if _quote_class(q, unit) != want:
+        for sup, q, reach in hits:
+            if _quote_class(q, unit) != want or _is_conditional(q) != conditional:
                 continue
-            anywhere.append((float(q["usd"]), q))
+            anywhere.append((sup, q, reach))
             if reach in ("local", "regional"):
-                near.append((float(q["usd"]), q))
-    pairs, where = (near, "local") if len(near) >= 2 else (anywhere, "mail-order")
-    if len(pairs) < 2:
+                near.append((sup, q, reach))
+    got, where = ((near, "local") if len(near) >= need
+                  else (anywhere, "mail-order"))
+    return (got if len(got) >= need else []), where, want
+
+
+def _from_class(item, unit, index):
+    """Nobody quotes this item, but its class is quoted.
+
+    Only the unconditional quotes. A members-only sale price averaged in makes
+    the whole class read cheaper than anything a person can walk in and buy."""
+    hits, where, want = _class_hits(item, unit, index, conditional=False)
+    if not hits:
         return None
-    pairs.sort(key=lambda p: p[0])
-    vals = [v for v, _q in pairs]
-    out = {"usd": round(statistics.median(vals), 2),
-           "low": round(vals[0], 2), "high": round(vals[-1], 2),
-           "rung": "class median", "firm": False, "n": len(vals),
-           "supplier": None, "supplier_name": None, "as_of": None, "url": None,
-           "basis": (f"no quote for this item; median of {len(vals)} {where} "
-                     f"'{want}' prices, ${vals[0]:,.2f}–${vals[-1]:,.2f}")}
-    return _with_conditions(out, [q for _v, q in pairs])
+    vals = sorted(float(q["usd"]) for _sup, q, _r in hits)
+    return {"usd": round(statistics.median(vals), 2),
+            "low": round(vals[0], 2), "high": round(vals[-1], 2),
+            "rung": "class median", "firm": False, "n": len(vals),
+            "supplier": None, "supplier_name": None, "as_of": None, "url": None,
+            "basis": (f"no quote for this item; median of {len(vals)} {where} "
+                      f"'{want}' prices, ${vals[0]:,.2f}–${vals[-1]:,.2f}")}
 
 
 def _entries(defaults):
@@ -952,18 +997,38 @@ def price_for(item, unit, data=None, defaults=None, plant_defaults=None,
     Four rungs, and no fifth. The first two are published prices for the exact
     item and count as firm; the last two are derived and count as estimated.
     There is deliberately no rung that returns nothing, because the rung that
-    returned nothing is what used to make a line disappear from the total."""
+    returned nothing is what used to make a line disappear from the total.
+
+    A conditional quote climbs none of them. A members-only sale price is a real
+    number and it is not a price anybody can walk in and pay, so it cannot be
+    the figure a plan is built on — it comes back as `upside` beside the retail
+    figure it was not allowed to set."""
     data = data or {"suppliers": [], "radius": dict(DEFAULT_RADII)}
     index = quotes_index(data) if index is None else index
     order = order or {}
 
-    hits = index.get(_norm(item))
-    if hits:
-        return _from_quotes(hits, order)
-    got = _from_class(item, unit, index)
-    if got:
-        return got
-    return _from_national(item, unit, defaults, plant_defaults)
+    hits = index.get(_norm(item)) or []
+    plain = [h for h in hits if not _is_conditional(h[1])]
+    got = _from_quotes(plain, order) if plain else None
+    if got is None:
+        got = _from_class(item, unit, index)
+    if got is None:
+        got = _from_national(item, unit, defaults, plant_defaults)
+    if got is None:
+        return None
+
+    # The exact item's own sale price if it has one, and its class's only when
+    # it does not: a sale price quoted for this very thing is evidence about it,
+    # and one quoted for the class is a weaker claim that must not override it.
+    cheap = [h for h in hits if _is_conditional(h[1])]
+    where = None
+    if not cheap:
+        cheap, where, _want = _class_hits(item, unit, index, conditional=True,
+                                          need=1)
+    up = _upside(got.get("usd"), cheap, where)
+    if up:
+        got["upside"] = up
+    return got
 
 
 def rank_order(slug, today=None):

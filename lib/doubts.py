@@ -335,6 +335,39 @@ def _mutator(probe):
     return None
 
 
+def _unprobeable(site, probe):
+    """Why this probe cannot be measured by the shade model, or None.
+
+    `--price` answers one question — how far does the yard's LIGHT move across
+    the plausible range of this unknown — and it answers it by writing the value
+    into a copy of `site.json` and re-running the model. A probe naming a path
+    that is not in `site.json` is therefore not merely useless: `set_path`
+    creates the key, the model runs identically for every value in the range,
+    the spread comes back as 0.00 h/day, and the card settles itself
+    `probed-immaterial` carrying a measurement that never looked at the thing in
+    question. An unanswerable doubt would be closed by a number, with the number
+    on the record as the evidence.
+
+    This came up filing the imported soil's unmeasured pH. pH does not cast a
+    shadow; there is no honest probe for it, and the right answer is a card with
+    no probe rather than a probe that returns zero. But nothing stopped the
+    other one, so nothing was stopping it on any other yard either.
+    """
+    from . import siteschema
+    path = probe.get("path")
+    if not path:
+        return None
+    sentinel = object()
+    if siteschema.get_path(site, path, sentinel) is sentinel:
+        return (f"probe names {path}, which is not in site.json. The shade "
+                f"model would run unchanged across every value and report a "
+                f"spread of zero, settling this card on a measurement that "
+                f"never looked at it. Either the path is a typo, or this "
+                f"unknown is not one light can price and the card wants no "
+                f"probe at all")
+    return None
+
+
 def price(slug, settle_immaterial=True):
     """Probe every `fact` card that says how, and settle the ones that do not matter.
 
@@ -360,6 +393,10 @@ def price(slug, settle_immaterial=True):
         mutate = _mutator(probe)
         if mutate is None:
             results.append((c, None, "probe names neither a path nor a tree field"))
+            continue
+        unmeasurable = _unprobeable(site, probe)
+        if unmeasurable:
+            results.append((c, None, unmeasurable))
             continue
         spread = gaps.light_spread(site, mutate, probe["values"],
                                    zone=probe.get("zone"))
@@ -802,11 +839,39 @@ def renew_clearance(slug, jobs, entries=None, note=None):
     out = {}
     for job in jobs:
         plan = plans[job]
+        kept = _not_superseded(plan["carry"], entries, plan["soft"])
         written, _ = file_clearance(
-            slug, [job], plan["carry"] + entries,
+            slug, [job], kept + entries,
             note=note or plan["filed"].get("note"))
-        out[job] = dict(written[job], carried=len(plan["carry"]),
-                        answered=len(entries), moved=len(plan["moved"]))
+        out[job] = dict(written[job], carried=len(kept),
+                        answered=len(entries), moved=len(plan["moved"]),
+                        replaced=len(plan["carry"]) - len(kept))
+    return out
+
+
+def _not_superseded(carry, entries, soft):
+    """Carried lines that the command line has not already answered for.
+
+    A reason can go false without its value moving, which is the one kind of rot
+    the fingerprints cannot see: `features.trees.*.height` was accepted partly
+    because t11 "was confirmed by the owner", and then t11 was the tree the tape
+    caught out. Nothing moved — t11's height is still 600 in — so `--renew`
+    carries the sentence, and a `--because` aimed at the same glob used to be
+    filed *beside* it. The record then asserted two contradictory reasons for
+    the same thirteen values with no way to tell which was current, which is
+    worse than the stale sentence on its own.
+
+    So an explicit line replaces a carried one when it covers every path the
+    carried one did. Partial overlap is not enough: a line still speaking for
+    ground the new one does not reach is still the only thing speaking for it.
+    """
+    out = []
+    for e in carry:
+        touched = [s["path"] for s in soft if _covers(e, s["path"])]
+        if touched and all(any(_covers(n, p) for n in entries)
+                           for p in touched):
+            continue
+        out.append(e)
     return out
 
 
@@ -1400,7 +1465,9 @@ def main():
                 print(f"all-clear renewed for {job} on {args.slug} "
                       f"({w['carried']} line"
                       f"{'s' if w['carried'] != 1 else ''} carried forward, "
-                      f"{w['answered']} answered again, {len(w['covered'])} "
+                      f"{w['answered']} answered again, "
+                      + (f"{w['replaced']} replaced, " if w['replaced'] else "")
+                      + f"{len(w['covered'])} "
                       f"value{'s' if len(w['covered']) != 1 else ''} "
                       f"re-fingerprinted, digest {w['digest']})")
         else:

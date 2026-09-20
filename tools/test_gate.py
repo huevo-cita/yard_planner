@@ -644,6 +644,41 @@ def check_renewal(root):
            "" if ok else f"rc={rc} kept={kept} "
                          f"state={clearance_state(root, 'sunmodel')}\n{out}")
 
+    # A reason can go false while its value sits still, which the fingerprints
+    # cannot see. Answering for it again has to REPLACE the old sentence: two
+    # contradictory reasons for the same values, with nothing saying which is
+    # current, is worse than the stale one on its own.
+    reset_board(root)
+    file_allclear(root, "sunmodel", *THREE_LINES)
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew",
+                          "--because", "boundary.*=the parcel polygon was "
+                                       "superseded by the owner's tape")
+    on_record = entries_on_record(root, "sunmodel")
+    gone = not any(KEPT == (e.get("why") or "") for e in on_record)
+    fresh = sum(1 for e in on_record if "superseded by the owner" in
+                (e.get("why") or ""))
+    ok = rc == 0 and gone and fresh == 1 and \
+        clearance_state(root, "sunmodel") == "ok"
+    record("pass" if ok else "FAIL",
+           "answering again for a value that did not move replaces the old "
+           "reason rather than filing beside it",
+           "" if ok else f"rc={rc} old_gone={gone} new_copies={fresh} "
+                         f"state={clearance_state(root, 'sunmodel')}\n{out}")
+
+    # The other half of that: a carried line still speaking for ground the new
+    # one does not reach must survive, or replacing narrows the clearance.
+    reset_board(root)
+    file_allclear(root, "sunmodel", "*=one line covering the whole record")
+    rc, out, _ = doubtcmd(root, "--clear", "sunmodel", "--renew",
+                          "--because", "boundary.*=only the boundary, re-read")
+    on_record = entries_on_record(root, "sunmodel")
+    broad = any("whole record" in (e.get("why") or "") for e in on_record)
+    ok = rc == 0 and broad and clearance_state(root, "sunmodel") == "ok"
+    record("pass" if ok else "FAIL",
+           "a carried line covering more than the new one is not dropped by it",
+           "" if ok else f"rc={rc} broad_kept={broad} "
+                         f"state={clearance_state(root, 'sunmodel')}\n{out}")
+
     # A line can rot without its value moving.
     reset_board(root)
     file_card(root, "sunmodel", "is the west fence solid board?")
