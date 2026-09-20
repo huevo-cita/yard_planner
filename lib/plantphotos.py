@@ -289,8 +289,13 @@ def fetch(slug, species=None, pause=1.2):
             print(f"  FAIL  {binomial}: {exc}", file=sys.stderr)
             continue
 
-        # "Salvia rosmarinus" legitimately redirects to "Rosemary", so a
-        # redirect is allowed. Landing on a different binomial is not.
+        # A redirect out of the genus is refused, because that is how a
+        # photograph of a different plant gets in. A redirect inside the
+        # genus is kept: a binomial only redirects when it is not the
+        # accepted name, so "Yucca pendula" landing on "Yucca recurvifolia"
+        # is the same plant under the name the trade uses. The manifest
+        # records the article it landed on, and the card prints "Photographed
+        # as <name>", so the substitution is never silent.
         if title and " " in title and title != binomial \
                 and title.split()[0] != binomial.split()[0]:
             print(f"  SKIP  {binomial} -> {title}, not the same plant")

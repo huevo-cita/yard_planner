@@ -44,6 +44,7 @@ written and none of this touches personal data.
 """
 
 import argparse
+import datetime
 import json
 import os
 import shutil
@@ -624,6 +625,7 @@ S_TASKS = {
         {"id": "t102", "date": "2026-10-24", "minutes": 120, "kind": "plant",
          "title": "Plant bed a", "source": [], "done": False,
          "technique": "PLAN.md#1", "reference": "PLAN.md section 2",
+         "doubts": ["d01", "d02"],
          "where": {"bed": "bed a", "placements": [
              {"bed": "a", "at": "ft 1", "plant": "Gulf muhly, cedar sedge x2"},
              {"bed": "a", "at": "ft 6", "plant": "Texas sedge x2"},
@@ -632,8 +634,19 @@ S_TASKS = {
          "title": "Harvest the bed", "source": [], "done": False,
          "where": {"bed": "raised bed", "placements": [
              {"squares": ["1-1"], "plant": "Cut the mesclun"}]}},
+        {"id": "t104", "minutes": 10, "kind": "water", "source": [],
+         "title": "Water the new plants", "done": False,
+         "where": {"bed": "bed a"},
+         "repeat": {"from": "2026-10-19", "to": "2026-11-15", "every": "day"}},
     ],
 }
+
+S_DOUBTS = {"yard": SCREENS, "cards": [
+    {"id": "d01", "question": "Which Carex does the nursery actually stock?",
+     "status": "open", "blocks": ["design"], "effort": "one phone call"},
+    {"id": "d02", "question": "Is bed a in shade after noon?",
+     "status": "settled", "answer": "yes, from two o'clock"},
+]}
 
 
 def make_screens(root):
@@ -642,7 +655,7 @@ def make_screens(root):
     with open(os.path.join(d, "PLAN.md"), "w") as f:
         f.write(S_PLAN)
     for name, obj in (("design.json", S_DESIGN), ("sourcing.json", S_SOURCING),
-                      ("tasks.json", S_TASKS)):
+                      ("tasks.json", S_TASKS), ("doubts.json", S_DOUBTS)):
         with open(os.path.join(d, name), "w") as f:
             json.dump(obj, f, indent=2)
     return d
@@ -841,6 +854,44 @@ def check_pages(yard):
     ok('data-task="t102"' in tasks_page and 'data-task="t101"' in tasks_page,
        "a task carries its id as the checkbox key, so a tick means one thing")
 
+    # A link to a doubt is the one link nothing else proves, because the card
+    # it points at is written by a different module onto a different page.
+    ok('href="INDEX.html#d01"' in tasks_page,
+       "a job held up by a question links to the card")
+    ok('id="d01"' in index,
+       "and the index gives that card the anchor the link asks for")
+    ok('href="INDEX.html#d02"' not in tasks_page
+       and "settled question d02" in tasks_page,
+       "a card already settled is named rather than linked, because it has "
+       "left the index")
+
+
+def check_standing_ticks(yard):
+    """One standing job is one tick, on whichever day it is read.
+
+    A repeat draws a box on every day it asks for work, so the same job holds
+    several boxes on one page. Each carries the same id, which is what makes
+    the tick mean one thing when it comes home — and what makes ticking one
+    box leave its twins looking undone unless the script keeps them together.
+    """
+    from lib import week as W
+
+    monday = datetime.date(2026, 10, 19)
+    monday -= datetime.timedelta(days=monday.weekday())
+    page = W.render_week_html(SCREENS, monday, today=monday)
+    if not isinstance(page, str) or "<" not in page:
+        with open(os.path.join(yard, "WEEK.html"), encoding="utf-8") as fh:
+            page = fh.read()
+
+    boxes = page.count('data-task="t104"')
+    ok(boxes > 1, f"a daily job draws a box on each day it asks for work "
+                  f"(drew {boxes})")
+    ok("function twins(" in page and "twins(id).forEach" in page,
+       "and ticking one of them ticks the rest, rather than only the one "
+       "that was clicked")
+    ok("function each_job(" in page and "each_job(function" in page,
+       "the tally counts the job once, not once per day it lands on")
+
 
 def main():
     global verbose
@@ -891,6 +942,8 @@ def main():
         check_callcard(screens)
         print("\n the set of screens")
         check_pages(screens)
+        print("\n one standing job, one tick")
+        check_standing_ticks(screens)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

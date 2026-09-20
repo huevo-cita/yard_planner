@@ -1364,6 +1364,7 @@ figure.shot figcaption b { display:block; color:var(--ink); font-size:.74rem; }
 
 .more a { display:inline-block; margin:.15em .5em .15em 0; font-size:.88rem; }
 .more .dead { color:var(--warnline); font-size:.82rem; }
+.more .settled { color:var(--muted); font-size:.82rem; margin-right:.5em; }
 
 section.maps figure { margin:1em 0; border:1px solid var(--rule);
   border-radius:8px; overflow:hidden; scroll-margin-top:5.5rem; }
@@ -1467,8 +1468,7 @@ def _task_article(t, root, maps, link_images):
         if l["url"]:
             more.append(f'<a href="{e(l["url"])}">{e(l["label"])}</a>')
         elif l["kind"] == "doubt":
-            more.append(f'<a href="INDEX.html#{e(l["ref"])}">'
-                        f'open question {e(l["ref"])}</a>')
+            more.append(f'<span class="settled">{e(l["label"])}</span>')
         else:
             more.append(f'<span class="dead">{e(l["error"] or l["ref"])}</span>')
     if more:

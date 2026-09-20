@@ -102,7 +102,7 @@ def documents(slug):
     return out
 
 
-def task_links(root, task):
+def task_links(root, task, open_doubts=()):
     """Everywhere a task points, as URLs into the published set.
 
     The order is the order somebody in the garden wants them: how to do it,
@@ -131,8 +131,15 @@ def task_links(root, task):
         out.append({"kind": "changelog", "ref": c,
                     "url": f"CHANGELOG.html#{c}", "label": c,
                     "section": None, "error": None})
+    # Only an open card is on the index, so only an open card gets a link.
+    # A settled one still names itself, because a job that was held up by a
+    # question is worth knowing about after the question is answered.
     for d in task.get("doubts", []) or []:
-        out.append({"kind": "doubt", "ref": d, "url": None, "label": d,
+        live = d in open_doubts
+        out.append({"kind": "doubt", "ref": d,
+                    "url": f"INDEX.html#{d}" if live else None,
+                    "label": (f"open question {d}" if live
+                              else f"settled question {d}"),
                     "section": None, "error": None})
     return out
 
@@ -164,6 +171,8 @@ def build(slug):
     idx = plants.index(design)
     creds = plants.credits(slug)
     shops = {s["id"]: s for s in sourcing.get("suppliers", [])}
+    open_doubts = {c["id"] for c in doubts_doc.get("cards", [])
+                   if c.get("status") == "open"}
 
     out_tasks = []
     for t in tasks_doc.get("tasks", []):
@@ -179,7 +188,7 @@ def build(slug):
             t,
             anchor=t["id"],
             when=when_of(t),
-            links=task_links(root, t),
+            links=task_links(root, t, open_doubts),
             placements=rows,
             photos=shots,
         ))

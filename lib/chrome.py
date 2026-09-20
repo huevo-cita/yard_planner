@@ -123,12 +123,30 @@ def ticks_js(slug):
   function holder(b) { return b.closest('article.task, details.job') || b; }
   function paint(b) { holder(b).classList.toggle('ticked', b.checked); }
 
+  // A standing job draws a box on every day it asks for work, so the same
+  // task id appears several times on one page. Count each job once.
+  function each_job(fn) {
+    var seen = {};
+    boxes.forEach(function (b) {
+      if (seen[b.dataset.task]) return;
+      seen[b.dataset.task] = 1;
+      fn(b);
+    });
+  }
+
+  function twins(id) {
+    return boxes.filter(function (b) { return b.dataset.task === id; });
+  }
+
   function tally() {
-    var on = boxes.filter(function (b) { return b.checked; }).length;
-    var moved = boxes.filter(function (b) {
-      return b.checked !== (b.dataset.filed === '1'); }).length;
+    var total = 0, on = 0, moved = 0;
+    each_job(function (b) {
+      total++;
+      if (b.checked) on++;
+      if (b.checked !== (b.dataset.filed === '1')) moved++;
+    });
     var el = document.getElementById('tally');
-    if (el) el.innerHTML = '<b>' + on + '</b> of ' + boxes.length + ' done' +
+    if (el) el.innerHTML = '<b>' + on + '</b> of ' + total + ' done' +
       (moved ? ' \\u00b7 ' + moved + ' changed since the file' : '');
   }
 
@@ -140,7 +158,8 @@ def ticks_js(slug):
     b.addEventListener('change', function () {
       store[id] = b.checked;
       localStorage.setItem(KEY, JSON.stringify(store));
-      paint(b); tally();
+      twins(id).forEach(function (o) { o.checked = b.checked; paint(o); });
+      tally();
     });
     paint(b);
   });
@@ -149,10 +168,8 @@ def ticks_js(slug):
   var out = document.getElementById('dump');
   var copy = document.getElementById('copy');
   if (copy) copy.addEventListener('click', function () {
-    var seen = {}, lines = [];
-    boxes.forEach(function (b) {
-      if (seen[b.dataset.task]) return;
-      seen[b.dataset.task] = 1;
+    var lines = [];
+    each_job(function (b) {
       lines.push('- [' + (b.checked ? 'x' : ' ') + '] **' +
                  b.dataset.title + '**');
     });

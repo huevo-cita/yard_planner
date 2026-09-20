@@ -158,8 +158,11 @@ def render_index(slug, data=None, today=None):
 
     doubts = ""
     if data["doubts"]:
+        # The id is the anchor a task page links to, so a doubt cited from a
+        # job lands on the card rather than at the top of the page.
         items = "".join(
-            f'<li><code>{_e(c["id"])}</code> {_e(c["question"])}'
+            f'<li id="{_e(c["id"])}"><code>{_e(c["id"])}</code> '
+            f'{_e(c["question"])}'
             f'<span>Blocks {_e(", ".join(c.get("blocks") or ["nothing"]))}'
             f' &middot; {_e(c.get("effort") or "effort not recorded")}</span>'
             f"</li>" for c in data["doubts"])
