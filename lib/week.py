@@ -1363,10 +1363,13 @@ def _week_body(slug, data, cond, monday, root, target=None, note=None):
     tag = (f'<p class="tagline">Beyond the plan, which runs to '
            f'{_runs_to(target, note)}.</p>') if beyond else ""
 
+    # Jobs in all counts the loose ones too. A week whose only work sits in a
+    # window used to read "0 jobs in all" above two jobs, and the strip is the
+    # first thing anybody reads. This is the count the spine carries.
     stats = [(hours(s["fixed"]), "dated work"),
              (hours(s["standing"]) if s["standing"] else "none",
               "standing jobs"),
-             (str(s["jobs"]), "jobs in all"),
+             (str(s["jobs"] + len(loose)), "jobs in all"),
              (f"{s['busiest']:%a}" if s["busiest"] else "\u2014",
               "busiest day")]
     if s["buys"]:
@@ -1390,6 +1393,12 @@ def _week_body(slug, data, cond, monday, root, target=None, note=None):
         gist.append(f"<p>{hours(s['standing'])} of that is standing jobs "
                     f"&mdash; watering and the like, a few minutes at a time, "
                     f"shown on each day they fall on.</p>")
+    if loose:
+        many = len(loose) > 1
+        gist.append(f"<p>{len(loose)} job{'s' if many else ''} "
+                    f"{'have' if many else 'has'} a window rather than a day, "
+                    f"and {'they are' if many else 'it is'} under "
+                    f"&ldquo;any day this week&rdquo; below.</p>")
     if not gist:
         gist.append("<p>A quiet week. Nothing on it cannot move.</p>")
 
@@ -1481,7 +1490,7 @@ WEEK_JS = """
   var prev = document.getElementById('prevwk');
   var next = document.getElementById('nextwk');
   var strip = document.getElementById('density');
-  var index = {}, at = -1;
+  var index = {}, at = -1, moved = false;
   weeks.forEach(function (s, i) { index[s.id] = i; });
 
   function bars() {
@@ -1518,8 +1527,12 @@ WEEK_JS = """
     // Scrolled by hand rather than with scrollIntoView, which also scrolls
     // the page and throws the reader to the top of the strip on load.
     if (here) strip.scrollLeft = here.offsetLeft - strip.clientWidth / 2;
+    window.scrollTo(0, 0);
     if (window.yardTally) window.yardTally();
-    if (window.history && history.replaceState)
+    // Only once the reader has moved. Writing the week into the address on
+    // the way in gives the browser a section to scroll to when loading ends,
+    // which pushes the week's own heading off the top of the screen.
+    if (moved && window.history && history.replaceState)
       history.replaceState(null, '', '#' + id);
   }
 
@@ -1603,6 +1616,12 @@ WEEK_JS = """
   var i = from_hash();
   mark_today();
   if (i >= 0) show(i); else now();
+  moved = true;
+
+  // A week arrived at by its id is still scrolled to by the browser when
+  // loading ends. The week is chosen rather than scrolled to, so the page
+  // belongs at the top. This runs after that scroll, not before it.
+  window.addEventListener('load', function () { window.scrollTo(0, 0); });
 })();
 """
 

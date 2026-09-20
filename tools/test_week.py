@@ -1177,6 +1177,13 @@ def check_week_navigation(yard):
     ok("scrollIntoView(" not in page and "strip.scrollLeft" in page,
        "the strip is scrolled sideways by hand, so the page itself stays put")
 
+    # A week is chosen by its id. Leaving that id in the address on the way in
+    # makes the browser scroll to the section when loading ends, which puts
+    # the week's own heading off the top of the screen.
+    ok("if (moved && window.history" in page
+       and "window.scrollTo(0, 0)" in page,
+       "arriving at a week starts at the top of it, not part way down")
+
 
 def check_calendar_rows_open_their_week(yard):
     """The year view is the map, and every row is the way into the detail."""
