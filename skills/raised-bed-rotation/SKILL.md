@@ -138,23 +138,28 @@ what happens on a day across the whole yard, so the bed's dates sit in it beside
 the garden-wide ones and one document can show a week entire:
 
 ```bash
-python3 -m lib.week <slug> --calendar    # -> CALENDAR.md
+python3 -m lib.site <slug>               # every page, linked into one set
 python3 -m lib.week <slug>               # this week, to the terminal
 python3 -m lib.week <slug> --check       # has the prose drifted from the file
+python3 -m lib.week <slug> --links       # does every reference still land
 ```
 
 Put the square ids in `where.squares` and the multi-square plantings in
-`where.placements`, so the calendar can print what goes where without the reader
+`where.placements`, so the pages can print what goes where without the reader
 opening the bed map. Cite the section of `SOWING-CALENDAR.md` each task came from
 in `source`; `tasks.json` digests those sections, so a date later changed in the
 prose and not here is caught rather than silently disagreeing. The schema is in
 [AGENTS.md](../../AGENTS.md), under "A date goes in tasks.json".
 
+Write a task's `technique` as `SOWING-CALENDAR.md#8`, never as prose, because
+every page turns it into a link to that heading — and never copy the technique
+into the task. The method stays in the one document that holds it.
+
 ## Step 7: Write the calendar document
 
 A sowing calendar is a dated document with its own budget — `SOWING-CALENDAR.md`,
 not a section bolted onto `PLAN.md`, and the plan should say only that the dates
-live there. It opens with a line pointing at `CALENDAR.md` for the week in hand,
+live there. It opens with a line pointing at `WEEK.html` for the week in hand,
 because this document is where the soil-temperature gates, the days-to-maturity
 arithmetic and the technique live, and the calendar is where the instruction
 lives. It is held to the same contract as the plan: sowing dates, transplant

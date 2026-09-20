@@ -436,13 +436,14 @@ and address and is keyed to no date at all. Each document is coherent. Answering
 the question means opening three of them and holding a shopping list beside a
 supplier list beside a bed map.
 
-So a yard keeps its dated actions in `tasks.json`, and `CALENDAR.md` is generated
-from it:
+So a yard keeps its dated actions in `tasks.json`, and every screen is
+generated from it:
 
 ```bash
 python3 -m lib.week <slug>                  # this week, one screen
 python3 -m lib.week <slug> --shop 3         # the next three weeks, by supplier
-python3 -m lib.week <slug> --calendar       # -> CALENDAR.md
+python3 -m lib.site <slug>                  # every page, linked into one set
+python3 -m lib.week <slug> --calendar       # -> CALENDAR.md, for the Google Doc
 ```
 
 The failure is a date, a duration, a planting position or a purchase written into
@@ -480,6 +481,36 @@ a standing job. Where the date was chosen rather than stated in the source, say
 so with `date_inferred` and a `date_note` giving where it came from — the check
 below trusts that flag and it is the only thing keeping it honest.
 
+## A reference is a link, and a page never copies prose
+
+`technique`, `reference` and `source` become real links on every screen that
+shows the task, so each one names a heading a program can find:
+
+```json
+"technique": "SOWING-CALENDAR.md#8",
+"reference": "research-irrigation.md#one-hydraulic-zone"
+```
+
+`"research-irrigation.md section 1"` is the same fact written where nothing
+can act on it, which is the bug this whole file is about. The anchor is a
+section number, or words from the heading where two headings share a number.
+
+```bash
+python3 -m lib.links <slug>               # every anchor a page can link into
+python3 -m lib.week <slug> --links        # references that land nowhere
+python3 -m lib.plants <slug> --match      # which plant each placement names
+```
+
+**Do not copy the prose into the page.** A task page that inlines the sowing
+technique puts that method in two files, and the day one is corrected the
+other is a trap with no way for a reader to tell which they are holding. The
+task links to the section; the section stays where it is.
+
+`--links` also reports a planting position naming a plant `design.json` does
+not hold, which is how a stale "Texas sedge" was found sitting in a task the
+design had already moved off [c308]. A raised-bed line addressed by `squares`
+is exempt: "Cut the mesclun" is a job, not a purchase.
+
 ## Two checks, because they catch different things
 
 `tasks.json` records a digest of every section it was extracted from. Edit one
@@ -501,10 +532,21 @@ with what it came past, and `.cursor/hooks/plan-prose.sh` runs `--check` the
 moment a plan document is written, so the disagreement surfaces while the reason
 for it is still to hand.
 
-## Publishing, and why it is a cycle
+## Publishing: one set of screens, and one Google Doc
 
-The calendar goes to one Google Doc with tickable checkboxes. Regenerating the
-body would wipe the ticks, so read them first:
+`python3 -m lib.site <slug>` builds the whole set — every markdown document,
+then `bundle.json`, then `WEEK.html`, `TASKS.html`, `CALENDAR.html`,
+`CALL-CARD.html` and `INDEX.html`. Each page carries the same bar, so any of
+them reaches all of them, and each renders from the bundle rather than from
+the raw files, so two of them cannot disagree about a date. Send `INDEX.html`.
+
+Ticks live in the HTML, kept in `localStorage` for that yard, with a
+copy-the-done-list control whose output `--sync` reads. `tasks.json` stays the
+record; the browser only holds what has not been folded back yet.
+
+The Google Doc is a separate path and still works. `CALENDAR.md` is no longer
+a document anybody reads — it is the intermediate that feeds it. Regenerating
+the Doc body would wipe its ticks, so read them first:
 
 ```bash
 # 1  gdrive downloadFile(fileId=..., exportMimeType='text/markdown')
