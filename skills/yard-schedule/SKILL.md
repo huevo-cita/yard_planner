@@ -344,6 +344,26 @@ That converts each markdown document, writes `bundle.json`, and renders
 `INDEX.html`. Every page carries the same bar, so any of them reaches all of
 them. Send the person `INDEX.html`.
 
+`WEEK.html` carries every week of the plan and shows the one the device clock
+asks for, so the page on a phone is right on any day it is opened, offline.
+Previous, next and "this week" move between weeks, and so do the arrow keys
+and a swipe. A week is addressed by its Monday, as `WEEK.html#w2026-09-14`,
+which is what each row of `CALENDAR.html` links to.
+
+Three things this asks of the record.
+
+- **Set `target_date` in `tasks.json`.** An empty week before it says nothing
+  is planned that week. An empty week after it says the plan stops there, and
+  names the next dated job. Without the date neither sentence can be written,
+  and a blank week reads as a finished week.
+- **Bound every repeat with an end date.** A repeat with no end writes a line
+  into every week the calendar renders, which on a two-year plan is 129 of
+  them.
+- **Build the set again after any change to `tasks.json`.** The week rolls
+  over by itself; the jobs, dates and prices do not. Each page shows a banner
+  when its build is more than a fortnight old, which is a net rather than a
+  substitute for building it.
+
 Fetch the plant photographs once per yard, because it needs the network:
 
 ```bash

@@ -151,6 +151,25 @@ asks for work, rather than in a list of repeats under the days, because
 checkboxes tick, and `--sync` reads the ticks back, so the file also becomes the
 record of what was actually done.
 
+**And the week rolls over by itself.** The page used to bake one Monday at
+build time, so the phone it was read on said the same seven days until
+somebody remembered to rebuild it, and said nothing about being out of date.
+Now every week of the plan travels in the file and the device clock picks one,
+which makes the page right on any day it is opened, offline. Previous, next
+and "this week" move between them; so do the arrow keys and a swipe. A week is
+addressed by its Monday — `WEEK.html#w2026-09-14` — and that is what each row
+of `CALENDAR.html` links to, so the year view is the map and the week view is
+the detail. A strip of hours per week across the whole plan gives the paging
+somewhere to aim.
+
+Two honest labels come with it. An empty week before the target date says
+nothing is planned that week and means it; an empty week after it says the
+plan stops there, names the date it runs to, and names the next dated job with
+a link — otherwise the five jobs past the target sit behind two years of blank
+weeks that read like finished ones. And because the week rolls over while the
+data does not, every generated screen shows a banner once its build is over a
+fortnight old, naming the command that refreshes it.
+
 **One navigable set of screens, not a folder of loose pages.** A yard used to
 publish a dozen unrelated HTML files: you opened one, read it, and had no way
 to reach the others. `yard site <slug>` builds them as a set. Every page
@@ -258,7 +277,7 @@ yard bom      <slug>              # bill of materials, netted against what is he
 yard bom      <slug> --price-gaps # the estimated lines, by dollars at risk
 yard schedule <slug>              # the weekend plan, back-planned from the date
 yard week     <slug>              # what to do this week, on one screen
-yard week     <slug> --html       # Mon-Sun, hours per day, detail on a click -> WEEK.html
+yard week     <slug> --html       # every week, the clock picks one -> WEEK.html
 yard week     <slug> --calendar   # every week to the target date -> CALENDAR.md
 yard week     <slug> --shop 3     # the next three weeks of buying, by supplier
 yard week     <slug> --check      # has the plan drifted from the dated actions
@@ -393,8 +412,9 @@ The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else.
 
 The screens are generated and are read as HTML: `INDEX.html` is the front
-door, `WEEK.html` is the seven days in front of you, `TASKS.html` holds every
-job at its own address, `CALENDAR.html` is the year one line per week, and
+door, `WEEK.html` is the seven days in front of you and every other week of
+the plan behind them, `TASKS.html` holds every job at its own address,
+`CALENDAR.html` is the year one line per week, and
 `CALL-CARD.html` is the nursery call. All five come out of `bundle.json`,
 which is itself derived — delete it and rebuild. `CALENDAR.md` is no longer a
 document anybody reads; it stays as the intermediate that `--publish` turns

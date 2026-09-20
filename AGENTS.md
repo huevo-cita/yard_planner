@@ -540,6 +540,25 @@ then `bundle.json`, then `WEEK.html`, `TASKS.html`, `CALENDAR.html`,
 them reaches all of them, and each renders from the bundle rather than from
 the raw files, so two of them cannot disagree about a date. Send `INDEX.html`.
 
+`WEEK.html` holds every week of the plan and shows the one the device clock
+asks for. It is therefore right on any day it is opened, offline, with no
+rebuild. A week is addressed by its Monday, as `WEEK.html#w2026-09-14`. That
+id is in `bundle.json` under `weeks`, it is what a calendar row links to, and
+it is the form to use anywhere a week needs naming.
+
+Two things follow for the record rather than for the code.
+
+- **`tasks.json` needs `target_date`.** It is what tells an empty week which
+  kind of empty it is. Before that date an empty week says nothing is planned
+  and means it. After it the week says the plan stops there, and names the
+  next dated job with a link to it. Without the date, neither sentence can be
+  written, and a blank week reads as a finished week.
+- **Build the set again after any change to `tasks.json`.** The week rolls
+  over by itself; the jobs, the dates and the prices in it do not. Every
+  generated screen shows a banner when its build is more than
+  `chrome.STALE_DAYS` days old, which is the net under that, not a substitute
+  for building it.
+
 Ticks live in the HTML, kept in `localStorage` for that yard, with a
 copy-the-done-list control whose output `--sync` reads. `tasks.json` stays the
 record; the browser only holds what has not been folded back yet.
