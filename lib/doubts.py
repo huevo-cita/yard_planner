@@ -116,6 +116,7 @@ SETTLED_BY = {
     "measured": "someone went and measured it",
     "probed-immaterial": "the model was re-run across the range and barely moved",
     "decided": "a person chose",
+    "deferred": "a person declined to choose and took the recommendation",
     "accepted": "a person accepted the risk in writing",
     "waived": "set aside deliberately, with a reason",
 }
@@ -227,6 +228,40 @@ def waive(slug, card_id, reason):
         raise SystemExit(f"{slug} has no doubt {card_id!r}")
     c.update({"status": "waived", "answer": reason, "settled_on": TODAY,
               "settled_by": "waived"})
+    yards.save(slug, "doubts.json", board)
+    return c
+
+
+def reopen(slug, card_id, reason):
+    """Put a settled card back in play, keeping what it used to say.
+
+    A changed mind is not a mistake and must not read like one, so the previous
+    answer is kept in a `reopened` trail rather than overwritten — otherwise
+    the question *what did we decide last time, and why did we move off it* has
+    no answer, and it is the first thing anyone asks.
+
+    The reason is required for the same reason a waive needs one: without it
+    this is just a way of clearing a decision, and a board where anything can be
+    silently un-decided is not a record of anything.
+    """
+    if not (reason or "").strip():
+        raise SystemExit(
+            "reopening a decision requires a reason. Six months from now the "
+            "question is not what it says, it is why it changed")
+    board = load(slug)
+    c = find(board, card_id)
+    if c is None:
+        raise SystemExit(f"{slug} has no doubt {card_id!r}")
+    if c.get("status") == "open":
+        raise SystemExit(f"{card_id} is already open")
+    c.setdefault("reopened", []).append({
+        "on": TODAY, "reason": reason,
+        "was": c.get("answer"), "was_settled_by": c.get("settled_by"),
+        "was_settled_on": c.get("settled_on"),
+    })
+    for gone in ("answer", "settled_on", "settled_by"):
+        c.pop(gone, None)
+    c["status"] = "open"
     yards.save(slug, "doubts.json", board)
     return c
 
