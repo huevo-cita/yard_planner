@@ -56,6 +56,12 @@
 !docs/
 !docs/**
 
+# Regional plant catalogs. A catalog holds plant facts and nothing else — no
+# address, no coordinate, no yard — so it is shared by every yard in its region
+# and is safe on a public remote. `yard scrub` still reads it.
+!catalog/
+!catalog/**
+
 # Encrypted bundles only. The plaintext tarball never gets added.
 # manifest.json is safe: dates and sizes, no street and no coordinate.
 !vault/

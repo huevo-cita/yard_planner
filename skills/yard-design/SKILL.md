@@ -150,6 +150,18 @@ Then Step 3 below has most of `plants[]` already written, and `check_space` and
 `check_grouping` pass by construction rather than by luck — the slot budgets
 come from the same band those checks enforce.
 
+Read `vision.json` before you arrange a bed. When the vision names wildlife,
+that ask outranks a color theme. Keep nectar through the growing season and
+at least one larval host. Where two plants both fit, the one with nectar or a
+host wins. Do not guess a species the record has not named. December annuals
+are makeup for the party date. They are not the planting. The party date does
+not replace the October bloom.
+
+Then arrange what remains. Put structure first, then the anchors, then the
+masses. Put the tall plants at the wall and the short plants at the front.
+On a wildlife bed, use several species so the bloom is staggered. Keep two or
+three flower colors inside that set. Repeat one plant from bed to bed.
+
 Two things worth knowing before relying on it:
 
 - **Every candidate is checked before it reaches the ballot**, against the same

@@ -1719,6 +1719,110 @@ def _target_month(target):
     return datetime.date.fromisoformat(hit.group(0)).strftime("%b")
 
 
+def _beds(design):
+    """Ornamental border beds. The raised bed and the barrels stay out."""
+    out = {}
+    for plant in design.get("plants") or []:
+        zone = str(plant.get("zone") or "")
+        if not zone.startswith("bed_g"):
+            continue
+        out.setdefault(zone, []).append(plant)
+    return out
+
+
+def _asks_wildlife(vision):
+    """True when the vision names butterflies, frogs, or wildlife."""
+    blob = json.dumps(vision or {}).lower()
+    keys = ("butterfl", "wildlife", "pollinator", "frog")
+    return any(word in blob for word in keys)
+
+
+def _catalog_index():
+    """Catalog records by botanical name, and by common name, longest first."""
+    from . import fits
+    by_botanical = {}
+    by_name = []
+    for catalog in fits.catalogs().values():
+        for record in catalog.get("plants") or []:
+            botanical = (record.get("botanical") or "").lower()
+            if botanical:
+                by_botanical[botanical] = record
+            for name in record.get("names") or []:
+                by_name.append((name.lower(), record))
+    by_name.sort(key=lambda pair: len(pair[0]), reverse=True)
+    return by_botanical, by_name
+
+
+def _match_record(plant):
+    """The catalog record for this plant, when one record is the clear match.
+
+    A botanical name that names two species returns the shared wildlife
+    fields only. It does not pick a flower color.
+    """
+    by_botanical, by_name = _catalog_index()
+    botanical = (plant.get("botanical") or "").strip().lower()
+    if botanical in by_botanical:
+        return by_botanical[botanical]
+    if "tuberosa" in botanical and "asperula" in botanical:
+        orange = by_botanical.get("asclepias tuberosa") or {}
+        green = by_botanical.get("asclepias asperula") or {}
+        if orange.get("nectar") == green.get("nectar") and orange.get("host") == green.get("host"):
+            return {"nectar": orange.get("nectar"), "host": orange.get("host"),
+                    "wildlife_source": orange.get("wildlife_source")}
+        return None
+    label = (plant.get("name") or "").lower()
+    for name, record in by_name:
+        if name and name in label:
+            return record
+    hits = [record for key, record in by_botanical.items()
+            if key and key in botanical]
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def _field(plant, key):
+    """A wildlife or look field on the plant, else the catalog record."""
+    if key in plant:
+        return plant.get(key)
+    record = _match_record(plant)
+    if record and key in record:
+        return record.get(key)
+    return None
+
+
+def _is_structure(plant):
+    role = (plant.get("role") or "").lower()
+    return "structure" in role or plant.get("layer") == "vine"
+
+
+def _is_makeup(plant):
+    """Cool-season color for one date. It is not the wildlife planting."""
+    return "december" in (plant.get("role") or "").lower()
+
+
+def _layer_exempt(plant):
+    if plant.get("layer") == "vine":
+        return True
+    return (plant.get("role") or "") in (
+        "specimen", "tree", "structure", "existing")
+
+
+def _band(height):
+    """0 ground, 1 foreground, 2 midground, 3 background."""
+    try:
+        feet = float(height)
+    except (TypeError, ValueError):
+        return None
+    if feet < 0.5:
+        return 0
+    if feet <= 2.0:
+        return 1
+    if feet <= 5.0:
+        return 2
+    return 3
+
+
 def check_season(design, vision, site):
     """Whether anything is happening on the date it has to be right by."""
     out = []
@@ -1757,6 +1861,19 @@ def check_season(design, vision, site):
                         f"abandoned rather than dormant",
                         "a spine of evergreen shrubs or aromatic mounds among "
                         "the perennials, not instead of them"))
+
+    for zone, plants in _beds(design).items():
+        gaps = []
+        for month in MONTHS:
+            blooming = any(month in (plant.get("bloom") or []) for plant in plants)
+            evergreen = any(plant.get("evergreen") for plant in plants)
+            if not blooming and not evergreen:
+                gaps.append(month)
+        if gaps:
+            out.append(_obj(
+                "note", "season",
+                f"{zone} has no bloom and no evergreen in {', '.join(gaps)}.",
+                "add a plant that is visible in that month"))
     return out
 
 
@@ -1772,6 +1889,161 @@ def check_grouping(design):
                         f"planting",
                         "groups of three or five of the same thing, and repeat "
                         "the group along the bed"))
+    short = []
+    for plant in design.get("plants") or []:
+        height = plant.get("mature_height_ft")
+        if plant.get("count") != 1 or _layer_exempt(plant):
+            continue
+        if height is None or float(height) >= 2:
+            continue
+        short.append(plant.get("name") or "a plant")
+    if short:
+        out.append(_obj(
+            "note", "layout",
+            f"{len(short)} short plants stand alone: {', '.join(short[:6])}.",
+            "plant a short plant in a group of three or five"))
+    beds = _beds(design)
+    if len(beds) >= 2:
+        seen = {}
+        for zone, plants in beds.items():
+            for plant in plants:
+                seen.setdefault(plant.get("name"), set()).add(zone)
+        if not any(len(zones) >= 2 for zones in seen.values()):
+            out.append(_obj(
+                "note", "layout",
+                "no plant repeats from one bed to the next.",
+                "repeat one plant so the beds read as one garden"))
+    return out
+
+
+def check_wildlife(design, vision):
+    """Nectar through the growing season, and a larval host, per bed.
+
+    The check runs only when the vision asks for wildlife. A color theme
+    does not replace a nectar plant or a host. Structure and December
+    makeup do not count as the nectar spine.
+    """
+    out = []
+    if not _asks_wildlife(vision):
+        return out
+    for zone, plants in _beds(design).items():
+        gaps = []
+        hosts = []
+        missing = []
+        for plant in plants:
+            if _field(plant, "host"):
+                hosts.append(plant.get("name") or "a plant")
+            if (_field(plant, "nectar") is None and _field(plant, "host") is None
+                    and not _is_structure(plant) and not _is_makeup(plant)):
+                missing.append(plant.get("name") or "a plant")
+        for month in DEFAULT_LIGHT_MONTHS:
+            fed = False
+            for plant in plants:
+                if _is_structure(plant) or _is_makeup(plant):
+                    continue
+                if _field(plant, "nectar") is not True:
+                    continue
+                if month in (plant.get("bloom") or []):
+                    fed = True
+                    break
+            if not fed:
+                gaps.append(month)
+        if gaps:
+            out.append(_obj(
+                "serious", "wildlife",
+                f"{zone} has no nectar plant in {', '.join(gaps)}.",
+                "keep a nectar plant that blooms in the open month"))
+        if not hosts:
+            out.append(_obj(
+                "serious", "wildlife",
+                f"{zone} has no larval host on record.",
+                "keep a host plant in the bed. Do not guess an unnamed species"))
+        if missing:
+            names = ", ".join(sorted(set(missing))[:6])
+            out.append(_obj(
+                "note", "wildlife",
+                f"{zone} has no nectar or host on record for {names}.",
+                "set nectar and host on the catalog record, with a source"))
+    return out
+
+
+def check_layers(design):
+    """The front row is shorter than the row against the wall."""
+    out = []
+    for zone, plants in _beds(design).items():
+        placed = [plant for plant in plants if not _layer_exempt(plant)]
+        front = [plant for plant in placed if plant.get("layer") == "front"]
+        behind = [plant for plant in placed
+                  if plant.get("layer") in ("back", "middle")]
+        told = set()
+        for low in front:
+            low_band = _band(low.get("mature_height_ft"))
+            if low_band is None:
+                continue
+            for high in behind:
+                high_band = _band(high.get("mature_height_ft"))
+                if high_band is None or low_band <= high_band:
+                    continue
+                key = (low.get("name"), high.get("name"))
+                if key in told:
+                    continue
+                told.add(key)
+                out.append(_obj(
+                    "serious", "height",
+                    f"{low.get('name')} in the front of {zone} is a taller "
+                    f"layer than {high.get('name')} behind it.",
+                    "move the tall plant toward the wall"))
+        heights = []
+        for plant in placed:
+            band = _band(plant.get("mature_height_ft"))
+            if band is not None:
+                heights.append(float(plant["mature_height_ft"]))
+        if len(heights) >= 3 and max(heights) - min(heights) < 0.4:
+            out.append(_obj(
+                "note", "height",
+                f"{zone} holds one height. The top of the bed does not rise and fall.",
+                "vary the height along the bed"))
+    return out
+
+
+def check_color(design, vision):
+    """Two or three flower colors inside the wildlife set.
+
+    A missing color is named. The check does not drop a nectar plant
+    to tidy the palette. `vision` is accepted so the call matches the
+    other vision checks. The colors come from the plants.
+    """
+    del vision
+    out = []
+    for zone, plants in _beds(design).items():
+        colors = set()
+        missing = []
+        for plant in plants:
+            if _is_structure(plant) or _is_makeup(plant):
+                continue
+            if _field(plant, "nectar") is not True and not _field(plant, "host"):
+                continue
+            color = _field(plant, "flower_color")
+            if not color:
+                missing.append(plant.get("name") or "a plant")
+            else:
+                colors.add(color)
+        if missing:
+            names = ", ".join(sorted(set(missing))[:6])
+            out.append(_obj(
+                "note", "color",
+                f"{zone} has no flower color on record for {names}.",
+                "set flower_color with a source. The check does not guess"))
+        if len(colors) == 1:
+            out.append(_obj(
+                "note", "color",
+                f"{zone} shows one flower color in the wildlife plants.",
+                "use two or three colors inside the wildlife set"))
+        elif len(colors) > 3:
+            out.append(_obj(
+                "note", "color",
+                f"{zone} shows {len(colors)} flower colors in the wildlife plants.",
+                "keep two or three colors. Do not drop a nectar plant to do it"))
     return out
 
 
@@ -2252,7 +2524,10 @@ def check(slug, force=False):
     out += check_space(design, site, sun)
     out += check_coverage(design, site, cond, sun)
     out += check_vision(design, vis)
+    out += check_wildlife(design, vis)
     out += check_season(design, vis, site)
+    out += check_layers(design)
+    out += check_color(design, vis)
     out += check_grouping(design)
     out += check_layout(design, site)
 

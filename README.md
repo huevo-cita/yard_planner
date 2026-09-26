@@ -109,6 +109,27 @@ fact, one line of reason and a `[c14]` reference. `yard changelog <slug> --lint`
 finds the prose that has drifted back in; on the four documents it was built
 against it found 28 lines and nothing that was not one.
 
+**Answers the question that arrives in a shop.** Everything above runs at a
+desk, against a slate somebody researched in advance. The question that
+actually gets asked is a person holding a pot twenty minutes from home, wanting
+to know whether it goes anywhere. `yard fits <slug> --plant "gulf muhly"` runs
+that name through the same three checks the linter uses — light over the
+plant's own growing months, mature spread against the bed's depth and the row's
+share of it, and pH judged against the soil layer the roots actually reach —
+and answers for every bed and every patch of open ground at once, with the
+sentence that decided each one. Plant facts come from a regional catalog under
+`catalog/`, which holds no address and belongs to no yard.
+
+`--card` freezes all of that into one self-contained `FITS.html` for a phone.
+Every plant against every place, plus a grid over every nursery tag a pot could
+carry, so a plant the catalog has never heard of still gets a real answer from
+its label. The page holds the answers and none of the rules: the JavaScript
+searches names and renders, and cannot disagree with the linter because it
+never computes anything. AirDrop it, add it to the home screen, and it works in
+airplane mode. Whatever it could not name goes in a queue that comes home as
+`--intake`, which files the research and routes anything actually bought onto
+the right row.
+
 **Costs and schedules it.** The bill of materials is netted against what the
 inventory says is already in the garage. The schedule back-plans in weekends
 from the target date, counts seed-start and days-to-maturity deadlines
@@ -270,6 +291,11 @@ yard niches   <slug> --recommend-all   # or take every recommendation, in one
 yard niches   <slug> --review     # every pick, its reason, what was not taken
 yard niches   <slug> --reopen SLOT --reason "..."   # change your mind, later
 yard design   <slug>              # check a design against the measured site
+yard fits     <slug> --plant NAME # would this plant go anywhere in this yard
+yard fits     <slug> --all        # every catalogue plant that fits, by place
+yard fits     <slug> --tag --light "full sun" --spread 3   # from the pot label
+yard fits     <slug> --card       # the same answers offline, on a phone
+yard fits     <slug> --intake q.json   # what the phone queued, absorbed
 yard sourcing <slug>              # where to buy it, best tier first, nearest within a tier
 yard sourcing <slug> --geocode    # real distances, from the suppliers' addresses
 yard sourcing <slug> --check      # evidence that is undated, unplaced or stale
@@ -381,6 +407,8 @@ place because that is the simple case.
 
 ```
 lib/          the engine. One module per job, each runnable as python3 -m lib.<name>
+catalog/      regional plant catalogues. Plant facts only, no address, no yard,
+              so one file serves every yard in its region and is safe to commit
 skills/       the agent skills, symlinked into ~/.cursor/skills
 agents/       the subagents, symlinked into ~/.cursor/agents
 bin/yard      one entry point, runnable from any directory
@@ -410,6 +438,8 @@ reputation, distance and access evidence), a prose `profile.md`, and `maps/`,
 The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 `SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true
 now. `CHANGELOG.md` is rendered from `changelog.json` and holds everything else.
+`FITS.html` is rendered from `catalog/` and the yard's own light and soil, and
+is the one to have on a phone in a nursery.
 
 The screens are generated and are read as HTML: `INDEX.html` is the front
 door, `WEEK.html` is the seven days in front of you and every other week of

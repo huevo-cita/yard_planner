@@ -82,7 +82,7 @@ import json
 import os
 import re
 
-from . import design, doubts, solar, yards
+from . import conditions, design, doubts, solar, yards
 
 # The months a light figure here describes, and it is `solar.GROWING_SEASON`
 # rather than a window of this module's own.
@@ -1048,6 +1048,7 @@ def slate(slug, incoming, data=None):
     data = data or load(slug)
     site = yards.load_site(slug)
     sun = yards.load(slug, "sun-hours.json") or {}
+    cond = yards.load_conditions(slug)
     kept, refused = 0, []
     for slot_id, cands in incoming.items():
         n, s = find(data, slot_id)
@@ -1056,7 +1057,7 @@ def slate(slug, incoming, data=None):
             continue
         ok = []
         for c in cands:
-            why = _rejects(c, n, s, site, sun)
+            why = _rejects(c, n, s, site, sun, cond)
             if why:
                 refused.append((slot_id, c.get("name", "?"), why))
                 continue
@@ -1070,7 +1071,37 @@ def slate(slug, incoming, data=None):
     return data, kept, refused
 
 
-def _rejects(c, niche, slot, site, sun):
+def _ph_reject(c, niche, site, cond):
+    """Refuse a candidate on pH the way design.check_soil does.
+
+    With conditions loaded, the check uses the layer the roots reach. The
+    cached niche pH is the native figure, and it does not get a vote once a
+    layer record exists. With no conditions, the cached figure still applies,
+    so an older caller keeps the same answer.
+    """
+    rng = c.get("ph_range")
+    if not rng or len(rng) != 2:
+        return None
+    zone = (niche.get("zones") or [None])[0]
+    if cond is not None and zone and site is not None:
+        key = design.resolve_site_zone(site, zone) or zone
+        layers = conditions.bed_layers(cond, key)
+        kind = design.zone_kind(site, key)
+        if layers is not None or kind == "container":
+            plant = dict(c)
+            plant["zone"] = zone
+            plant["name"] = c.get("name") or "this plant"
+            for obj in design.check_soil(plant, cond, site):
+                if "pH" in (obj.get("say") or ""):
+                    return obj["say"]
+            return None
+    ph = (niche.get("soil") or {}).get("ph")
+    if ph and not (float(rng[0]) <= float(ph) <= float(rng[1])):
+        return f"wants pH {rng[0]}-{rng[1]} and this soil is {ph}"
+    return None
+
+
+def _rejects(c, niche, slot, site, sun, cond=None):
     missing = [f for f in REQUIRED if not c.get(f)]
     if missing:
         return f"no {', '.join(missing)} recorded, so it cannot be checked"
@@ -1133,11 +1164,11 @@ def _rejects(c, niche, slot, site, sun):
                     f"{room:.1f}. It fits the bed only by taking room the "
                     f"other rows are counting on")
 
-    soil = niche.get("soil") or {}
-    ph, rng = soil.get("ph"), c.get("ph_range")
-    if ph and rng and not (float(rng[0]) <= float(ph) <= float(rng[1])):
-        return f"wants pH {rng[0]}-{rng[1]} and this soil is {ph}"
+    why = _ph_reject(c, niche, site, cond)
+    if why:
+        return why
 
+    soil = niche.get("soil") or {}
     drain = (soil.get("drainage") or "").lower()
     if c.get("soil_drainage") == "sharp" and ("slow" in drain
                                               or "poor" in drain):
