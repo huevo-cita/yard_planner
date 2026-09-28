@@ -55,6 +55,15 @@ FLOWER_HEX = {
 }
 LEAF_FILL = "#b9cf9f"
 EVERGREEN_FILL = "#6f8f5a"
+# A dormant plant shows straw, not its flower color, so a dormant plant
+# with white flowers does not look the same as one in flower.
+DORMANT_FILL = "#d9c9a3"
+# White flowers on the soil color read as an empty circle. In flower, a
+# white-flowered plant shows white spots on its leaf color.
+WHITE_BLOOM_TILE = (
+    f"<rect width='12' height='12' fill='{LEAF_FILL}'></rect>"
+    "<circle cx='3' cy='3' r='2.4' fill='#fff' stroke='#8a8a80' stroke-width='.5'></circle>"
+    "<circle cx='9' cy='9' r='2.4' fill='#fff' stroke='#8a8a80' stroke-width='.5'></circle>")
 
 
 FEATURE_FILL = "#999999"
@@ -1351,7 +1360,9 @@ def _svg(bed, code_of, font, tap):
         f"<defs><pattern id='stone-{_esc(bed['id'])}' width='14' height='14' "
         f"patternUnits='userSpaceOnUse'><rect width='14' height='14' fill='#e4dfd6'></rect>"
         f"<circle cx='4' cy='4' r='2.6' fill='#b8b0a3'></circle>"
-        f"<circle cx='11' cy='10' r='2.2' fill='#c7bfb2'></circle></pattern></defs>",
+        f"<circle cx='11' cy='10' r='2.2' fill='#c7bfb2'></circle></pattern>"
+        f"<pattern id='white-bloom-{_esc(bed['id'])}' width='12' height='12' "
+        f"patternUnits='userSpaceOnUse'>{WHITE_BLOOM_TILE}</pattern></defs>",
     ]
     soil_top = pad + above * scale
     # Labels go in the last layer, so no circle covers them.
@@ -1416,8 +1427,7 @@ def _svg(bed, code_of, font, tap):
             f"data-leaf='{' '.join(plant.get('leaf') or [])}' "
             f"data-ever='{'1' if plant.get('evergreen') else '0'}' "
             f"data-nectar='{'1' if plant.get('nectar') is True else '0'}' "
-            f"data-flower='{_esc(color_for(plant.get('flower'), plant.get('evergreen'), plant.get('feature')))}' "
-            f"data-bare='{_esc(plant.get('color') or '#8aa37b')}'>")
+            f"data-flower='{_esc(color_for(plant.get('flower'), plant.get('evergreen'), plant.get('feature')))}'>")
         parts.append(
             f"<circle class=hit cx='{cx:.1f}' cy='{cy:.1f}' r='{max(r, tap / 2):.1f}'></circle>")
         parts.append(
@@ -1594,7 +1604,9 @@ def page(scheme, token, stamp=None, yard=None):
             .replace("__TOKEN__", json.dumps(token))
             .replace("__PEAK__", json.dumps(peak))
             .replace("__LEAF__", LEAF_FILL)
-            .replace("__EVER__", EVERGREEN_FILL))
+            .replace("__EVER__", EVERGREEN_FILL)
+            .replace("__DORMANT__", DORMANT_FILL)
+            .replace("__WHITE_TILE__", WHITE_BLOOM_TILE))
     return body
 
 
@@ -1650,8 +1662,8 @@ paint-order:stroke;stroke:#fbfaf6;stroke-width:3px}
 .nectar{fill:#1c1c17;stroke:#fff;stroke-width:1;pointer-events:none}
 .leaf{fill:#2f5d1e;stroke:#fff;stroke-width:1;pointer-events:none}
 .plant.m-leaf .nectar,.plant.m-ever .nectar{display:none}
-.plant.m-dormant{opacity:.55}
-.plant.m-dormant circle.solid{fill-opacity:.12}
+.plant.m-dormant{opacity:.7}
+.plant.m-dormant circle.solid{fill-opacity:.55;stroke-dasharray:4 3}
 .plant.m-dormant .nectar,.plant.m-dormant .tuft{display:none}
 .plant.on circle.solid{stroke:#000;stroke-width:4}
 .leader{stroke:#4a3f30;stroke-width:.8}
@@ -1698,9 +1710,10 @@ __STAMP__
 </div>
 <div class=legend>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='#e27aa6' stroke='#2e261b' stroke-width=2.4></circle><circle cx=19 cy=7 r=3.5 fill='#1c1c17' stroke='#fff'></circle></svg> in flower, dot gives nectar</span>
+<span><svg width=26 height=26><defs><pattern id=white-bloom-key width=12 height=12 patternUnits=userSpaceOnUse>__WHITE_TILE__</pattern></defs><circle cx=13 cy=13 r=10 fill='url(#white-bloom-key)' stroke='#2e261b' stroke-width=1.6></circle></svg> white flowers</span>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='__LEAF__' stroke='#2e261b' stroke-width=1.6></circle></svg> green, not in flower</span>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='__EVER__' stroke='#2e261b' stroke-width=1.6></circle><circle cx=13 cy=13 r=6 fill=none stroke='#fff' stroke-width=1.4></circle></svg> evergreen structure</span>
-<span><svg width=26 height=26 opacity=.55><circle cx=13 cy=13 r=10 fill='#ccc' fill-opacity=.12 stroke='#2e261b' stroke-width=1.6></circle></svg> dormant</span>
+<span><svg width=26 height=26 opacity=.7><circle cx=13 cy=13 r=10 fill='__DORMANT__' fill-opacity=.55 stroke='#2e261b' stroke-width=1.6 stroke-dasharray='4 3'></circle></svg> dormant, died back</span>
 <span><svg width=26 height=26><path d='M8,16 Q13,6 18,10 Q13,20 8,16Z' fill='#2f5d1e'></path></svg> larval host</span>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='none' stroke='#2e261b' stroke-width=1.2></circle></svg> in the plan now (thin line)</span>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='none' stroke='#2e261b' stroke-width=2.4></circle></svg> new (thick line)</span>
@@ -1735,7 +1748,9 @@ function look(group, m) {
   group.classList.remove('m-bloom', 'm-leaf', 'm-ever', 'm-dormant');
   if (has('bloom')) {
     group.classList.add('m-bloom');
-    circle.setAttribute('fill', group.dataset.flower);
+    const white = group.dataset.flower.toUpperCase() === '#FFFFFF';
+    circle.setAttribute('fill', white
+      ? 'url(#white-bloom-' + group.closest('svg').dataset.bed + ')' : group.dataset.flower);
     return 'bloom';
   }
   if (group.dataset.ever === '1') {
@@ -1749,7 +1764,7 @@ function look(group, m) {
     return 'leaf';
   }
   group.classList.add('m-dormant');
-  circle.setAttribute('fill', group.dataset.bare);
+  circle.setAttribute('fill', '__DORMANT__');
   return 'dormant';
 }
 
