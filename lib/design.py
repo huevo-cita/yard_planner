@@ -1921,8 +1921,8 @@ def check_season(design, vision, site):
         return out
 
     blooming = [p["name"] for p in design.get("plants", [])
-                if month in (p.get("bloom") or [])]
-    ever = [p["name"] for p in design.get("plants", []) if p.get("evergreen")]
+                if month in (_field(p, "bloom") or [])]
+    ever = [p["name"] for p in design.get("plants", []) if _field(p, "evergreen")]
 
     if not blooming:
         out.append(_obj("serious", "target date",
@@ -1939,7 +1939,7 @@ def check_season(design, vision, site):
                         f"nothing on it"))
 
     n = len([p for p in design.get("plants", []) if p.get("count")])
-    if n and len(ever) < max(1, n // 5):
+    if n and len(ever) < max(1, n * float(practice.rule("design.evergreen_share"))):
         out.append(_obj("note", "winter",
                         f"{len(ever)} of {n} entries hold structure out of "
                         f"season. Most native perennials look like nothing from "
@@ -1951,8 +1951,8 @@ def check_season(design, vision, site):
     for zone, plants in _beds(design).items():
         gaps = []
         for month in MONTHS:
-            blooming = any(month in (plant.get("bloom") or []) for plant in plants)
-            evergreen = any(plant.get("evergreen") for plant in plants)
+            blooming = any(month in (_field(plant, "bloom") or []) for plant in plants)
+            evergreen = any(_field(plant, "evergreen") for plant in plants)
             if not blooming and not evergreen:
                 gaps.append(month)
         if gaps:
