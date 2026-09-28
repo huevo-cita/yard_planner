@@ -87,6 +87,35 @@ def overlaps(a, b):
     return _dist(a, b) + TOUCH < _radius(a) + _radius(b)
 
 
+def _tall_ft():
+    return float(practice.rule("design.height_bands_ft")[-1])
+
+
+def _is_canopy(plant):
+    """A structure plant in the top height band, such as a climbing rose.
+
+    Tall means the top band in practice, so a grass at 3 ft is not a canopy.
+    """
+    height = plant.get("height_ft")
+    return height is not None and float(height) >= _tall_ft() and _is_structure(plant)
+
+
+def _under_canopy(a, b):
+    """True when one plant grows under the canopy of a tall structure plant.
+
+    A climbing rose over a low groundcover is layering, not crowding.
+    """
+    for top, low in ((a, b), (b, a)):
+        low_h = low.get("height_ft")
+        if _is_canopy(top) and low_h is not None and float(low_h) < _tall_ft():
+            return True
+    return False
+
+
+def _crowds(a, b):
+    return overlaps(a, b) and not _under_canopy(a, b)
+
+
 def in_bed(bed, plant):
     """True when the circle sits in plantable soil.
 
@@ -121,7 +150,7 @@ def _touch(plants):
         changed = False
         for i, left in enumerate(plants):
             for right in plants[i + 1:]:
-                if not overlaps(left, right):
+                if not _crowds(left, right):
                     continue
                 dist = _dist(left, right)
                 if dist < 0.2:
@@ -133,6 +162,42 @@ def _touch(plants):
                 changed = True
         if not changed:
             break
+
+
+def _even_sizes(plants):
+    """One plant in one niche gets one circle: the smallest in the group.
+
+    The smallest size keeps every circle clear of its neighbours.
+    """
+    least = {}
+    for plant in plants:
+        if plant.get("feature"):
+            continue
+        key = (plant["name"], plant.get("niche"))
+        least[key] = min(least.get(key, plant["spread_ft"]), plant["spread_ft"])
+    for plant in plants:
+        key = (plant["name"], plant.get("niche"))
+        if key in least:
+            plant["spread_ft"] = least[key]
+
+
+def shrunk_canopy(plant):
+    """True when a canopy plant is drawn smaller than the source drawing shows it."""
+    source = plant.get("drawn_ft")
+    if not source or not _is_canopy(plant):
+        return False
+    start = float(source) if plant.get("locked") else min(float(source), spacing_for(plant))
+    return plant["spread_ft"] < start - 0.001
+
+
+def uneven(plants):
+    """Groups of one plant in one niche that are drawn at different sizes."""
+    sizes = {}
+    for plant in plants:
+        if not plant.get("feature"):
+            sizes.setdefault((plant["name"], plant.get("niche")), []).append(plant)
+    return [group for group in sizes.values()
+            if max(p["spread_ft"] for p in group) - min(p["spread_ft"] for p in group) > 0.001]
 
 
 # ------------------------------------------------------------------ the yard
@@ -400,6 +465,7 @@ def _beds_from_garden(slug):
             plant = _plant(
                 bed_id, _niche_of(brief, x), name, botanical, drawn, x, y,
                 locked=locked, kept=True, record=record, feature=feature)
+            plant["drawn_ft"] = drawn
             if not locked:
                 # A plant that is not in the ground yet is drawn at its
                 # planting distance. The ring shows the mature width.
@@ -661,6 +727,9 @@ def _add_drifts(yard, beds, specs):
             entry = pool[name]
             sample = entry["plant"]
             spacing = min(spacing_for(sample), max(0.5, float(bed["depth_ft"]) / 2))
+            same = [p["spread_ft"] for p in bed["plants"] if p["name"] == name]
+            if same:
+                spacing = min(spacing, min(same))
             drift = None
             for size in sizes:
                 drift = _grow(bed, sample, spacing, size, entry["niches"], spec)
@@ -694,6 +763,7 @@ def suggest(slug):
     _add_drifts(yard, beds, specs)
     for bed in beds:
         _touch(bed["plants"])
+        _even_sizes(bed["plants"])
     # Stable ids. The id does not change when a plant is swapped, or a saved
     # tap would point at nothing.
     for bed in beds:
@@ -727,8 +797,15 @@ def audit(slug, scheme=None):
                 bad.append(f"{plant['id']} {plant['name']}: {why}")
         for i, a in enumerate(plants):
             for b in plants[i + 1:]:
-                if overlaps(a, b):
+                if _crowds(a, b):
                     bad.append(f"{a['id']} {a['name']} overlaps {b['id']} {b['name']}")
+        for group in uneven(plants):
+            sizes = ", ".join(f"{p['id']} {p['spread_ft']:g}" for p in group)
+            bad.append(f"{group[0]['name']} in {bed['id']} has more than one size: {sizes}")
+        for plant in plants:
+            if shrunk_canopy(plant):
+                bad.append(f"{plant['id']} {plant['name']} shrank to {plant['spread_ft']:g} ft "
+                           f"from {float(plant['drawn_ft']):g} ft in the source drawing")
     return bad
 
 
@@ -934,6 +1011,48 @@ def find_plant(scheme, plant_id):
     return None, None
 
 
+def _photo_for(yard, plant):
+    """The first photograph of this plant on any slate, else in the cache."""
+    name = plant.get("name") or ""
+    botanical = (plant.get("botanical") or "").strip().lower()
+    for niche in yard.niches.values():
+        for cand in _candidates(niche).values():
+            same = cand["name"] == name or (
+                botanical and (cand.get("botanical") or "").strip().lower() == botanical)
+            if same and cand.get("photos"):
+                return cand["photos"][0]
+    # Only a plain binomial goes to the photo service. A genus, a cultivar
+    # or "A / B" names no one species, and a photo of one would be a guess.
+    words = botanical.split()
+    if len(words) == 2 and all(w.isalpha() for w in words):
+        found = niches._fetch_photos(plant["botanical"].strip())
+        if found:
+            return found[0]
+    return {}
+
+
+def current_for(scheme, plant_id, yard):
+    """The plant that stands in this circle now, in the shape of a choice."""
+    _, plant = find_plant(scheme, plant_id)
+    if not plant:
+        return None
+    photo = _photo_for(yard, plant)
+    return {
+        "name": plant["name"],
+        "botanical": plant.get("botanical") or "",
+        "tall_ft": plant.get("height_ft"),
+        "grows_ft": round(float(plant.get("mature_spread_ft") or plant["spread_ft"]), 2),
+        "bloom": plant.get("bloom") or [],
+        "nectar": plant.get("nectar") is True,
+        "host": plant.get("host") or [],
+        "color": plant.get("color") or color_for(plant.get("flower"), plant.get("evergreen"),
+                                                 plant.get("feature")),
+        "photo": photo.get("url") or "",
+        "attribution": (photo.get("attribution") or "")[:80],
+        "locked": bool(plant.get("locked")),
+    }
+
+
 def fits_gap(bed, plant, spread, neighbors):
     """True when a plant of this spread can stand where `plant` stands.
 
@@ -950,7 +1069,7 @@ def fits_gap(bed, plant, spread, neighbors):
     for other in neighbors:
         if other["id"] == plant["id"]:
             continue
-        if overlaps(trial, other):
+        if _crowds(trial, other):
             return False
     return True
 
@@ -1039,8 +1158,41 @@ def swap(slug, plant_id, name):
                    picked["spread_ft"], plant["x"], plant["y"])
     fresh["id"] = plant["id"]
     fresh["mature_spread_ft"] = picked["grows_ft"]
+    # The whole old plant, because the old name can fail the fit check. A
+    # kept plant from the design is not always a choice on the slate.
+    scheme.setdefault("history", []).append({
+        "id": plant["id"], "before": json.loads(json.dumps(plant)),
+        "after": fresh["name"],
+        "at": datetime.datetime.now().isoformat(timespec="seconds")})
     plant.clear()
     plant.update(fresh)
+    yards.save(slug, FILE, scheme)
+    return plant, None
+
+
+def _undo_count(scheme, plant_id=None):
+    history = scheme.get("history") or []
+    return {"plant": sum(1 for h in history if h["id"] == plant_id),
+            "all": len(history)}
+
+
+def undo(slug, plant_id=None):
+    """Put back the plant from before the newest swap, on one circle or on the map."""
+    scheme = load(slug)
+    if not scheme:
+        raise SystemExit(f"{slug} has no {FILE}. Run --init first.")
+    history = scheme.get("history") or []
+    index = next((i for i in range(len(history) - 1, -1, -1)
+                  if not plant_id or history[i]["id"] == plant_id), None)
+    if index is None:
+        return None, "There is no change to undo."
+    entry = history[index]
+    _, plant = find_plant(scheme, entry["id"])
+    if not plant:
+        return None, "That plant is not on the map."
+    history.pop(index)
+    plant.clear()
+    plant.update(entry["before"])
     yards.save(slug, FILE, scheme)
     return plant, None
 
@@ -1109,38 +1261,55 @@ def _svg(bed, code_of, font, tap):
         return (pad + float(plant["x"]) * scale,
                 pad + (above + depth - float(plant["y"])) * scale)
 
-    # One label for each group. Inside the drift when it fits, else in a row
-    # of tags under the front edge, in x order, so the leaders do not cross.
+    # Every circle carries its code. One member of a drift carries the count
+    # too. A label that does not fit inside its circle goes to a row of tags
+    # under the front edge, in x order, so the leaders do not cross.
     inside, outside = [], []
     group_of = {}
-    for index, group in enumerate(_groups(plants)):
+    groups = _groups(plants)
+    for index, group in enumerate(groups):
         for member in group:
             group_of[id(member)] = index
-    for group in _groups(plants):
-        head = group[0]
-        text = (f"{len(group)} {code_of[head['name']]}" if len(group) > 1
-                else code_of[head["name"]])
+
+    def fits_in(member, text):
         width = _text_px(text, font) + 8
+        r = max(_radius(member) * scale, 10)
+        if width > r * 2 - 2 or font + 2 > r * 2:
+            return False
+        mx, my = xy(member)
+        box = (mx - width / 2, my - font / 2 - 1, width, font + 2)
+        # A plant under a canopy is drawn inside the canopy, so its label may
+        # sit on the canopy too.
+        return not any(other is not member and not _under_canopy(member, other)
+                       and _box_covers(box, xy(other), _radius(other) * scale)
+                       for other in plants)
+
+    for group in groups:
+        code = code_of[group[0]["name"]]
         pts = [xy(p) for p in group]
-        rmin = min(_radius(p) for p in group) * scale
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
-        # The label sits on the member nearest the centroid of the drift that
-        # holds it without reaching onto another plant.
-        host = None
-        if width <= rmin * 2 - 2 and font + 2 <= rmin * 2:
+        holder = None
+        if len(group) > 1:
+            count = f"{len(group)} {code}"
+            # The count sits on the member nearest the centroid of the drift
+            # that holds it without reaching onto another plant.
             for member in sorted(group, key=lambda p: math.hypot(xy(p)[0] - cx, xy(p)[1] - cy)):
-                mx, my = xy(member)
-                box = (mx - width / 2, my - font / 2 - 1, width, font + 2)
-                if not any(other is not member and _box_covers(box, xy(other), _radius(other) * scale)
-                           for other in plants):
-                    host = member
+                if fits_in(member, count):
+                    holder = member
+                    inside.append((*xy(member), count, group, member))
                     break
-        if host is not None:
-            inside.append((*xy(host), text, group, host))
-        else:
-            front = max(pts, key=lambda p: p[1])
-            outside.append((front[0], front[1], text, group))
+            if holder is None:
+                front = max(pts, key=lambda p: p[1])
+                outside.append((front[0], front[1], count, group))
+        for member in group:
+            if member is holder:
+                continue
+            if fits_in(member, code):
+                inside.append((*xy(member), code, group, member))
+            else:
+                mx, my = xy(member)
+                outside.append((mx, my, code, [member]))
     outside.sort(key=lambda row: row[0])
     rows = []
     tags = []
@@ -1499,10 +1668,13 @@ padding:.8rem;max-height:48vh;overflow:auto;margin:0 -1rem -1rem;z-index:4}
 .opt{display:flex;gap:.6rem;align-items:center;width:100%;min-height:44px;text-align:left;
 font:inherit;border:1px solid #ddd;background:#fff;border-radius:8px;
 padding:.35rem;margin:.35rem 0;cursor:pointer}
-.opt img{width:64px;height:64px;object-fit:cover;border-radius:6px;flex:none}
+.opt img,.opt .swatch{width:64px;height:64px;object-fit:cover;border-radius:6px;flex:none}
+.opt .swatch{display:block;border:1px solid #2e261b}
+.opt.now{cursor:default;border:2px solid #2f5d1e;background:#eef3e6}
 .opt b{display:block}
 .opt i,.opt small{display:block;color:#4f4f45;font-size:.8rem}
-#close{min-height:44px;min-width:44px;float:right;font:inherit;border:1px solid #ddd;background:#fff;border-radius:8px}
+#close,#undo{min-height:44px;min-width:44px;float:right;font:inherit;border:1px solid #ddd;background:#fff;border-radius:8px}
+#undo{margin-right:.4rem;padding:0 .8rem}
 .saved{background:#e6efdc;padding:.4rem .6rem;border-radius:6px}
 [hidden]{display:none !important}
 </style></head><body>
@@ -1525,9 +1697,10 @@ __STAMP__
 </div>
 <div class=tabs>__TABS__</div>
 __SHEETS__
-<p class=key>A circle is drawn at its planting distance, so the circles touch. One outline and one label mark each new drift, with its count and its code. The code is in the schedule. Tap a schedule row to reach a plant that is too small to tap.</p>
+<p class=key>A circle is drawn at its planting distance, so the circles touch. Every circle carries its code. One outline marks each new drift, and one circle in the drift also carries the count. Press Ctrl+Z or Cmd+Z to undo the last change. The code is in the schedule. Tap a schedule row to reach a plant that is too small to tap.</p>
 <div class=panel id=panel hidden>
 <button type=button id=close aria-label=Close>X</button>
+<button type=button id=undo hidden title='Undo the last change to this plant (Ctrl+Z or Cmd+Z)'>Undo</button>
 <p id=status></p>
 <div id=list></div>
 </div>
@@ -1538,6 +1711,7 @@ const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov
 const panel = document.getElementById('panel');
 const list = document.getElementById('list');
 const status = document.getElementById('status');
+const undoBtn = document.getElementById('undo');
 const summary = document.getElementById('summary');
 let current = null;
 let month = MONTHS[new Date().getMonth()];
@@ -1636,54 +1810,101 @@ function closePanel() {
 }
 document.getElementById('close').addEventListener('click', closePanel);
 
-async function openPlant(group, savedName) {
+function card(opt, tag, prefix) {
+  const el = document.createElement(tag);
+  el.className = 'opt';
+  if (tag === 'button') el.type = 'button';
+  if (opt.photo) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = opt.photo;
+    el.appendChild(img);
+  } else {
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = opt.color || '__LEAF__';
+    el.appendChild(swatch);
+  }
+  const span = document.createElement('span');
+  const title = document.createElement('b');
+  title.textContent = (prefix || '') + opt.name;
+  const meta = document.createElement('i');
+  const wild = [];
+  if (opt.host && opt.host.length) wild.push('host for ' + opt.host.join(', '));
+  if (opt.nectar) wild.push('nectar');
+  meta.textContent = opt.botanical + ' · ' + (opt.tall_ft ? opt.tall_ft + ' ft tall, ' : '') +
+    opt.grows_ft + ' ft wide' + (opt.bloom.length ? ' · flowers ' + opt.bloom.join(' ') : '') +
+    (wild.length ? ' · ' + wild.join(', ') : '');
+  const note = document.createElement('small');
+  note.textContent = opt.note || opt.attribution || '';
+  span.append(title, meta, note);
+  el.appendChild(span);
+  return el;
+}
+
+async function openPlant(group, done) {
   document.querySelectorAll('.plant.on').forEach(el => el.classList.remove('on'));
   group.classList.add('on');
   current = group.dataset.id;
   panel.hidden = false;
   list.replaceChildren();
+  undoBtn.hidden = true;
   status.className = '';
   const label = group.dataset.name + ' (' + group.dataset.code + ')';
-  if (group.dataset.locked === '1') {
-    status.textContent = label + ' stays. It is already in the ground.';
-    return;
-  }
-  status.textContent = savedName ? ('Saved ' + savedName + '.') : ('Choices for ' + label + '.');
-  if (savedName) status.className = 'saved';
+  const locked = group.dataset.locked === '1';
+  if (locked) status.textContent = label + ' stays. It is already in the ground.';
+  else if (done) status.textContent = done;
+  else status.textContent = 'Choices for ' + label + '.';
+  if (done) status.className = 'saved';
   const res = await fetch('/' + token + '/options/' + current);
   const data = await res.json();
+  if (current !== group.dataset.id) return;
+  if (data.current) {
+    const now = card(data.current, 'div', 'Now: ');
+    now.classList.add('now');
+    now.setAttribute('aria-current', 'true');
+    list.appendChild(now);
+  }
+  undoBtn.hidden = !(data.undo && data.undo.plant);
+  if (locked) return;
   if (!data.options || !data.options.length) {
-    status.textContent = data.why || 'No other plant on this list fits this spot.';
+    if (!done) status.textContent = data.why || 'No other plant on this list fits this spot.';
     return;
   }
   data.options.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'opt';
-    if (opt.photo) {
-      const img = document.createElement('img');
-      img.alt = '';
-      img.src = opt.photo;
-      btn.appendChild(img);
-    }
-    const span = document.createElement('span');
-    const title = document.createElement('b');
-    title.textContent = opt.name;
-    const meta = document.createElement('i');
-    const wild = [];
-    if (opt.host && opt.host.length) wild.push('host for ' + opt.host.join(', '));
-    if (opt.nectar) wild.push('nectar');
-    meta.textContent = opt.botanical + ' · ' + (opt.tall_ft ? opt.tall_ft + ' ft tall, ' : '') +
-      opt.grows_ft + ' ft wide' + (opt.bloom.length ? ' · flowers ' + opt.bloom.join(' ') : '') +
-      (wild.length ? ' · ' + wild.join(', ') : '');
-    const note = document.createElement('small');
-    note.textContent = opt.note || opt.attribution || '';
-    span.append(title, meta, note);
-    btn.appendChild(span);
+    const btn = card(opt, 'button');
     btn.addEventListener('click', () => saveSwap(group, opt.name));
     list.appendChild(btn);
   });
 }
+
+async function undoSwap(id) {
+  const res = await fetch('/' + token + '/undo', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(id ? {id: id} : {})
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    panel.hidden = false;
+    status.className = '';
+    status.textContent = data.error || 'There is no change to undo.';
+    return;
+  }
+  const group = document.querySelector('.plant[data-id="' + data.plant.id + '"]');
+  if (group) bed = group.closest('.sheet').dataset.bed;
+  save('back:' + data.plant.id + ':' + encodeURIComponent(data.plant.name));
+  location.reload();
+}
+
+undoBtn.addEventListener('click', () => undoSwap(current));
+document.addEventListener('keydown', e => {
+  if (e.key.toLowerCase() !== 'z' || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+  const el = document.activeElement;
+  if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
+  e.preventDefault();
+  undoSwap(current);
+});
 
 async function saveSwap(group, name) {
   status.className = '';
@@ -1720,10 +1941,11 @@ document.querySelectorAll('.tag').forEach(tag => tag.addEventListener('click', (
   const known = id => document.querySelector('.tab[data-bed="' + id + '"]');
   if (parts[1] && MONTHS.includes(parts[1])) month = parts[1];
   showBed(parts[0] && known(parts[0]) ? parts[0] : first.dataset.bed);
-  if (parts[2] && parts[2].startsWith('saved:')) {
+  if (parts[2] && (parts[2].startsWith('saved:') || parts[2].startsWith('back:'))) {
     const bits = parts[2].split(':');
     const group = document.querySelector('.plant[data-id="' + bits[1] + '"]');
-    if (group) openPlant(group, bits.slice(2).join(':'));
+    const name = bits.slice(2).join(':');
+    if (group) openPlant(group, (bits[0] === 'back' ? 'Put back ' : 'Saved ') + name + '.');
   }
 })();
 </script>
@@ -1761,21 +1983,29 @@ def serve(slug, port=8740, host="0.0.0.0"):
             prefix = f"/{token}/options/"
             if path.startswith(prefix):
                 scheme = load(slug)
-                opts, err = options_for(slug, scheme, path[len(prefix):])
+                plant_id = path[len(prefix):]
+                yard = Yard(slug)
+                opts, err = options_for(slug, scheme, plant_id, yard)
                 if err and opts is None:
                     return self._json({"error": err}, 404)
-                return self._json({"options": opts or [], "why": err or ""})
+                return self._json({"options": opts or [], "why": err or "",
+                                   "current": current_for(scheme, plant_id, yard),
+                                   "undo": _undo_count(scheme, plant_id)})
             self._send("Not found", 404, "text/plain")
 
         def do_POST(self):
-            if self.path.split("?", 1)[0].rstrip("/") != f"/{token}/swap":
+            path = self.path.split("?", 1)[0].rstrip("/")
+            if path not in (f"/{token}/swap", f"/{token}/undo"):
                 return self._send("Not found", 404, "text/plain")
             n = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(n).decode() or "{}")
             except json.JSONDecodeError:
                 return self._json({"error": "The change was not readable."}, 400)
-            plant, err = swap(slug, body.get("id") or "", body.get("name") or "")
+            if path.endswith("/undo"):
+                plant, err = undo(slug, body.get("id") or None)
+            else:
+                plant, err = swap(slug, body.get("id") or "", body.get("name") or "")
             if err:
                 return self._json({"error": err}, 409)
             self._json({"plant": plant})

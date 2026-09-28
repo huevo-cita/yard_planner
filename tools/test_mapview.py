@@ -9,10 +9,13 @@ yard's scheme.json. It fails on:
 - a console error, a page error, or a failed request
 - two labels whose boxes overlap, or a label outside the drawing
 - two leader lines that cross
-- a drift with no label
+- a plant with no label
+- one plant in one niche at two sizes, or a canopy plant that is shrunk
 - a tap target smaller than the practice minimum
 - a schedule count that does not match the circles
 - a tap that does not open the choice list, or a swap that does not redraw
+- a choice list with no card for the plant that is there now
+- a Ctrl+Z that does not put back the plant from before the swap
 - a month that does not change the circles, or a bloom strip cell that
   disagrees with the plants in that bed
 
@@ -78,7 +81,8 @@ GEOMETRY = """() => {
   const plants = [...svg.querySelectorAll('.plant')].map(g => ({
     id: g.dataset.id, name: g.dataset.name, group: g.dataset.group,
     locked: g.dataset.locked, hit: g.querySelector('circle.hit').getBoundingClientRect().width}));
-  const tagged = [...svg.querySelectorAll('.tag, .labels .code')].map(t => t.dataset.group);
+  const tagged = [...svg.querySelectorAll('.tag')].map(t => t.dataset.for)
+    .concat([...svg.querySelectorAll('.labels .code')].map(t => t.dataset.host));
   const last = svg.lastElementChild;
   const onTop = last && last.classList.contains('labels')
     && [...svg.querySelectorAll('text')].every(t => last.contains(t) || t.closest('.tag'));
@@ -167,12 +171,19 @@ def run(slug, shots):
                                for b in g["leaders"][i + 1:] if _cross(a, b))
                 check(crossing == 0, f"{bed}: no two leaders cross ({crossing})")
                 check(g["onTop"], f"{bed}: every label is drawn above the circles")
+                by_id = {p["id"]: p for b in state["scheme"]["beds"] for p in b["plants"]}
                 over = sorted({(c["text"], o["id"]) for c in g["coded"] for o in g["circles"]
-                               if o["id"] != c["host"] and _covers(c, o)})
+                               if o["id"] != c["host"] and _covers(c, o)
+                               and not scheme._under_canopy(by_id[c["host"]], by_id[o["id"]])})
                 check(not over, f"{bed}: no label sits on another plant's circle {over[:3] if over else ''}")
                 coded = set(g["tagged"])
-                blank = sorted({p["name"] for p in g["plants"] if p["group"] not in coded})
-                check(not blank, f"{bed}: every drift has a label {blank[:4] if blank else ''}")
+                blank = sorted(p["id"] for p in g["plants"] if p["id"] not in coded)
+                check(not blank, f"{bed}: every plant has a label {blank[:4] if blank else ''}")
+                record = next(b for b in state["scheme"]["beds"] if b["id"] == bed)
+                mixed = [grp[0]["name"] for grp in scheme.uneven(record.get("plants") or [])]
+                check(not mixed, f"{bed}: one plant in one niche has one size {mixed[:4] if mixed else ''}")
+                shrunk = [p["id"] for p in record.get("plants") or [] if scheme.shrunk_canopy(p)]
+                check(not shrunk, f"{bed}: no canopy plant is shrunk {shrunk}")
                 small = [p["name"] for p in g["plants"] if p["hit"] + 0.5 < tap]
                 check(not small, f"{bed}: every tap target is {tap:g} px or more")
                 check(sum(g["rows"]) == len(g["plants"]),
@@ -218,11 +229,24 @@ def run(slug, shots):
             page.locator(f".plant[data-id='{pid}'] circle.hit").dispatch_event("click")
             page.wait_for_selector("#list .opt")
             check(page.locator("#panel").is_visible(), "a tap opens the choice list")
-            page.locator("#list .opt", has_text=name).first.click()
+            before = copy.deepcopy(scheme.find_plant(state["scheme"], pid)[1])
+            now = page.locator("#list .opt.now")
+            check(now.count() == 1 and before["name"] in now.inner_text(),
+                  f"the list shows the plant that is there now ({before['name']})")
+            page.locator("#list button.opt", has_text=name).first.click()
             page.wait_for_load_state("networkidle")
             page.wait_for_selector("#status.saved", timeout=5000)
             drawn = page.get_attribute(f".plant[data-id='{pid}']", "data-name")
             check(drawn == name, f"a swap saves and redraws ({drawn} is now {name})")
+            page.wait_for_selector("#undo:not([hidden])", timeout=5000)
+            page.keyboard.press("Control+z")
+            page.wait_for_load_state("networkidle")
+            page.wait_for_selector("#status.saved:has-text('Put back')", timeout=5000)
+            drawn = page.get_attribute(f".plant[data-id='{pid}']", "data-name")
+            after = scheme.find_plant(state["scheme"], pid)[1]
+            check(drawn == before["name"] and after == before,
+                  f"Ctrl+Z puts back {before['name']} exactly ({drawn})")
+            check(not state["scheme"].get("history"), "the undo empties the history")
         browser.close()
     srv.shutdown()
     print(f"\n  pictures in {shots}")
