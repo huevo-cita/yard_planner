@@ -215,7 +215,7 @@
     "design.mass_small_below_ft": {
       "value": 2.0,
       "unit": "ft",
-      "critical": true,
+      "critical": false,
       "statement": "Mass every species with a mature height below 2 ft. A single small plant has little impact and makes a checkerboard.",
       "doc": "design.md",
       "section": "3.2",

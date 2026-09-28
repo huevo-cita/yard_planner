@@ -42,7 +42,7 @@ Sources:
 
 ### 1.3 `drawing.mature_ring`
 
-Draw the mature spread as a thin, unfilled outline when it is larger than the spacing circle. Always draw it for trees and large shrubs.
+Draw the mature spread as an unfilled outline when it is larger than the spacing circle. Always draw it for trees and large shrubs.
 
 - Value: `"when mature spread > spacing, and always for trees"`
 - Critical: yes

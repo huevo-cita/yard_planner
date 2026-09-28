@@ -231,7 +231,7 @@ Sources:
 Mass every species with a mature height below 2 ft. A single small plant has little impact and makes a checkerboard.
 
 - Value: `2.0` ft
-- Critical: yes
+- Critical: no
 
 Sources:
 
