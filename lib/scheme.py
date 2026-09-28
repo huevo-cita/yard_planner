@@ -164,6 +164,17 @@ def _touch(plants):
             break
 
 
+def _size_key(plant):
+    """The group that shares one circle size, or None for a plant that keeps its own.
+
+    A plant in the ground groups only with plants in the ground, so a new
+    plant never sets its size. A canopy keeps the size that the source shows.
+    """
+    if plant.get("feature") or _is_canopy(plant):
+        return None
+    return (plant["name"], plant.get("niche"), bool(plant.get("locked")))
+
+
 def _even_sizes(plants):
     """One plant in one niche gets one circle: the smallest in the group.
 
@@ -171,13 +182,12 @@ def _even_sizes(plants):
     """
     least = {}
     for plant in plants:
-        if plant.get("feature"):
-            continue
-        key = (plant["name"], plant.get("niche"))
-        least[key] = min(least.get(key, plant["spread_ft"]), plant["spread_ft"])
+        key = _size_key(plant)
+        if key:
+            least[key] = min(least.get(key, plant["spread_ft"]), plant["spread_ft"])
     for plant in plants:
-        key = (plant["name"], plant.get("niche"))
-        if key in least:
+        key = _size_key(plant)
+        if key:
             plant["spread_ft"] = least[key]
 
 
@@ -194,8 +204,9 @@ def uneven(plants):
     """Groups of one plant in one niche that are drawn at different sizes."""
     sizes = {}
     for plant in plants:
-        if not plant.get("feature"):
-            sizes.setdefault((plant["name"], plant.get("niche")), []).append(plant)
+        key = _size_key(plant)
+        if key:
+            sizes.setdefault(key, []).append(plant)
     return [group for group in sizes.values()
             if max(p["spread_ft"] for p in group) - min(p["spread_ft"] for p in group) > 0.001]
 
