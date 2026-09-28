@@ -83,7 +83,9 @@ Give fruit only when it is colorful and a person sees it in the garden:
 `fruit_for` names the animals that eat the fruit, for example `["birds"]`,
 with its source in `fruit_source`. It counts as wildlife value even when the
 fruit is not colorful, because it is food. `seed_for` does the same for seed
-that animals eat from the plant, such as goldfinches on coneflower.
+that animals eat from the plant, such as goldfinches on coneflower. Its source
+goes in `seed_source`. Leave both lists out when no source names an animal.
+Do not infer an eater from the genus.
 
 `fruit_color` is one word from `scheme.FRUIT_HEX`. The bed map shows a
 cluster of dots in that color in the fruit months. A plant with green,

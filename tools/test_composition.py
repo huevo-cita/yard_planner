@@ -117,6 +117,21 @@ def main():
     failed += check(says(limits, "limit", "It would cover the window."),
                     "the finding gives the reason from the vision")
 
+    unsourced = []
+    for record in design._catalog_index()[0].values():
+        for eaters, source in (("fruit_for", "fruit_source"),
+                               ("seed_for", "seed_source")):
+            if record.get(eaters) and not record.get(source):
+                unsourced.append(f"{record['botanical']} {eaters}")
+    failed += check(not unsourced,
+                    "every catalog eater list has a source"
+                    + (": " + ", ".join(unsourced) if unsourced else ""))
+    pequin = design._match_record({"botanical": "Capsicum annuum var. glabriusculum"})
+    pepper = design._match_record({"botanical": "Capsicum annuum"})
+    failed += check((pequin or {}).get("fruit_for") == ["birds"]
+                    and not (pepper or {}).get("fruit_for"),
+                    "the chile pequin eaters stay off the garden pepper")
+
     print()
     print("FAILED" if failed else "all passed")
     return 1 if failed else 0
