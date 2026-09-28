@@ -54,9 +54,15 @@ low wall or a raised bed, so walk it too.
 
 ## Design rules
 
-**Space by mature spread, not by pot size.** A 1-gallon perennial that matures at
-3 feet needs 3 feet. First-year beds should look slightly sparse. If a new bed
-looks full, it is overplanted.
+The rules of practice, with their sources, are in `practice/design.md`,
+`practice/drawing.md` and `practice/wildlife.md`. The numbers that the code
+reads are in `practice/rules.json`. Where a note below and `practice/`
+disagree, `practice/` is correct. The notes below are the older short form.
+
+**Space shrubs by mature spread, and herbaceous plants closer.** A shrub that
+matures at 3 feet needs 3 feet, not the width of its pot. Herbaceous plants go in
+at 7 to 9 for each square metre and are edited from the third year. See
+`practice/design.md`, rule `design.plant_dense_then_thin`.
 
 **Sort along the gradient.** Every bed has one — sun to shade along its length,
 wet to dry across its depth. Place each plant where its conditions are rather

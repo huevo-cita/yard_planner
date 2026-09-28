@@ -84,7 +84,7 @@ import datetime
 import json
 import re
 
-from . import conditions, doubts, solar, vision as vision_mod, yards
+from . import conditions, doubts, practice, solar, vision as vision_mod, yards
 
 # Hours of direct sun each nursery label actually needs, and what it looks like
 # when it is short. These are the thresholds sunmodel reports against.
@@ -1809,18 +1809,97 @@ def _layer_exempt(plant):
 
 
 def _band(height):
-    """0 ground, 1 foreground, 2 midground, 3 background."""
+    """0 ground, 1 foreground, 2 midground, 3 background.
+
+    The limits are `design.height_bands_ft` in practice/rules.json.
+    """
     try:
         feet = float(height)
     except (TypeError, ValueError):
         return None
-    if feet < 0.5:
+    ground, fore, mid = practice.rule("design.height_bands_ft")
+    if feet < ground:
         return 0
-    if feet <= 2.0:
+    if feet <= fore:
         return 1
-    if feet <= 5.0:
+    if feet <= mid:
         return 2
     return 3
+
+
+def limits_for(vision, zone):
+    """The size limits that the vision puts on one zone."""
+    out = []
+    for limit in (vision or {}).get("limits") or []:
+        if limit.get("zone") == zone:
+            out.append(limit)
+    return out
+
+
+def _top(plant, key):
+    """The top of the mature range. A range beats a single figure."""
+    values = []
+    for field in (key, key.replace("_ft", "_range_ft")):
+        value = plant.get(field)
+        if value is None:
+            value = _field(plant, field)
+        if isinstance(value, (list, tuple)):
+            values.extend(float(v) for v in value if v is not None)
+        elif value is not None:
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+    return max(values) if values else None
+
+
+def _exempt(plant, limit):
+    names = {str(item).lower() for item in limit.get("exempt") or []}
+    return ((plant.get("botanical") or "").lower() in names
+            or (plant.get("name") or "").lower() in names)
+
+
+def limit_breach(plant, zone, vision):
+    """("note" or "serious", sentence) when a plant grows past a zone limit.
+
+    A plant over the design limit is a note. A plant over the hard limit is
+    serious. A plant with no size on record is not judged.
+    """
+    worst = None
+    for limit in limits_for(vision, zone):
+        if _exempt(plant, limit):
+            continue
+        for key, soft, hard, word in (
+                ("mature_height_ft", "max_height_ft", "hard_height_ft", "tall"),
+                ("mature_spread_ft", "max_spread_ft", "hard_spread_ft", "wide")):
+            size = _top(plant, key)
+            if size is None or limit.get(soft) is None:
+                continue
+            cap = float(limit[soft])
+            if size <= cap:
+                continue
+            level = "note"
+            if limit.get(hard) is not None and size > float(limit[hard]):
+                level = "serious"
+            say = (f"Grows to {size:g} ft {word}, past {cap:g} ft. "
+                   f"{limit.get('short') or limit.get('why') or 'The vision limits this bed.'}")
+            if worst is None or level == "serious":
+                worst = (level, say)
+    return worst
+
+
+def check_limits(design, vision):
+    """Plants that grow past a size limit in the vision."""
+    out = []
+    if not (vision or {}).get("limits"):
+        return out
+    for plant in design.get("plants") or []:
+        breach = limit_breach(plant, plant.get("zone"), vision)
+        if breach:
+            out.append(_obj(breach[0], "limit",
+                            f"{plant.get('name')} in {plant.get('zone')}: {breach[1]}",
+                            "choose a plant that stays under the limit"))
+    return out
 
 
 def check_season(design, vision, site):
@@ -1890,11 +1969,12 @@ def check_grouping(design):
                         "groups of three or five of the same thing, and repeat "
                         "the group along the bed"))
     short = []
+    small_below = float(practice.rule("design.mass_small_below_ft"))
     for plant in design.get("plants") or []:
         height = plant.get("mature_height_ft")
         if plant.get("count") != 1 or _layer_exempt(plant):
             continue
-        if height is None or float(height) >= 2:
+        if height is None or float(height) >= small_below:
             continue
         short.append(plant.get("name") or "a plant")
     if short:
@@ -1998,7 +2078,8 @@ def check_layers(design):
             band = _band(plant.get("mature_height_ft"))
             if band is not None:
                 heights.append(float(plant["mature_height_ft"]))
-        if len(heights) >= 3 and max(heights) - min(heights) < 0.4:
+        skyline = practice.rule("design.skyline_min_range_ft")
+        if skyline is not None and len(heights) >= 3 and max(heights) - min(heights) < skyline:
             out.append(_obj(
                 "note", "height",
                 f"{zone} holds one height. The top of the bed does not rise and fall.",
@@ -2034,16 +2115,17 @@ def check_color(design, vision):
                 "note", "color",
                 f"{zone} has no flower color on record for {names}.",
                 "set flower_color with a source. The check does not guess"))
-        if len(colors) == 1:
+        fewest, most = practice.rule("design.color_theme_count")
+        if colors and len(colors) < fewest:
             out.append(_obj(
                 "note", "color",
-                f"{zone} shows one flower color in the wildlife plants.",
-                "use two or three colors inside the wildlife set"))
-        elif len(colors) > 3:
+                f"{zone} shows {len(colors)} flower color in the wildlife plants.",
+                f"use {fewest} to {most} colors inside the wildlife set"))
+        elif len(colors) > most:
             out.append(_obj(
                 "note", "color",
                 f"{zone} shows {len(colors)} flower colors in the wildlife plants.",
-                "keep two or three colors. Do not drop a nectar plant to do it"))
+                f"keep {fewest} to {most} colors. Do not drop a nectar plant to do it"))
     return out
 
 
@@ -2525,6 +2607,7 @@ def check(slug, force=False):
     out += check_coverage(design, site, cond, sun)
     out += check_vision(design, vis)
     out += check_wildlife(design, vis)
+    out += check_limits(design, vis)
     out += check_season(design, vis, site)
     out += check_layers(design)
     out += check_color(design, vis)

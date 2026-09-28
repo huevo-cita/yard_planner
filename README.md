@@ -120,6 +120,14 @@ and answers for every bed and every patch of open ground at once, with the
 sentence that decided each one. Plant facts come from a regional catalog under
 `catalog/`, which holds no address and belongs to no yard.
 
+**Uses one set of design rules, with sources.** How to compose a bed, how to
+draw a planting plan, and how to design for wildlife are stored once in
+`practice/`. Each rule there has graded sources, and a critical rule has two
+independent ones. `lib.design`, `lib.niches`, `lib.scheme` and `lib.drawbeds`
+read every number from `practice/rules.json`, and `tools/test_practice.py`
+fails when a module keeps its own copy. `python3 -m lib.practice --cite <key>`
+prints one rule with the text that supports it.
+
 `--card` freezes all of that into one self-contained `FITS.html` for a phone.
 Every plant against every place, plus a grid over every nursery tag a pot could
 carry, so a plant the catalog has never heard of still gets a real answer from
@@ -409,6 +417,8 @@ place because that is the simple case.
 lib/          the engine. One module per job, each runnable as python3 -m lib.<name>
 catalog/      regional plant catalogues. Plant facts only, no address, no yard,
               so one file serves every yard in its region and is safe to commit
+practice/     the design, drawing and wildlife rules with their sources. Every
+              yard reads them, and no module keeps its own copy of a number
 skills/       the agent skills, symlinked into ~/.cursor/skills
 agents/       the subagents, symlinked into ~/.cursor/agents
 bin/yard      one entry point, runnable from any directory

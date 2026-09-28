@@ -83,6 +83,30 @@ def main():
         says(design.check_color(missing, VISION), "color", "no flower color"),
         "a missing flower color is named")
 
+    window = {"limits": [{
+        "zone": "bed_g02", "max_height_ft": 5, "max_spread_ft": 5,
+        "hard_height_ft": 6, "hard_spread_ft": 6,
+        "exempt": ["Rosa 'KORwest'"], "short": "It would cover the window."}]}
+    sized = {"plants": [
+        plant(name="Under", mature_height_ft=3.0, mature_spread_ft=3.0),
+        plant(name="Near", mature_height_ft=5.5, mature_spread_ft=2.0),
+        plant(name="Over", mature_height_ft=2.0, mature_spread_ft=8.0),
+        plant(name="Rose", botanical="Rosa 'KORwest'", mature_height_ft=11.0),
+        plant(name="Elsewhere", zone="bed_g05", mature_height_ft=9.0),
+    ]}
+    limits = design.check_limits(sized, window)
+    named = {obj["say"].split(" in ")[0]: obj["level"] for obj in limits}
+    failed += check(named.get("Near") == "note",
+                    "a plant between the design and hard limits is a note")
+    failed += check(named.get("Over") == "serious",
+                    "a plant past the hard width limit is serious")
+    failed += check("Under" not in named and "Rose" not in named,
+                    "a plant under the limit and an exempt rose pass")
+    failed += check("Elsewhere" not in named,
+                    "the limit holds only for its own zone")
+    failed += check(says(limits, "limit", "It would cover the window."),
+                    "the finding gives the reason from the vision")
+
     print()
     print("FAILED" if failed else "all passed")
     return 1 if failed else 0

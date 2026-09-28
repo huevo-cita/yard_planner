@@ -72,7 +72,20 @@ Design objections and doubt cards do different jobs and both are needed. An
 objection says the yard will not support what was asked for. A doubt says nobody
 is sure what the yard even is yet.
 
-## Step 1 — Research the region, every time
+## Step 1 — Read `practice/` first, then research the region
+
+Read `practice/design.md`, `practice/drawing.md` and `practice/wildlife.md`
+before any search. They hold the professional rules for composition, drawing
+and wildlife design, each with graded sources. `python3 -m lib.practice` prints
+every rule that the code reads, and `--cite <key>` prints one rule with its
+sources. Do not research these rules again.
+
+Research only what is regional or new. When the research finds a new rule of
+practice, add it to `practice/rules.json` and to the section in the matching
+`.md` file, with a tier 1 or tier 2 source in `practice/sources.json`. A rule
+marked `critical` needs two independent sources. Then run
+`python3 tools/test_practice.py`. The next yard then reads the rule and does
+not research it again.
 
 Never carry a plant list from one garden to another. Search for:
 

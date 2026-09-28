@@ -188,12 +188,14 @@ def places(slug, site=None, sun=None, cond=None, nich=None):
     sun = sun if sun is not None else (yards.load(slug, "sun-hours.json") or {})
     cond = cond if cond is not None else (yards.load(slug, "conditions.json") or {})
     nich = nich if nich is not None else (yards.load(slug, "niches.json") or {})
+    vis = yards.load(slug, "vision.json") or {}
 
     out = []
     for n in nich.get("niches") or []:
         zone = (n.get("zones") or [n.get("id")])[0]
         out.append({"id": n["id"], "label": n.get("label") or n["id"],
                     "kind": "bed", "zone": zone, "niche": n,
+                    "vision": {"limits": design.limits_for(vis, zone)},
                     "slots": list(n.get("slots") or []) or [_open_slot(n["id"])],
                     "hours": (n.get("light") or {}).get("hours"),
                     "category": (n.get("light") or {}).get("category"),
@@ -295,7 +297,8 @@ def evaluate(plant, place, site, sun, cond):
 
     passed, refused = [], {}
     for slot in place["slots"]:
-        why = niches._rejects(p, niche, slot, site, sun)
+        why = niches._rejects(p, niche, slot, site, sun,
+                              vis=place.get("vision"))
         if why:
             refused[slot["id"]] = why
         else:

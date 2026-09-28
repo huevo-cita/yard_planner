@@ -61,6 +61,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.patches import Rectangle, Circle
 
+from . import practice
+
+# Line weights in points for the words in `drawing.line_hierarchy`.
+WEIGHT = {'extra-thick': 2.6, 'thick': 1.6, 'thin': 0.8}
+
 SOIL = '#f5efe2'
 SOIL_EDGE = '#6b5b45'
 INK = '#3d3d3d'
@@ -115,8 +120,11 @@ def _plant(ax, p):
     A long name gets a leader. The schedule carries the botanical name.
     """
     r = p.get('r', 0.5)
+    weight = practice.rule('drawing.existing_line') if p.get('existing') else 'thick'
+    style = practice.rule('drawing.removed_line') if p.get('removed') else 'solid'
     ax.add_patch(Circle((p['x'], p['y']), r, fc=p.get('color', '#c9d6c0'),
-                        ec=SOIL_EDGE, lw=1.4, alpha=0.55, hatch=p.get('hatch'),
+                        ec=SOIL_EDGE, lw=WEIGHT.get(weight, WEIGHT['thick']),
+                        ls=style, alpha=0.55, hatch=p.get('hatch'),
                         zorder=p.get('zorder', 2)))
     label = p.get('label') or ''
     if _label_fits(p):

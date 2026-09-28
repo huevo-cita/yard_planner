@@ -62,6 +62,11 @@
 !catalog/
 !catalog/**
 
+# Design and drawing practice, with its sources. It holds no yard fact, so every
+# yard shares it and it is safe on a public remote.
+!practice/
+!practice/**
+
 # Encrypted bundles only. The plaintext tarball never gets added.
 # manifest.json is safe: dates and sizes, no street and no coordinate.
 !vault/
