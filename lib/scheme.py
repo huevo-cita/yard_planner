@@ -299,7 +299,8 @@ def _is_structure(plant):
 
 
 def _is_makeup(plant):
-    return "december" in (plant.get("role") or "").lower() or plant.get("habit") == "annual"
+    from . import design as design_mod
+    return design_mod._is_makeup(plant)
 
 
 def _feeds(plant):

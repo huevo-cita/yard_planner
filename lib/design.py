@@ -1797,8 +1797,14 @@ def _is_structure(plant):
 
 
 def _is_makeup(plant):
-    """Cool-season color for one date. It is not the wildlife planting."""
-    return "december" in (plant.get("role") or "").lower()
+    """Seasonal color, not the wildlife planting.
+
+    That is a plant set for one date, or a non-native annual, as
+    `wildlife.annuals_as_makeup` says. A native annual is habitat.
+    """
+    if "december" in (plant.get("role") or "").lower():
+        return True
+    return _field(plant, "habit") == "annual" and _field(plant, "native") is False
 
 
 def _layer_exempt(plant):

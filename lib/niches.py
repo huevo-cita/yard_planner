@@ -1075,17 +1075,15 @@ def slate(slug, incoming, data=None):
     return data, kept, refused
 
 
-def _ph_reject(c, niche, site, cond):
-    """Refuse a candidate on pH the way design.check_soil does.
+def _soil_reject(c, niche, site, cond):
+    """Refuse a candidate on pH and on drainage the way design.check_soil does.
 
-    With conditions loaded, the check uses the layer the roots reach. The
-    cached niche pH is the native figure, and it does not get a vote once a
-    layer record exists. With no conditions, the cached figure still applies,
+    With conditions loaded, the check uses the layer the roots reach, and a
+    serious or blocking objection from check_soil refuses the plant. The
+    cached niche soil is the native figure, and it does not get a vote once a
+    layer record exists. With no conditions, the cached figures still apply,
     so an older caller keeps the same answer.
     """
-    rng = c.get("ph_range")
-    if not rng or len(rng) != 2:
-        return None
     zone = (niche.get("zones") or [None])[0]
     if cond is not None and zone and site is not None:
         key = design.resolve_site_zone(site, zone) or zone
@@ -1096,12 +1094,19 @@ def _ph_reject(c, niche, site, cond):
             plant["zone"] = zone
             plant["name"] = c.get("name") or "this plant"
             for obj in design.check_soil(plant, cond, site):
-                if "pH" in (obj.get("say") or ""):
+                if obj.get("level") in ("serious", "blocking"):
                     return obj["say"]
             return None
-    ph = (niche.get("soil") or {}).get("ph")
-    if ph and not (float(rng[0]) <= float(ph) <= float(rng[1])):
+    soil = niche.get("soil") or {}
+    rng = c.get("ph_range")
+    ph = soil.get("ph")
+    if rng and len(rng) == 2 and ph and not (float(rng[0]) <= float(ph) <= float(rng[1])):
         return f"wants pH {rng[0]}-{rng[1]} and this soil is {ph}"
+    drain = (soil.get("drainage") or "").lower()
+    if c.get("soil_drainage") == "sharp" and ("slow" in drain or "poor" in drain):
+        return (f"needs sharp drainage and this soil drains {drain}. That is "
+                f"the classic slow way to kill a plant — two years, so nobody "
+                f"connects it to the soil — and design.py blocks it outright")
     return None
 
 
@@ -1173,18 +1178,7 @@ def _rejects(c, niche, slot, site, sun, cond=None, vis=None):
                     f"{room:.1f}. It fits the bed only by taking room the "
                     f"other rows are counting on")
 
-    why = _ph_reject(c, niche, site, cond)
-    if why:
-        return why
-
-    soil = niche.get("soil") or {}
-    drain = (soil.get("drainage") or "").lower()
-    if c.get("soil_drainage") == "sharp" and ("slow" in drain
-                                              or "poor" in drain):
-        return (f"needs sharp drainage and this soil drains {drain}. That is "
-                f"the classic slow way to kill a plant — two years, so nobody "
-                f"connects it to the soil — and design.py blocks it outright")
-    return None
+    return _soil_reject(c, niche, site, cond)
 
 
 def _fit(c, niche, slot):

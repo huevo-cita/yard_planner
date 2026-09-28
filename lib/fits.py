@@ -110,14 +110,10 @@ def region_for(slug, site=None):
     site = site if site is not None else (yards.load(slug, "site.json") or {})
     addr = site.get("address") or {}
     county = (addr.get("county") or "").strip().lower()
-    street = (addr.get("street") or "")
     for region, cat in catalogs().items():
         counties = [c.lower() for c in (cat.get("counties") or [])]
         if county and county in counties:
             return region
-        for st in cat.get("states") or []:
-            if county and county in counties and f" {st} " in f" {street} ":
-                return region
     return None
 
 
