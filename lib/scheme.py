@@ -1304,8 +1304,8 @@ def _svg(bed, code_of, font, tap):
         return (pad + float(plant["x"]) * scale,
                 pad + (above + depth - float(plant["y"])) * scale)
 
-    # Every circle carries its code. One member of a drift carries the count
-    # too. A label that does not fit inside its circle goes to a row of tags
+    # Every circle is one plant and carries only its code. The schedule gives
+    # the count. A label that does not fit inside its circle goes to a row of tags
     # under the front edge, in x order, so the leaders do not cross.
     inside, outside = [], []
     group_of = {}
@@ -1329,25 +1329,7 @@ def _svg(bed, code_of, font, tap):
 
     for group in groups:
         code = code_of[group[0]["name"]]
-        pts = [xy(p) for p in group]
-        cx = sum(p[0] for p in pts) / len(pts)
-        cy = sum(p[1] for p in pts) / len(pts)
-        holder = None
-        if len(group) > 1:
-            count = f"{len(group)} {code}"
-            # The count sits on the member nearest the centroid of the drift
-            # that holds it without reaching onto another plant.
-            for member in sorted(group, key=lambda p: math.hypot(xy(p)[0] - cx, xy(p)[1] - cy)):
-                if fits_in(member, count):
-                    holder = member
-                    inside.append((*xy(member), count, group, member))
-                    break
-            if holder is None:
-                front = max(pts, key=lambda p: p[1])
-                outside.append((front[0], front[1], count, group))
         for member in group:
-            if member is holder:
-                continue
             if fits_in(member, code):
                 inside.append((*xy(member), code, group, member))
             else:
@@ -1780,7 +1762,7 @@ __STAMP__
 </div>
 <div class=tabs>__TABS__</div>
 __SHEETS__
-<p class=key>A circle is drawn at its planting distance, so the circles touch. Every circle carries its code. One outline marks each new drift, and one circle in the drift also carries the count. Press Ctrl+Z or Cmd+Z to undo the last change. The code is in the schedule. Tap a schedule row to reach a plant that is too small to tap.</p>
+<p class=key>A circle is drawn at its planting distance, so the circles touch. Every circle is one plant and carries its code. One outline marks each new drift. The schedule gives the count of each plant. Press Ctrl+Z or Cmd+Z to undo the last change. The code is in the schedule. Tap a schedule row to reach a plant that is too small to tap.</p>
 <div class=panel id=panel hidden>
 <button type=button id=close aria-label=Close>X</button>
 <button type=button id=undo hidden title='Undo the last change to this plant (Ctrl+Z or Cmd+Z)'>Undo</button>

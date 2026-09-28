@@ -9,7 +9,7 @@ yard's scheme.json. It fails on:
 - a console error, a page error, or a failed request
 - two labels whose boxes overlap, or a label outside the drawing
 - two leader lines that cross
-- a plant with no label
+- a plant with no label, or a label with a count in it
 - one plant in one niche at two sizes, or a canopy plant that is shrunk
 - a tap target smaller than the practice minimum
 - a schedule count that does not match the circles
@@ -97,7 +97,8 @@ GEOMETRY = """() => {
     const r = t.getBBox();
     return {text: t.textContent, host: t.dataset.host, x: r.x, y: r.y, w: r.width, h: r.height};
   });
-  return {w: box.width, h: box.height, labels, leaders, plants, tagged, rows, onTop, circles, coded};
+  const tagText = [...svg.querySelectorAll('.tag text')].map(t => t.textContent);
+  return {w: box.width, h: box.height, labels, leaders, plants, tagged, rows, onTop, circles, coded, tagText};
 }"""
 
 STRIP = """(m) => {
@@ -186,6 +187,9 @@ def run(slug, shots):
                 coded = set(g["tagged"])
                 blank = sorted(p["id"] for p in g["plants"] if p["id"] not in coded)
                 check(not blank, f"{bed}: every plant has a label {blank[:4] if blank else ''}")
+                shown = [c["text"] for c in g["coded"]] + g["tagText"]
+                counted = sorted({text for text in shown if not text.isalpha()})
+                check(not counted, f"{bed}: a plant label is the code only {counted[:3]}")
                 record = next(b for b in state["scheme"]["beds"] if b["id"] == bed)
                 mixed = [grp[0]["name"] for grp in scheme.uneven(record.get("plants") or [])]
                 check(not mixed, f"{bed}: one plant in one niche has one size {mixed[:4] if mixed else ''}")
