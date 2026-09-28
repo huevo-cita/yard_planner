@@ -293,9 +293,8 @@ def _mass_sizes():
 
 
 def _is_structure(plant):
-    role = (plant.get("role") or "").lower()
-    return ("structure" in role or plant.get("layer") == "vine"
-            or plant.get("habit") == "vine")
+    from . import design as design_mod
+    return design_mod._is_structure(plant)
 
 
 def _is_makeup(plant):
@@ -1383,7 +1382,7 @@ def page(scheme, token, stamp=None, yard=None):
                int(practice.rule("drawing.label_text_px")))
     tap = int(practice.rule("drawing.tap_target_px"))
     peak = yard.regional("wildlife.monarch_peak") or {}
-    peak = peak.get("peak") if isinstance(peak, dict) else peak
+    peak = (peak.get("peak") if isinstance(peak, dict) else peak) or []
     buttons, sheets = [], []
     for i, bed in enumerate(beds):
         on = " on" if i == 0 else ""

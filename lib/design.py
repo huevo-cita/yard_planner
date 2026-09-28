@@ -1793,7 +1793,8 @@ def _field(plant, key):
 
 def _is_structure(plant):
     role = (plant.get("role") or "").lower()
-    return "structure" in role or plant.get("layer") == "vine"
+    return ("structure" in role or plant.get("layer") == "vine"
+            or _field(plant, "habit") == "vine")
 
 
 def _is_makeup(plant):
