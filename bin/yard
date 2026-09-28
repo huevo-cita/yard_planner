@@ -8,6 +8,8 @@
 #
 #   yard                          list the yards
 #   yard <module> [args]          run any lib module: sunmodel, gaps, design ...
+#   yard fits <slug> --plant NAME would this plant go anywhere in this yard
+#   yard fits <slug> --card       the same answers offline, on a phone, in a shop
 #   yard sourcing <slug>          where to buy it, ranked by reputation then distance
 #   yard week <slug>              what to do this week, in one place
 #   yard site <slug>              build every page, linked into one set
@@ -18,6 +20,7 @@
 #   yard doubts <slug>            what is still in question, and what it blocks
 #   yard changelog <slug>         what changed, and why the plan reads as it does
 #   yard vault lock <slug>        encrypt a yard so it can travel in the repo
+#   yard scheme <slug> --serve    a bed map; tap one plant to swap it
 #   yard sandbox new <slug>       a rehearsal copy, to try new work on real data
 #   yard scrub                    check nothing personal is about to be published
 #   yard install                  link the skills and agents into ~/.cursor
@@ -41,8 +44,8 @@ cd "$REPO"
 
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
 photomeasure soil climate conditions gaps doubts inputs changelog vision niches
-design sourcing bom schedule reconcile week builddoc buildhtml vault
-links plants plantphotos bundle callcard site"
+design fits sourcing bom schedule reconcile week builddoc buildhtml vault
+links plants plantphotos bundle callcard site scheme"
 
 case "${1:-}" in
   ""|list)

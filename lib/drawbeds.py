@@ -15,7 +15,8 @@ Spec is {"beds": [...]} with three bed types.
    "top_label": "NORTH (tall end)", "bottom_label": "SOUTH (short end)",
    "left_wall": "WEST FENCE (evening shade)",
    "cells": [{"x": 0, "y": 7, "w": 2, "h": 1,
-              "label": "Broccoli x2", "color": "#7fb069", "fontsize": 8.5}]}
+              "label": "Broccoli x2", "color": "#7fb069", "fontsize": 8.5}],
+   "notes": ["optional lines under the south label"]}
 
 "border" — long bed drawn horizontally, plants as circles sized to mature spread.
   {"type": "border", "name": "west-bed",
@@ -60,6 +61,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.patches import Rectangle, Circle
 
+from . import practice
+
+# Line weights in points for the words in `drawing.line_hierarchy`.
+WEIGHT = {'extra-thick': 2.6, 'thick': 1.6, 'thin': 0.8}
+
 SOIL = '#f5efe2'
 SOIL_EDGE = '#6b5b45'
 INK = '#3d3d3d'
@@ -102,21 +108,68 @@ def _ruler(ax, length, y0=0.0):
     ax.text(length / 2.0, y0 - 0.62, 'feet', ha='center', fontsize=7.5, color='#999')
 
 
+def _label_fits(p):
+    """True when the circle is wide enough to hold the name."""
+    label = p.get('label') or ''
+    return bool(label) and (2 * p.get('r', 0.5)) > len(label) * 0.11
+
+
 def _plant(ax, p):
+    """Draw one plant. The outline is dark. A short name sits in the circle.
+
+    A long name gets a leader. The schedule carries the botanical name.
+    """
     r = p.get('r', 0.5)
+    weight = practice.rule('drawing.existing_line') if p.get('existing') else 'thick'
+    style = practice.rule('drawing.removed_line') if p.get('removed') else 'solid'
     ax.add_patch(Circle((p['x'], p['y']), r, fc=p.get('color', '#c9d6c0'),
-                        ec='white', lw=1.6, alpha=0.92, hatch=p.get('hatch'),
+                        ec=SOIL_EDGE, lw=WEIGHT.get(weight, WEIGHT['thick']),
+                        ls=style, alpha=0.55, hatch=p.get('hatch'),
                         zorder=p.get('zorder', 2)))
-    if p.get('label'):
-        ax.text(p['x'], p.get('label_y', p['y']), p['label'], ha='center', va='center',
+    label = p.get('label') or ''
+    if _label_fits(p):
+        ax.text(p['x'], p.get('label_y', p['y']), label, ha='center', va='center',
                 fontsize=p.get('fontsize', 7), fontweight='bold', color='#2d2d2d',
                 zorder=p.get('zorder', 2) + 2, path_effects=_halo('white', 2.2))
+    elif label:
+        ax.annotate(label, xy=(p['x'], p['y']),
+                    xytext=(p['x'] + r + 0.15, p['y'] + r + 0.15),
+                    fontsize=7, color=INK,
+                    arrowprops=dict(arrowstyle='-', color=SOIL_EDGE, lw=0.6),
+                    zorder=p.get('zorder', 2) + 2)
+
+
+def _schedule(ax, plants, y):
+    """Count, botanical name, and spacing under the bed."""
+    rows = {}
+    for plant in plants or []:
+        label = plant.get('label') or ''
+        if not label:
+            continue
+        row = rows.setdefault(label, {
+            "count": 0,
+            "botanical": plant.get('botanical') or '',
+            "spacing": round(float(plant.get('r') or 0.5) * 2, 2),
+        })
+        row["count"] += 1
+    if not rows:
+        return y
+    ax.text(0, y, "Count    Plant    Botanical name    Spacing",
+            fontsize=7, color=INK, fontweight='bold')
+    y -= 0.28
+    for label, row in rows.items():
+        botanical = row["botanical"] or "none"
+        ax.text(0, y, f"{row['count']}    {label}    {botanical}    "
+                f"{row['spacing']} ft o.c.", fontsize=6.5, color=MUTED)
+        y -= 0.24
+    return y
 
 
 def draw_grid(spec, path):
     w, ln = spec['width'], spec['length']
+    notes = spec.get('notes', [])
     xlim = (-2.2, w + 1.6)
-    ylim = (-1.4, ln + 1.8)
+    ylim = (-1.45 - 0.32 * len(notes), ln + 1.8)
     fig, ax = _fig(spec, xlim, ylim, default_scale=1.05)
     ax.add_patch(Rectangle((0, 0), w, ln, fc=SOIL, ec=SOIL_EDGE, lw=2.5, zorder=0))
     _titles(ax, spec, xlim[0] + 0.1, ln + 1.3, gap=0.38)
@@ -130,6 +183,9 @@ def draw_grid(spec, path):
     if spec.get('bottom_label'):
         ax.text(w / 2.0, -1.05, spec['bottom_label'], ha='center', fontsize=8,
                 color=MUTED, fontweight='bold')
+    for i, note in enumerate(notes):
+        ax.text(w / 2.0, -1.48 - 0.30 * i, note, ha='center', fontsize=7.2,
+                color='#557', style='italic')
     _ruler(ax, w)
     for f in range(1, int(ln)):
         ax.plot([w, w + 0.06], [f, f], color='#999', lw=0.8)
@@ -171,6 +227,8 @@ def draw_border(spec, path):
         _ruler(ax, ln)
     for p in spec.get('plants', []):
         _plant(ax, p)
+    end = _schedule(ax, spec.get('plants', []), bottom - 0.2)
+    ax.set_ylim(min(ylim[0], end - 0.15), ylim[1])
     for s in spec.get('side_notes', []):
         ax.text(ln + 0.35, s['y'], s['text'], va='center', fontsize=8,
                 color=s.get('color', '#555'), fontweight='bold')

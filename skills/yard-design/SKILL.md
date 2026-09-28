@@ -72,7 +72,20 @@ Design objections and doubt cards do different jobs and both are needed. An
 objection says the yard will not support what was asked for. A doubt says nobody
 is sure what the yard even is yet.
 
-## Step 1 — Research the region, every time
+## Step 1 — Read `practice/` first, then research the region
+
+Read `practice/design.md`, `practice/drawing.md` and `practice/wildlife.md`
+before any search. They hold the professional rules for composition, drawing
+and wildlife design, each with graded sources. `python3 -m lib.practice` prints
+every rule that the code reads, and `--cite <key>` prints one rule with its
+sources. Do not research these rules again.
+
+Research only what is regional or new. When the research finds a new rule of
+practice, add it to `practice/rules.json` and to the section in the matching
+`.md` file, with a tier 1 or tier 2 source in `practice/sources.json`. A rule
+marked `critical` needs two independent sources. Then run
+`python3 tools/test_practice.py`. The next yard then reads the rule and does
+not research it again.
 
 Never carry a plant list from one garden to another. Search for:
 
@@ -149,6 +162,18 @@ python3 -m lib.niches <slug> --export        # -> design.json plants[]
 Then Step 3 below has most of `plants[]` already written, and `check_space` and
 `check_grouping` pass by construction rather than by luck — the slot budgets
 come from the same band those checks enforce.
+
+Read `vision.json` before you arrange a bed. When the vision names wildlife,
+that ask outranks a color theme. Keep nectar through the growing season and
+at least one larval host. Where two plants both fit, the one with nectar or a
+host wins. Do not guess a species the record has not named. December annuals
+are makeup for the party date. They are not the planting. The party date does
+not replace the October bloom.
+
+Then arrange what remains. Put structure first, then the anchors, then the
+masses. Put the tall plants at the wall and the short plants at the front.
+On a wildlife bed, use several species so the bloom is staggered. Keep two or
+three flower colors inside that set. Repeat one plant from bed to bed.
 
 Two things worth knowing before relying on it:
 

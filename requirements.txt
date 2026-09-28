@@ -24,6 +24,12 @@ Pillow>=9.0
 laspy[lazrs]>=2.5
 rasterio>=1.3
 
+# Development only, and not installed by the line above. The browser test of
+# the planting map, tools/test_mapview.py, needs Playwright and Chromium, which
+# take about 150 MB. The test skips when they are not installed.
+#
+#   pip install playwright && python3 -m playwright install chromium
+
 # Deliberately not here: `requests`. The standard library's urllib does
 # everything these fetches need, and one fewer dependency is one fewer reason
 # a clone fails to run on a machine that is not this one.

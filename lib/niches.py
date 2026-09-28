@@ -82,7 +82,7 @@ import json
 import os
 import re
 
-from . import design, doubts, solar, yards
+from . import conditions, design, doubts, practice, solar, yards
 
 # The months a light figure here describes, and it is `solar.GROWING_SEASON`
 # rather than a window of this module's own.
@@ -124,13 +124,16 @@ WINTER = list(solar.STANDING_SEASON)
 # Size classes, by mature spread. The boundaries are where the practical
 # question changes: under a foot a plant is edging and is planted in runs, one
 # to two feet is a front-row clump, and over three feet it is a shrub that
-# governs the bed rather than filling it.
+# governs the bed rather than filling it. The least count in each class is
+# the smallest mass in `design.mass_sizes`: a run of edging takes the second
+# size, and a shrub takes the smallest structural size.
+_MASS = practice.rule("design.mass_sizes")
 SIZES = [
-    ("edging", 0.0, 1.0, 5),
-    ("small", 1.0, 2.0, 3),
-    ("medium", 2.0, 3.0, 3),
-    ("large", 3.0, 5.0, 1),
-    ("anchor", 5.0, 99.0, 1),
+    ("edging", 0.0, 1.0, _MASS["default"][1]),
+    ("small", 1.0, 2.0, _MASS["default"][0]),
+    ("medium", 2.0, 3.0, _MASS["default"][0]),
+    ("large", 3.0, 5.0, _MASS["structural"][0]),
+    ("anchor", 5.0, 99.0, _MASS["structural"][0]),
 ]
 
 # Which layers a border wants, and the share of its area each should take.
@@ -1048,6 +1051,8 @@ def slate(slug, incoming, data=None):
     data = data or load(slug)
     site = yards.load_site(slug)
     sun = yards.load(slug, "sun-hours.json") or {}
+    cond = yards.load_conditions(slug)
+    vis = yards.load(slug, "vision.json") or {}
     kept, refused = 0, []
     for slot_id, cands in incoming.items():
         n, s = find(data, slot_id)
@@ -1056,7 +1061,7 @@ def slate(slug, incoming, data=None):
             continue
         ok = []
         for c in cands:
-            why = _rejects(c, n, s, site, sun)
+            why = _rejects(c, n, s, site, sun, cond, vis)
             if why:
                 refused.append((slot_id, c.get("name", "?"), why))
                 continue
@@ -1070,10 +1075,50 @@ def slate(slug, incoming, data=None):
     return data, kept, refused
 
 
-def _rejects(c, niche, slot, site, sun):
+def _soil_reject(c, niche, site, cond):
+    """Refuse a candidate on pH and on drainage the way design.check_soil does.
+
+    With conditions loaded, the check uses the layer the roots reach, and a
+    serious or blocking objection from check_soil refuses the plant. The
+    cached niche soil is the native figure, and it does not get a vote once a
+    layer record exists. With no conditions, the cached figures still apply,
+    so an older caller keeps the same answer.
+    """
+    zone = (niche.get("zones") or [None])[0]
+    if cond is not None and zone and site is not None:
+        key = design.resolve_site_zone(site, zone) or zone
+        layers = conditions.bed_layers(cond, key)
+        kind = design.zone_kind(site, key)
+        if layers is not None or kind == "container":
+            plant = dict(c)
+            plant["zone"] = zone
+            plant["name"] = c.get("name") or "this plant"
+            for obj in design.check_soil(plant, cond, site):
+                if obj.get("level") in ("serious", "blocking"):
+                    return obj["say"]
+            return None
+    soil = niche.get("soil") or {}
+    rng = c.get("ph_range")
+    ph = soil.get("ph")
+    if rng and len(rng) == 2 and ph and not (float(rng[0]) <= float(ph) <= float(rng[1])):
+        return f"wants pH {rng[0]}-{rng[1]} and this soil is {ph}"
+    drain = (soil.get("drainage") or "").lower()
+    if c.get("soil_drainage") == "sharp" and ("slow" in drain or "poor" in drain):
+        return (f"needs sharp drainage and this soil drains {drain}. That is "
+                f"the classic slow way to kill a plant — two years, so nobody "
+                f"connects it to the soil — and design.py blocks it outright")
+    return None
+
+
+def _rejects(c, niche, slot, site, sun, cond=None, vis=None):
     missing = [f for f in REQUIRED if not c.get(f)]
     if missing:
         return f"no {', '.join(missing)} recorded, so it cannot be checked"
+
+    if vis:
+        breach = design.limit_breach(c, (niche.get("zones") or [None])[0], vis)
+        if breach:
+            return breach[1]
 
     want = (c.get("light") or "").lower()
     if want not in design.LIGHT_NEED:
@@ -1133,18 +1178,7 @@ def _rejects(c, niche, slot, site, sun):
                     f"{room:.1f}. It fits the bed only by taking room the "
                     f"other rows are counting on")
 
-    soil = niche.get("soil") or {}
-    ph, rng = soil.get("ph"), c.get("ph_range")
-    if ph and rng and not (float(rng[0]) <= float(ph) <= float(rng[1])):
-        return f"wants pH {rng[0]}-{rng[1]} and this soil is {ph}"
-
-    drain = (soil.get("drainage") or "").lower()
-    if c.get("soil_drainage") == "sharp" and ("slow" in drain
-                                              or "poor" in drain):
-        return (f"needs sharp drainage and this soil drains {drain}. That is "
-                f"the classic slow way to kill a plant — two years, so nobody "
-                f"connects it to the soil — and design.py blocks it outright")
-    return None
+    return _soil_reject(c, niche, site, cond)
 
 
 def _fit(c, niche, slot):
@@ -1940,7 +1974,8 @@ def count_for(niche, slot, candidate):
     room = (float(niche["area_sqft"]) * slot["budget_share"]
             * (design.COVER_FLOOR + design.COVER_CEILING) / 2.0)
     each = _footprint(spread)
-    minimum = next((m for c, lo, hi, m in SIZES if c == slot.get("size")), 3)
+    minimum = next((m for c, lo, hi, m in SIZES if c == slot.get("size")),
+                   _MASS["default"][0])
     ceiling = int(float(niche["area_sqft"]) * slot["budget_share"]
                   * design.COVER_CEILING // each) or minimum
     # And the bed's own length, on the plant's spread rather than the class's.

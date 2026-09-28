@@ -1,0 +1,866 @@
+{
+  "about": "Every number that the code reads. The prose and the full rule set are in the .md files.",
+  "rules": {
+    "design.color_theme_count": {
+      "value": [
+        2,
+        3
+      ],
+      "unit": "count",
+      "critical": true,
+      "statement": "Limit a small bed to two or three main flower colours. Use adjacent hues on the colour wheel, or one complementary pair.",
+      "doc": "design.md",
+      "section": "10.1",
+      "sources": [
+        {
+          "id": "rhs-plan-border",
+          "support": "'Small borders are generally pleasing to the eye when the colour palette is limited; lots of different colours can look chaotic. Selecting three colours next to each other on the colour wheel ... or selecting colours from opposite sides of the wheel ... generally creates pleasing results.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "hansen-ep449",
+          "support": "'Repeat one distinct form or texture, or two to three colors in selected beds'.",
+          "verdict": "partial"
+        },
+        {
+          "id": "hansen-ep375",
+          "support": "'Typically one color, two contrasting colors, or several analogous (similar) colors are repeated throughout the garden.'",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "Hoyle et al. (2018) found that public aesthetic response rose with flower colour diversity. Designers limit hues for coherence. Recommend 2 or 3 dominant hues, plus neutrals and small accents."
+    },
+    "design.evergreen_share": {
+      "value": 0.33,
+      "unit": "ratio",
+      "critical": false,
+      "statement": "Make about one-third of the planting hold structure in winter. Count evergreen shrubs, winter-green groundcovers and species with persistent stems.",
+      "doc": "design.md",
+      "section": "7.2",
+      "sources": [
+        {
+          "id": "ksu-johnson-bones",
+          "support": "'The plant materials in the entrance planting should be at least one-third evergreen. This basic landscape rule can be applied throughout the entire garden' and 'Too many evergreens do not create the landscape changes throughout the year'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "hansen-ep375",
+          "support": "'All plant compositions begin with the main structure plants, the large, mostly evergreen background plants'. No number.",
+          "verdict": "partial"
+        },
+        {
+          "id": "rhs-plan-border",
+          "support": "'Start by positioning evergreen and large structural plants, to create the ‘bones’ of the border.' No number.",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "K-State counts evergreens only. Oudolf and Hitchmough get winter structure from standing skeletons and winter-green understoreys. Recommend counting all three toward one-third."
+    },
+    "design.front_layer_share": {
+      "value": 0.5,
+      "unit": "ratio",
+      "critical": true,
+      "statement": "Put at least half of all plants in the ground or groundcover layer. Put fewer plants in each taller layer.",
+      "doc": "design.md",
+      "section": "2.1",
+      "sources": [
+        {
+          "id": "rainer-west-2015",
+          "support": "Seppanen (2019) summarising the book: 'Ground cover plants should make up for 50 % or the planting.'",
+          "verdict": "partial"
+        },
+        {
+          "id": "hitchmough-2008-cate",
+          "support": "'most of the seed sown is of ground layer species (typically around 70% on a target seedling emergence basis) with intermediate canopy layers at 20% ... and tall canopy species 10% or less.'",
+          "verdict": "partial"
+        },
+        {
+          "id": "jiang-hitchmough-2022",
+          "support": "'The ratio of emerged seedlings designed into each layer (low: medium; tall) was 4:2:1.' (low layer is 57%)",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "The Hitchmough figures are for sown seedlings, not plugs or pots. Rainer and West give 50% for planted schemes. Use 0.5 as the minimum for planted beds."
+    },
+    "design.height_bands_ft": {
+      "value": [
+        0.5,
+        2,
+        5
+      ],
+      "unit": "ft",
+      "critical": false,
+      "statement": "Classify each plant by mature height. Ground layer is up to 0.5 ft, foreground is 0.5 to 2 ft, midground is 2 to 5 ft, background is above 5 ft.",
+      "doc": "design.md",
+      "section": "1.2",
+      "sources": [
+        {
+          "id": "hansen-ep449",
+          "support": "'ground layer ... grow about 6 inches high'; 'The foreground layers, plants that are 6 inches to 2 feet'; 'The midground layer consists of plants from 2 feet to 5 feet.'; 'The tallest layer, the background plants, consists of trees and large shrubs'.",
+          "verdict": "supported"
+        }
+      ],
+      "disagreement": "Rainer and West define layers by function, not by a height number. Tier 3 guides use other cut points (for example 1.5 ft and 3 ft)."
+    },
+    "design.interest_every_season": {
+      "value": {
+        "seasons": [
+          "spring",
+          "summer",
+          "autumn",
+          "winter"
+        ],
+        "min_features_per_season": 1,
+        "succession_by_layer": {
+          "low": "spring",
+          "mid": "late spring to summer",
+          "tall": "midsummer to autumn"
+        }
+      },
+      "unit": null,
+      "critical": true,
+      "statement": "Give the bed at least one feature of interest in every season. Stagger bloom by layer: low plants in spring, mid plants in summer, tall plants in late summer and autumn.",
+      "doc": "design.md",
+      "section": "7.1",
+      "sources": [
+        {
+          "id": "rhs-plan-border",
+          "support": "'Aim to have something in flower or looking good in every month of the year.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "csu-7402",
+          "support": "'Perennial gardens should ... provide a progression of bloom and textures all season.'",
+          "verdict": "partial"
+        },
+        {
+          "id": "illinois-2023-layers",
+          "support": "'Plan for seasonality. Make sure to include some spring ephemerals, summer bloomers, fall color, and winter visual interest.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "hitchmough-2008-cate",
+          "support": "'a low growing, spring flowering shade tolerant understory layer ..., a mid-canopy late spring to summer flowering layer and a taller mid-summer to autumn flowering layer'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "rhs-prairie",
+          "support": "'Start with a low understory of spring perennials with a mix of taller perennials to follow, with flowering progressing through to autumn'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "hitchmough-wagner-ahmad-2017",
+          "support": "The winter-green under-canopy gave 'a major flowering display in spring' and improved 'winter appearance'.",
+          "verdict": "partial"
+        }
+      ]
+    },
+    "design.mass_sizes": {
+      "value": {
+        "default": [
+          3,
+          5,
+          7
+        ],
+        "structural": [
+          1,
+          3,
+          5
+        ],
+        "groundcover_min": 10,
+        "small_bed": [
+          3,
+          5
+        ]
+      },
+      "unit": "count",
+      "critical": true,
+      "statement": "Plant each seasonal or midground species in odd-numbered groups of 3, 5 or 7. Let structural plants stand alone or in 3s; mass groundcovers in 10 or more.",
+      "doc": "design.md",
+      "section": "3.1",
+      "sources": [
+        {
+          "id": "hansen-mg086",
+          "support": "'Features that are grouped in threes, or in other groups of odd numbers, such as in groups of five or seven, feel more balanced to the eye'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "csu-7402",
+          "support": "'Place plants of the same variety in groups of three, five, or seven to increase the impact of color or texture.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "rhs-plan-border",
+          "support": "'Planting these in groups, ideally with an odd number of plants, helps prevent the border looking ‘bitty’.'",
+          "verdict": "partial"
+        },
+        {
+          "id": "ksu-emg-ch8",
+          "support": "'As a rule, five to seven plants will create the desired effect. A large delphinium or peony will be of sufficient size to be attractive'.",
+          "verdict": "partial"
+        },
+        {
+          "id": "illinois-2023-layers",
+          "support": "Groundcover: 'may be planted in groups of 10 or more'; structural: 'Individual plants or small groupings – three or five, typically – are appropriate for this layer.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "rhs-prairie",
+          "support": "'In small areas, plant in informal drifts of at least five plants.'",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "RHS prairie guidance asks for drifts of at least 5. Hansen says a small courtyard needs smaller masses. For a 4 ft bed, recommend 3 or 5 for seasonal plants and 1 or 3 for structural plants."
+    },
+    "design.mass_small_below_ft": {
+      "value": 2.0,
+      "unit": "ft",
+      "critical": false,
+      "statement": "Mass every species with a mature height below 2 ft. A single small plant has little impact and makes a checkerboard.",
+      "doc": "design.md",
+      "section": "3.2",
+      "sources": [
+        {
+          "id": "hansen-ep433",
+          "support": "'Groundcover or bedding plants ... typically look better in masses because they are often small and have little impact as individual plants.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "parkbrown-mg035",
+          "support": "'Evergreen and flowering shrubs provide an attractive backdrop for masses of small perennials, whereas large-growing perennials can be used as specimen plants.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "ksu-emg-ch8",
+          "support": "'A large delphinium or peony will be of sufficient size to be attractive, but a random collection of different small- to medium-sized plants will present a disorganized, checkerboard appearance.'",
+          "verdict": "supported"
+        }
+      ]
+    },
+    "design.plant_dense_then_thin": {
+      "value": {
+        "applies": true,
+        "herbaceous": "7-9 per m2",
+        "groundcover": "12 in on centre",
+        "woody": "mature spread, barely touching",
+        "edit_from_year": 3,
+        "keep_clear_of_wall": true,
+        "herbaceous_oc_ft": 1.2,
+        "groundcover_oc_ft": 1.0
+      },
+      "unit": null,
+      "critical": true,
+      "statement": "Plant perennials and groundcovers closer than their mature spread, then edit out the dominant spreaders from the second year. Space shrubs at mature spread.",
+      "doc": "design.md",
+      "section": "6.2",
+      "sources": [
+        {
+          "id": "kingsbury-2019-gap",
+          "support": "'Plantings quickly look full and potentially a good canopy can develop, but only if the plant forms used mesh together'.",
+          "verdict": "partial"
+        },
+        {
+          "id": "rhs-prairie",
+          "support": "'After the second year, thinning out dominant species will be necessary'. A planted border is 'Less dense than a seeded prairie, so there are more opportunities for weed seedlings'.",
+          "verdict": "partial"
+        },
+        {
+          "id": "illinois-2023-layers",
+          "support": "Groundcover 'planted as little as 12 inches apart. As they fill in and mature, they protect from soil erosion'.",
+          "verdict": "partial"
+        },
+        {
+          "id": "hansen-ep375",
+          "support": "Counter-view and wall rule: 'If plants are spaced too closely (to simulate a fully grown landscape) the overcrowded plants will present a maintenance issue.' and 'leave space so the plant does not touch the side of the house'.",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "Hansen (EP375, EP449) and Colorado State say to space every plant so it touches neighbours only at maturity. Kingsbury, Rainer and West, and RHS plant herbaceous layers denser and manage by editing."
+    },
+    "design.repeat_min_beds": {
+      "value": 2,
+      "unit": "count",
+      "critical": true,
+      "statement": "Place each key species or group in at least two locations. Three locations in a triangle is better.",
+      "doc": "design.md",
+      "section": "4.2",
+      "sources": [
+        {
+          "id": "csu-7402",
+          "support": "'Repeat groups of the same plant two or three times in the space'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "hansen-ep449",
+          "support": "'The most common pattern is a triangle shape between three plant beds.'",
+          "verdict": "partial"
+        }
+      ]
+    },
+    "design.skyline_min_range_ft": {
+      "value": null,
+      "unit": "ft",
+      "critical": false,
+      "statement": "Along the length of the back layer, make the tallest and shortest plant heights differ by a measurable amount.",
+      "doc": "design.md",
+      "section": "1.5",
+      "sources": [
+        {
+          "id": "hansen-ep449",
+          "support": "'The height should undulate from high to low and back to high along the horizon.' No number is given.",
+          "verdict": "supported"
+        }
+      ]
+    },
+    "design.tall_layer_share_max": {
+      "value": 0.15,
+      "unit": "ratio",
+      "critical": true,
+      "statement": "Keep structural and emergent plants to 15% or less of the plant count. A few tall plants carry the design; many tall plants shade out the lower layers.",
+      "doc": "design.md",
+      "section": "2.3",
+      "sources": [
+        {
+          "id": "hitchmough-2008-cate",
+          "support": "'tall canopy species 10% or less' and 'plants present in the mid- and tall canopy layers present at much lower densities to prevent the elimination of shade intolerant ground layers species.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "rainer-west-2015",
+          "support": "Seppanen (2019): 'The structural/framework plants should comprise 10-15 % of the planting.'",
+          "verdict": "supported"
+        },
+        {
+          "id": "dunnett-hitchmough-2004",
+          "support": "Kircher proportions via Seppanen (2019): '1-5 emerging perennials' per 100 m² against 30-80 ground-covering perennials.",
+          "verdict": "partial"
+        }
+      ]
+    },
+    "drawing.existing_line": {
+      "value": "thin",
+      "unit": null,
+      "critical": true,
+      "statement": "Draw an existing plant that stays with a thin solid line and a label style that differs from proposed plants.",
+      "doc": "drawing.md",
+      "section": "7.1",
+      "sources": [
+        {
+          "id": "iso-11091",
+          "support": "Ref. 3.20 'Existing hedge to be retained: Thin irregular line'; 3.22 'Existing tree: The crown circle is drawn with a thin line and the trunk circle with a thick line. Trunk and crown circles shall be drawn approx. to scale'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "knox-2024",
+          "support": "'The labelling system for existing plants must be clearly different and separate from that used for the proposed plants.'",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "The brief expected 'dashed' for existing. The sources do not support that for retained plants: ISO uses a thin dashed line for existing contours (ref. 3.3) and for areas to be removed (ref. 3.9), and a thin solid line for existing trees and hedges. Recommend 'thin' for retained plants and keep 'dashed' for removal (drawing.removed_line)."
+    },
+    "drawing.label_text_px": {
+      "value": 12,
+      "unit": "px",
+      "critical": false,
+      "statement": "Set plant labels at 12 px where the space allows. The floor stays at 11 px.",
+      "doc": "drawing.md",
+      "section": "10.8",
+      "sources": [
+        {
+          "id": "material-typography",
+          "support": "Material 3 baseline scale: 'textAppearanceBodySmall | Regular 12sp'.",
+          "verdict": "supported"
+        }
+      ],
+      "disagreement": "Apple gives 11 pt as the minimum and 17 pt as the default. 12 px sits between them and keeps a code label inside a small circle."
+    },
+    "drawing.min_text_px": {
+      "value": 11,
+      "unit": "px",
+      "critical": true,
+      "statement": "No label on the map is smaller than 11 px. Body text and the schedule use 16 to 17 px.",
+      "doc": "drawing.md",
+      "section": "10.5",
+      "sources": [
+        {
+          "id": "apple-hig-typography",
+          "support": "Table 'Default size / Minimum size': 'iOS, iPadOS 17 pt 11 pt'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "material-typography",
+          "support": "Material 3 baseline scale: 'textAppearanceLabelSmall | Medium 11sp', 'textAppearanceBodySmall | Regular 12sp', 'textAppearanceBodyLarge | Regular 16sp'.",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "WCAG sets no minimum text size; it requires text to resize (SC 1.4.4) and Apple asks apps to allow enlargement 'by at least 200 percent'. Recommend 11 px as the floor, 12 px for plant labels where space allows, and text that scales with the user's setting."
+    },
+    "drawing.removed_line": {
+      "value": "dashed",
+      "unit": null,
+      "critical": true,
+      "statement": "Draw a plant or area to be removed with a dashed outline. An X on the symbol is an accepted alternative.",
+      "doc": "drawing.md",
+      "section": "7.2",
+      "sources": [
+        {
+          "id": "knox-2024",
+          "support": "'Vegetation to be removed - should be plotted with a dashed circle.' Example plan note: 'Existing trees to be removed identified to species level, shown to scale with a dashed circle'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "iso-11091",
+          "support": "Ref. 3.9 'General area to be removed: Thin dashed line; this symbol is an alternative to ISO 7518'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "novi-ldm",
+          "support": "'All removals shall be clearly marked as to be removed with an X or R on the tree symbol on the plan view, and on the accompanying tree chart/list (show as Saved or Removed).'",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "Novi uses an X or R mark instead of a dash. Recommend the dashed outline plus an X, so that removal does not depend on one cue."
+    },
+    "drawing.tap_target_px": {
+      "value": 44,
+      "unit": "px",
+      "critical": true,
+      "statement": "Make every tappable plant at least 44 by 44 CSS px. Use 48 px where the layout allows it.",
+      "doc": "drawing.md",
+      "section": "10.1",
+      "sources": [
+        {
+          "id": "wcag22",
+          "support": "SC 2.5.5 Target Size (Enhanced) (Level AAA): 'The size of the target for pointer inputs is at least 44 by 44 CSS pixels'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "apple-hig-accessibility",
+          "support": "Table 'Default control size / Minimum control size': 'iOS, iPadOS 44x44 pt 28x28 pt'.",
+          "verdict": "supported"
+        },
+        {
+          "id": "android-a11y-apps",
+          "support": "'we recommend that each interactive UI element have a focusable area, or touch target size, of at least 48dpx48dp. Larger is even better.'",
+          "verdict": "partial"
+        },
+        {
+          "id": "parhi-2006",
+          "support": "Abstract and Conclusions: 'target sizes should be at least 9.2 mm for single-target tasks and 9.6 mm for multi-target tasks'.",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "Values range from 44 (Apple, WCAG AAA) to 48 dp (Android, about 9 mm) to 9.2 mm (Parhi). Recommend 44 CSS px as the rule, because iOS Safari maps 1 CSS px to 1 pt and WCAG uses CSS px; 48 is preferred."
+    },
+    "wildlife.annuals_as_makeup": {
+      "value": {
+        "allowed": true,
+        "counts_as_non_native": true,
+        "max_share": 0.3
+      },
+      "unit": null,
+      "critical": true,
+      "statement": "Allow non-native annuals only as seasonal color. They count against the native share and must be neonicotinoid-free and non-invasive.",
+      "doc": "wildlife.md",
+      "section": "13.1",
+      "sources": [
+        {
+          "id": "xerces-urban",
+          "support": "\"Flowering herbs, vegetables, and annuals can provide some pollen and nectar, but prioritize native perennials for native pollinators.\"",
+          "verdict": "partial"
+        },
+        {
+          "id": "agrilife-today-2024",
+          "support": "\"Although not native to Texas, annuals like zinnias, marigolds and cosmos thrive within the region and provide dynamic colors.\"",
+          "verdict": "partial"
+        },
+        {
+          "id": "agrilife-travis-butterfly",
+          "support": "\"While we always encourage you to landscape with native and adapted plants, having areas of annual flowers that attract pollinators can bring extra enjoyment.\"",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "The max_share of 0.3 is derived from wildlife.native_share, not stated by these sources. The Travis County guide says adult butterflies 'aren't particular whether it be native or not' for nectar. Nectar value does not replace host value, so keep annuals inside the non-native 30 percent."
+    },
+    "wildlife.keystone_genera": {
+      "value": {
+        "central-texas": {
+          "herbaceous_confirmed": [
+            "Solidago",
+            "Helianthus",
+            "Symphyotrichum",
+            "Verbesina",
+            "Rudbeckia",
+            "Gaillardia",
+            "Ratibida",
+            "Dalea",
+            "Vernonia",
+            "Heterotheca"
+          ],
+          "herbaceous_ecoregion_list_unconfirmed": [
+            "Grindelia",
+            "Gutierrezia",
+            "Coreopsis",
+            "Erigeron",
+            "Cirsium",
+            "Machaeranthera",
+            "Senecio",
+            "Bidens",
+            "Isocoma",
+            "Baccharis",
+            "Astragalus",
+            "Chrysopsis",
+            "Heliomeris",
+            "Heliopsis",
+            "Oenothera",
+            "Helenium"
+          ],
+          "woody_confirmed": [
+            "Quercus",
+            "Prunus"
+          ],
+          "woody_ecoregion_list_unconfirmed": [
+            "Salix",
+            "Populus",
+            "Carya",
+            "Acer",
+            "Ulmus",
+            "Crataegus",
+            "Juglans",
+            "Rubus",
+            "Vitis",
+            "Rosa",
+            "Cornus",
+            "Fraxinus",
+            "Amelanchier",
+            "Corylus"
+          ],
+          "excluded_from_ecoregion_list": [
+            "Betula",
+            "Alnus",
+            "Malus",
+            "Vaccinium",
+            "Pinus",
+            "Larix",
+            "Castanea",
+            "Tsuga",
+            "Tilia",
+            "Abies",
+            "Picea",
+            "Pseudotsuga",
+            "Chrysothamnus",
+            "Ericameria",
+            "Baileya"
+          ],
+          "species_named_in_sources": {
+            "Prunus": [
+              "P. mexicana",
+              "P. serotina var. eximia",
+              "P. angustifolia"
+            ],
+            "Solidago": [
+              "S. altissima",
+              "S. gigantea",
+              "S. speciosa"
+            ],
+            "Helianthus": [
+              "H. maximiliani"
+            ],
+            "Symphyotrichum": [
+              "S. oblongifolium"
+            ],
+            "Verbesina": [
+              "V. virginica (frostweed)"
+            ],
+            "Quercus": [
+              "Q. stellata (post oak)"
+            ],
+            "Gaillardia": [
+              "G. pulchella"
+            ],
+            "Ratibida": [
+              "R. columnifera"
+            ],
+            "Dalea": [
+              "D. candida",
+              "D. frutescens"
+            ],
+            "Vernonia": [
+              "V. baldwinii"
+            ],
+            "Rudbeckia": [
+              "R. hirta"
+            ],
+            "Heterotheca": [
+              "H. subaxillaris (camphorweed)"
+            ],
+            "Gutierrezia": [
+              "G. texana (Texas broomweed)"
+            ]
+          }
+        },
+        "default": null
+      },
+      "unit": null,
+      "critical": true,
+      "statement": "Use these keystone genera for Central Texas. Confirm a species that is native to Central Texas for each genus before the software accepts it.",
+      "doc": "wildlife.md",
+      "section": "2.2",
+      "sources": [
+        {
+          "id": "nwf-keystone-eco9",
+          "support": "Great Plains Ecoregion 9 top genera: Quercus 253 caterpillar species, Prunus 222, Salix 214 ... Solidago 71, Helianthus 58; bee keystones include Helianthus 89, Solidago 56, Symphyotrichum 43, Verbesina 34, Rudbeckia 32, Gaillardia 18, Ratibida 14, Dalea 12, Vernonia 12.",
+          "verdict": "supported"
+        },
+        {
+          "id": "narango-2020",
+          "support": "Results: \"The top 5 genera were Quercus ... Salix ... Prunus ... Pinus ... and Populus\"; \"Plant identities critical for retaining interaction diversity are similar and independent of geography.\"",
+          "verdict": "partial"
+        },
+        {
+          "id": "xerces-southern-plains",
+          "support": "Southern Plains list names Helianthus maximiliani, Solidago gigantea, S. speciosa, Symphyotrichum oblongifolium, Gaillardia pulchella, Ratibida columnifera, Dalea candida, Vernonia baldwinii, Prunus angustifolia.",
+          "verdict": "supported"
+        },
+        {
+          "id": "agrilife-travis-butterfly",
+          "support": "Austin list names Prunus mexicana, Prunus serotina var. eximia (host for tiger swallowtails and others), Solidago altissima.",
+          "verdict": "supported"
+        },
+        {
+          "id": "agrilife-today-2024",
+          "support": "Fall nectar list for Texas includes \"Frostweed\", \"Fall aster\", \"Maximilian sunflower\", \"Goldenrod varieties\".",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "The NWF list covers the whole Great Plains ecoregion, not Central Texas. 'Confirmed' means an opened Texas or Southern Plains source names a species. 'Unconfirmed' genera need a Central Texas species check, for example in the Wildflower Center plant database. The 'excluded' genera had no Central Texas species in any opened source; this exclusion is a judgement, not a sourced fact.",
+      "research_key": "wildlife.keystone_genera_central_texas"
+    },
+    "wildlife.min_hosts_per_bed": {
+      "value": 1,
+      "unit": "count",
+      "critical": true,
+      "statement": "Put at least one caterpillar host plant in every wildlife bed. Nectar alone feeds adults but does not let butterflies breed.",
+      "doc": "wildlife.md",
+      "section": "4.1",
+      "sources": [
+        {
+          "id": "lbjwc-butterfly",
+          "support": "\"nectar plants for adult butterflies are entirely different than the host plants sought by larva for food\"; \"Ensure that both diverse adult nectar plants and a variety of caterpillar host plants will be present.\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "agrilife-travis-butterfly",
+          "support": "\"Nectar and larval (caterpillar) food are both important considerations to selecting butterfly plants for your garden.\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "nrcs-monarch-wheg",
+          "support": "National minimum criteria: \"plantings should include at least one species of milkweed (Asclepias spp.)\".",
+          "verdict": "partial"
+        },
+        {
+          "id": "xerces-southern-plains",
+          "support": "Principle 2: \"Protect and provide bee nest sites and caterpillar host plants\".",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "No source gives a count per bed. The value 1 is the smallest number that meets 'include host plants'. LBJWC asks for 'a variety', so report more than one as better."
+    },
+    "wildlife.min_nectar_species_total": {
+      "value": 9,
+      "unit": "count",
+      "critical": true,
+      "statement": "Plant at least nine nectar species in total, three for each of the three seasons. One long-blooming species can count in two seasons.",
+      "doc": "wildlife.md",
+      "section": "5.2",
+      "sources": [
+        {
+          "id": "nrcs-monarch-wheg",
+          "support": "\"a minimum of three plants in each of three different blooming periods (early, mid, and late).\"",
+          "verdict": "partial"
+        },
+        {
+          "id": "xerces-install",
+          "support": "\"at least three species from each blooming period (early, mid, and late season)\".",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "Nine is 3 x 3 and assumes each species blooms in one season. Neither source says whether one species can count in two periods. Recommend the software count a species in every season that its bloom months cover, and still require 3 per season."
+    },
+    "wildlife.monarch_peak": {
+      "value": {
+        "central-texas": {
+          "peak": [
+            "Oct"
+          ],
+          "window": [
+            "Sep",
+            "Oct",
+            "Nov"
+          ]
+        },
+        "default": null
+      },
+      "unit": "months",
+      "critical": true,
+      "statement": "Treat October as the fall monarch peak in Austin. The migration window runs from late September to November.",
+      "doc": "wildlife.md",
+      "section": "7.1",
+      "sources": [
+        {
+          "id": "monarch-watch-peak",
+          "support": "Table: \"31 degrees / 12 October / 4-16 October\"; \"29 degrees / 18 October / 10-22 October\". Austin is about 30.3 degrees N, between these rows.",
+          "verdict": "supported"
+        },
+        {
+          "id": "tpwd-mysterious-monarchs",
+          "support": "\"Monarchs enter the Texas portion of this flyway during the last days of September. By the third week of October, most have passed through into Mexico.\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "agrilife-today-2024",
+          "support": "W. Brown (AgriLife, Travis County): \"They usually start heading south through Texas around September into November.\"",
+          "verdict": "partial"
+        }
+      ],
+      "research_key": "wildlife.monarch_peak_central_texas"
+    },
+    "wildlife.native_share": {
+      "value": 0.7,
+      "unit": "ratio",
+      "critical": false,
+      "statement": "Make at least 70 percent of the planting native. The study measured plant biomass, so the check must weight by plant size, not by species count.",
+      "doc": "wildlife.md",
+      "section": "1.2",
+      "sources": [
+        {
+          "id": "narango-2018",
+          "support": "Abstract: \"unsustainable population growth in these yards compared with those with >70% native plant biomass.\" Significance: \"populations could only be sustained if nonnative plants constituted <30% of plant biomass.\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "narango-2017",
+          "support": "Abstract: \"chickadees were less likely to breed in yards as the dominance of non-native plants increased.\"",
+          "verdict": "partial"
+        },
+        {
+          "id": "burghardt-2009",
+          "support": "Paired all-native versus conventional yards: native yards had more caterpillars and birds (abstract).",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "Only Narango et al. 2018 gives the 70 percent figure; the other sources support a native-dominated planting without a number. The 70 percent is a floor: the same paper reports mean population growth was sustainable only at <6% nonnative biomass, and the CIs overlapped replacement at <30%. It is one bird species in the mid-Atlantic. Recommend 0.7 as the minimum that the check enforces, and report a higher share as better."
+    },
+    "wildlife.nectar_months": {
+      "value": {
+        "central-texas": [
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov"
+        ],
+        "default": null
+      },
+      "unit": "months",
+      "critical": true,
+      "statement": "Treat March to November as the nectar season in Central Texas. Winter bloom from December to February is optional.",
+      "doc": "wildlife.md",
+      "section": "6.1",
+      "sources": [
+        {
+          "id": "agrilife-travis-butterfly",
+          "support": "Austin tables: \"Spring Blooming Plants: March - May\"; \"Summer through Fall Blooming Plants: June - November\"; \"Winter Blooming Plants: December - February\".",
+          "verdict": "supported"
+        },
+        {
+          "id": "tpwd-plan-2016",
+          "support": "NRCS addendum: \"high quality nectar during critical migration time periods (March 1 to Mid-April and Mid-September to November).\"",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "The Travis County guide also lists winter nectar plants (Dec-Feb). Recommend the check require bloom March to November and give credit for winter bloom without requiring it.",
+      "research_key": "wildlife.nectar_months_central_texas"
+    },
+    "wildlife.nectar_species_per_season": {
+      "value": 3,
+      "unit": "count",
+      "critical": true,
+      "statement": "Have at least three different species in bloom in each of spring, summer and fall.",
+      "doc": "wildlife.md",
+      "section": "5.1",
+      "sources": [
+        {
+          "id": "xerces-install",
+          "support": "\"at least three species from each blooming period (early, mid, and late season), should be included.\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "xerces-urban",
+          "support": "\"Select at least three blooming plant species per season to provide continuous food and resources.\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "nrcs-monarch-wheg",
+          "support": "\"Planners should choose a minimum of three plants in each of three different blooming periods (early, mid, and late).\"",
+          "verdict": "supported"
+        },
+        {
+          "id": "blaauw-isaacs-2014-jae",
+          "support": "Abstract: plantings \"seeded ... with a mix of 15 perennial wildflower species that provided season-long bloom\" increased wild bee and syrphid abundance annually.",
+          "verdict": "partial"
+        }
+      ]
+    },
+    "wildlife.seasons": {
+      "value": {
+        "central-texas": {
+          "spring": [
+            "Mar",
+            "Apr",
+            "May"
+          ],
+          "summer": [
+            "Jun",
+            "Jul",
+            "Aug"
+          ],
+          "fall": [
+            "Sep",
+            "Oct",
+            "Nov"
+          ]
+        },
+        "default": null
+      },
+      "unit": "months",
+      "critical": true,
+      "statement": "Map spring to March-May, summer to June-August and fall to September-November for the per-season check.",
+      "doc": "wildlife.md",
+      "section": "6.2",
+      "sources": [
+        {
+          "id": "agrilife-travis-butterfly",
+          "support": "\"Spring Blooming Plants: March - May\"; \"Summer through Fall Blooming Plants: June - November\".",
+          "verdict": "partial"
+        },
+        {
+          "id": "tpwd-plan-2016",
+          "support": "Fall migration nectar window \"Mid-September to November\"; spring window \"March 1 to Mid-April\".",
+          "verdict": "partial"
+        },
+        {
+          "id": "xerces-install",
+          "support": "Bloom key: \"Early (spring), Mid (summer), Late (late summer/fall)\".",
+          "verdict": "partial"
+        }
+      ],
+      "disagreement": "The Travis County guide joins summer and fall (June-November). The split at September is derived from the TPWD fall-migration window, not stated by one source. Recommend the split, because it forces fall bloom for the October monarch peak."
+    }
+  }
+}

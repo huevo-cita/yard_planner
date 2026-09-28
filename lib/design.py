@@ -84,7 +84,7 @@ import datetime
 import json
 import re
 
-from . import conditions, doubts, solar, vision as vision_mod, yards
+from . import conditions, doubts, practice, solar, vision as vision_mod, yards
 
 # Hours of direct sun each nursery label actually needs, and what it looks like
 # when it is short. These are the thresholds sunmodel reports against.
@@ -1719,6 +1719,205 @@ def _target_month(target):
     return datetime.date.fromisoformat(hit.group(0)).strftime("%b")
 
 
+def _beds(design):
+    """Ornamental border beds. The raised bed and the barrels stay out."""
+    out = {}
+    for plant in design.get("plants") or []:
+        zone = str(plant.get("zone") or "")
+        if not zone.startswith("bed_g"):
+            continue
+        out.setdefault(zone, []).append(plant)
+    return out
+
+
+def _asks_wildlife(vision):
+    """True when the vision names butterflies, frogs, or wildlife."""
+    blob = json.dumps(vision or {}).lower()
+    keys = ("butterfl", "wildlife", "pollinator", "frog")
+    return any(word in blob for word in keys)
+
+
+def _catalog_index():
+    """Catalog records by botanical name, and by common name, longest first."""
+    from . import fits
+    by_botanical = {}
+    by_name = []
+    for catalog in fits.catalogs().values():
+        for record in catalog.get("plants") or []:
+            botanical = (record.get("botanical") or "").lower()
+            if botanical:
+                by_botanical[botanical] = record
+            for name in record.get("names") or []:
+                by_name.append((name.lower(), record))
+    by_name.sort(key=lambda pair: len(pair[0]), reverse=True)
+    return by_botanical, by_name
+
+
+def _match_record(plant):
+    """The catalog record for this plant, when one record is the clear match.
+
+    A botanical name that names two species returns the shared wildlife
+    fields only. It does not pick a flower color.
+    """
+    by_botanical, by_name = _catalog_index()
+    botanical = (plant.get("botanical") or "").strip().lower()
+    if botanical in by_botanical:
+        return by_botanical[botanical]
+    if "tuberosa" in botanical and "asperula" in botanical:
+        orange = by_botanical.get("asclepias tuberosa") or {}
+        green = by_botanical.get("asclepias asperula") or {}
+        if orange.get("nectar") == green.get("nectar") and orange.get("host") == green.get("host"):
+            return {"nectar": orange.get("nectar"), "host": orange.get("host"),
+                    "wildlife_source": orange.get("wildlife_source")}
+        return None
+    label = (plant.get("name") or "").lower()
+    for name, record in by_name:
+        if name and name in label:
+            return record
+    hits = [record for key, record in by_botanical.items()
+            if key and key in botanical]
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def _field(plant, key):
+    """A wildlife or look field on the plant, else the catalog record."""
+    if key in plant:
+        return plant.get(key)
+    record = _match_record(plant)
+    if record and key in record:
+        return record.get(key)
+    return None
+
+
+def _height(plant):
+    """The mature height on the plant, else on the catalog record."""
+    value = plant.get("mature_height_ft")
+    if value is None:
+        record = _match_record(plant)
+        value = record.get("mature_height_ft") if record else None
+    return value
+
+
+def _is_structure(plant):
+    role = (plant.get("role") or "").lower()
+    return ("structure" in role or plant.get("layer") == "vine"
+            or _field(plant, "habit") == "vine")
+
+
+def _is_makeup(plant):
+    """Seasonal color, not the wildlife planting.
+
+    That is a plant set for one date, or a non-native annual, as
+    `wildlife.annuals_as_makeup` says. A native annual is habitat.
+    """
+    if "december" in (plant.get("role") or "").lower():
+        return True
+    return _field(plant, "habit") == "annual" and _field(plant, "native") is False
+
+
+def _layer_exempt(plant):
+    if plant.get("layer") == "vine":
+        return True
+    return (plant.get("role") or "") in (
+        "specimen", "tree", "structure", "existing")
+
+
+def _band(height):
+    """0 ground, 1 foreground, 2 midground, 3 background.
+
+    The limits are `design.height_bands_ft` in practice/rules.json.
+    """
+    try:
+        feet = float(height)
+    except (TypeError, ValueError):
+        return None
+    ground, fore, mid = practice.rule("design.height_bands_ft")
+    if feet < ground:
+        return 0
+    if feet <= fore:
+        return 1
+    if feet <= mid:
+        return 2
+    return 3
+
+
+def limits_for(vision, zone):
+    """The size limits that the vision puts on one zone."""
+    out = []
+    for limit in (vision or {}).get("limits") or []:
+        if limit.get("zone") == zone:
+            out.append(limit)
+    return out
+
+
+def _top(plant, key):
+    """The top of the mature range. A range beats a single figure."""
+    values = []
+    for field in (key, key.replace("_ft", "_range_ft")):
+        value = plant.get(field)
+        if value is None:
+            value = _field(plant, field)
+        if isinstance(value, (list, tuple)):
+            values.extend(float(v) for v in value if v is not None)
+        elif value is not None:
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+    return max(values) if values else None
+
+
+def _exempt(plant, limit):
+    names = {str(item).lower() for item in limit.get("exempt") or []}
+    return ((plant.get("botanical") or "").lower() in names
+            or (plant.get("name") or "").lower() in names)
+
+
+def limit_breach(plant, zone, vision):
+    """("note" or "serious", sentence) when a plant grows past a zone limit.
+
+    A plant over the design limit is a note. A plant over the hard limit is
+    serious. A plant with no size on record is not judged.
+    """
+    worst = None
+    for limit in limits_for(vision, zone):
+        if _exempt(plant, limit):
+            continue
+        for key, soft, hard, word in (
+                ("mature_height_ft", "max_height_ft", "hard_height_ft", "tall"),
+                ("mature_spread_ft", "max_spread_ft", "hard_spread_ft", "wide")):
+            size = _top(plant, key)
+            if size is None or limit.get(soft) is None:
+                continue
+            cap = float(limit[soft])
+            if size <= cap:
+                continue
+            level = "note"
+            if limit.get(hard) is not None and size > float(limit[hard]):
+                level = "serious"
+            say = (f"Grows to {size:g} ft {word}, past {cap:g} ft. "
+                   f"{limit.get('short') or limit.get('why') or 'The vision limits this bed.'}")
+            if worst is None or level == "serious":
+                worst = (level, say)
+    return worst
+
+
+def check_limits(design, vision):
+    """Plants that grow past a size limit in the vision."""
+    out = []
+    if not (vision or {}).get("limits"):
+        return out
+    for plant in design.get("plants") or []:
+        breach = limit_breach(plant, plant.get("zone"), vision)
+        if breach:
+            out.append(_obj(breach[0], "limit",
+                            f"{plant.get('name')} in {plant.get('zone')}: {breach[1]}",
+                            "choose a plant that stays under the limit"))
+    return out
+
+
 def check_season(design, vision, site):
     """Whether anything is happening on the date it has to be right by."""
     out = []
@@ -1731,8 +1930,8 @@ def check_season(design, vision, site):
         return out
 
     blooming = [p["name"] for p in design.get("plants", [])
-                if month in (p.get("bloom") or [])]
-    ever = [p["name"] for p in design.get("plants", []) if p.get("evergreen")]
+                if month in (_field(p, "bloom") or [])]
+    ever = [p["name"] for p in design.get("plants", []) if _field(p, "evergreen")]
 
     if not blooming:
         out.append(_obj("serious", "target date",
@@ -1749,7 +1948,7 @@ def check_season(design, vision, site):
                         f"nothing on it"))
 
     n = len([p for p in design.get("plants", []) if p.get("count")])
-    if n and len(ever) < max(1, n // 5):
+    if n and len(ever) < max(1, n * float(practice.rule("design.evergreen_share"))):
         out.append(_obj("note", "winter",
                         f"{len(ever)} of {n} entries hold structure out of "
                         f"season. Most native perennials look like nothing from "
@@ -1757,6 +1956,19 @@ def check_season(design, vision, site):
                         f"abandoned rather than dormant",
                         "a spine of evergreen shrubs or aromatic mounds among "
                         "the perennials, not instead of them"))
+
+    for zone, plants in _beds(design).items():
+        gaps = []
+        for month in MONTHS:
+            blooming = any(month in (_field(plant, "bloom") or []) for plant in plants)
+            evergreen = any(_field(plant, "evergreen") for plant in plants)
+            if not blooming and not evergreen:
+                gaps.append(month)
+        if gaps:
+            out.append(_obj(
+                "note", "season",
+                f"{zone} has no bloom and no evergreen in {', '.join(gaps)}.",
+                "add a plant that is visible in that month"))
     return out
 
 
@@ -1772,6 +1984,166 @@ def check_grouping(design):
                         f"planting",
                         "groups of three or five of the same thing, and repeat "
                         "the group along the bed"))
+    short = []
+    small_below = float(practice.rule("design.mass_small_below_ft"))
+    for plant in design.get("plants") or []:
+        height = _height(plant)
+        if plant.get("count") != 1 or _layer_exempt(plant):
+            continue
+        if height is None or float(height) >= small_below:
+            continue
+        short.append(plant.get("name") or "a plant")
+    if short:
+        out.append(_obj(
+            "note", "layout",
+            f"{len(short)} short plants stand alone: {', '.join(short[:6])}.",
+            "plant a short plant in a group of three or five"))
+    beds = _beds(design)
+    if len(beds) >= 2:
+        seen = {}
+        for zone, plants in beds.items():
+            for plant in plants:
+                seen.setdefault(plant.get("name"), set()).add(zone)
+        if not any(len(zones) >= 2 for zones in seen.values()):
+            out.append(_obj(
+                "note", "layout",
+                "no plant repeats from one bed to the next.",
+                "repeat one plant so the beds read as one garden"))
+    return out
+
+
+def check_wildlife(design, vision, region=None):
+    """Nectar through the nectar months, and a larval host, per bed.
+
+    The check runs only when the vision asks for wildlife. A color theme
+    does not replace a nectar plant or a host. Structure and December
+    makeup do not count as the nectar spine. The months are
+    `wildlife.nectar_months` for the region, else the growing season.
+    """
+    out = []
+    if not _asks_wildlife(vision):
+        return out
+    months = practice.regional("wildlife.nectar_months", region) or DEFAULT_LIGHT_MONTHS
+    for zone, plants in _beds(design).items():
+        gaps = []
+        hosts = []
+        missing = []
+        for plant in plants:
+            if _field(plant, "host"):
+                hosts.append(plant.get("name") or "a plant")
+            if (_field(plant, "nectar") is None and _field(plant, "host") is None
+                    and not _is_structure(plant) and not _is_makeup(plant)):
+                missing.append(plant.get("name") or "a plant")
+        for month in months:
+            fed = False
+            for plant in plants:
+                if _is_structure(plant) or _is_makeup(plant):
+                    continue
+                if _field(plant, "nectar") is not True:
+                    continue
+                if month in (_field(plant, "bloom") or []):
+                    fed = True
+                    break
+            if not fed:
+                gaps.append(month)
+        if gaps:
+            out.append(_obj(
+                "serious", "wildlife",
+                f"{zone} has no nectar plant in {', '.join(gaps)}.",
+                "keep a nectar plant that blooms in the open month"))
+        if not hosts:
+            out.append(_obj(
+                "serious", "wildlife",
+                f"{zone} has no larval host on record.",
+                "keep a host plant in the bed. Do not guess an unnamed species"))
+        if missing:
+            names = ", ".join(sorted(set(missing))[:6])
+            out.append(_obj(
+                "note", "wildlife",
+                f"{zone} has no nectar or host on record for {names}.",
+                "set nectar and host on the catalog record, with a source"))
+    return out
+
+
+def check_layers(design):
+    """The front row is shorter than the row against the wall."""
+    out = []
+    for zone, plants in _beds(design).items():
+        placed = [plant for plant in plants if not _layer_exempt(plant)]
+        front = [plant for plant in placed if plant.get("layer") == "front"]
+        behind = [plant for plant in placed
+                  if plant.get("layer") in ("back", "middle")]
+        told = set()
+        for low in front:
+            low_band = _band(_height(low))
+            if low_band is None:
+                continue
+            for high in behind:
+                high_band = _band(_height(high))
+                if high_band is None or low_band <= high_band:
+                    continue
+                key = (low.get("name"), high.get("name"))
+                if key in told:
+                    continue
+                told.add(key)
+                out.append(_obj(
+                    "serious", "height",
+                    f"{low.get('name')} in the front of {zone} is a taller "
+                    f"layer than {high.get('name')} behind it.",
+                    "move the tall plant toward the wall"))
+        heights = []
+        for plant in placed:
+            height = _height(plant)
+            if _band(height) is not None:
+                heights.append(float(height))
+        skyline = practice.rule("design.skyline_min_range_ft")
+        if skyline is not None and len(heights) >= 3 and max(heights) - min(heights) < skyline:
+            out.append(_obj(
+                "note", "height",
+                f"{zone} holds one height. The top of the bed does not rise and fall.",
+                "vary the height along the bed"))
+    return out
+
+
+def check_color(design, vision):
+    """Two or three flower colors inside the wildlife set.
+
+    A missing color is named. The check does not drop a nectar plant
+    to tidy the palette. `vision` is accepted so the call matches the
+    other vision checks. The colors come from the plants.
+    """
+    del vision
+    out = []
+    for zone, plants in _beds(design).items():
+        colors = set()
+        missing = []
+        for plant in plants:
+            if _is_structure(plant) or _is_makeup(plant):
+                continue
+            if _field(plant, "nectar") is not True and not _field(plant, "host"):
+                continue
+            color = _field(plant, "flower_color")
+            if not color:
+                missing.append(plant.get("name") or "a plant")
+            else:
+                colors.add(color)
+        if missing:
+            names = ", ".join(sorted(set(missing))[:6])
+            out.append(_obj(
+                "note", "color",
+                f"{zone} has no flower color on record for {names}.",
+                "set flower_color with a source. The check does not guess"))
+        fewest, most = practice.rule("design.color_theme_count")
+        if colors and len(colors) < fewest:
+            out.append(_obj(
+                "note", "color",
+                f"{zone} shows {len(colors)} flower color in the wildlife plants.",
+                f"use {fewest} to {most} colors inside the wildlife set"))
+        elif len(colors) > most:
+            out.append(_obj(
+                "note", "color",
+                f"{zone} shows {len(colors)} flower colors in the wildlife plants.",
+                f"keep {fewest} to {most} colors. Do not drop a nectar plant to do it"))
     return out
 
 
@@ -2252,7 +2624,12 @@ def check(slug, force=False):
     out += check_space(design, site, sun)
     out += check_coverage(design, site, cond, sun)
     out += check_vision(design, vis)
+    from . import fits
+    out += check_wildlife(design, vis, fits.region_for(slug, site))
+    out += check_limits(design, vis)
     out += check_season(design, vis, site)
+    out += check_layers(design)
+    out += check_color(design, vis)
     out += check_grouping(design)
     out += check_layout(design, site)
 
