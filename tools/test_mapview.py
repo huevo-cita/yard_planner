@@ -18,6 +18,7 @@ yard's scheme.json. It fails on:
 - a Ctrl+Z that does not put back the plant from before the swap
 - a month that does not change the circles, or a bloom strip cell that
   disagrees with the plants in that bed
+- a fruit mark outside the fruit months, or on a dormant plant
 
 It saves a picture of every bed at both widths, and of every bed in April,
 July, October and December. Playwright must be installed:
@@ -108,7 +109,13 @@ STRIP = """(m) => {
   const cell = sheet.querySelector('.cell[data-month="' + m + '"] b');
   const states = [...sheet.querySelectorAll('.plant')].map(g =>
     ['m-bloom', 'm-leaf', 'm-ever', 'm-dormant'].find(c => g.classList.contains(c)) || '');
-  return {want: names.size, shown: parseInt(cell.textContent, 10), states};
+  const fruitWrong = [...sheet.querySelectorAll('.plant')].filter(g => {
+    const due = (g.dataset.fruit || '').split(' ').includes(m);
+    const mark = g.querySelector('.fruit');
+    const shown = !!mark && getComputedStyle(mark).display !== 'none';
+    return due !== shown || (due && g.classList.contains('m-dormant'));
+  }).map(g => g.dataset.id);
+  return {want: names.size, shown: parseInt(cell.textContent, 10), states, fruitWrong};
 }"""
 
 
@@ -194,6 +201,8 @@ def run(slug, shots):
                     s = page.evaluate(STRIP, m)
                     check(s["want"] == s["shown"],
                           f"{bed} {m}: the strip shows {s['shown']} nectar species and the plants give {s['want']}")
+                    check(not s["fruitWrong"],
+                          f"{bed} {m}: fruit shows in its months only, on a plant that is not dormant {s['fruitWrong'][:3]}")
                     seen[m] = s["states"]
                     if label == "desktop":
                         page.add_style_tag(content=".scroller{overflow:visible}")

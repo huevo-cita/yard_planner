@@ -53,6 +53,10 @@ FLOWER_HEX = {
     "orange": "#E69F00",
     "green": "#009E73",
 }
+# The fruit mark. The same set as the flowers, plus the dark blue and the
+# black of the Okabe and Ito set, because fruit is often blue or black.
+FRUIT_HEX = dict(FLOWER_HEX, blue="#0072B2", black="#000000")
+del FRUIT_HEX["green"]
 LEAF_FILL = "#b9cf9f"
 EVERGREEN_FILL = "#6f8f5a"
 # A dormant plant shows straw, not its flower color, so a dormant plant
@@ -318,11 +322,22 @@ def traits(name, botanical, record=None):
         leaf = _seasons().get(season) or MONTHS
     if evergreen:
         leaf = list(MONTHS)
-    leaf = [m for m in MONTHS if m in leaf or m in bloom]
+    # Fruit shows only with a color on record, because the mark is that color.
+    fruit_color = get("fruit_color") if get("fruit_color") in FRUIT_HEX else None
+    fruit = [m for m in MONTHS if m in (get("fruit_months") or [])] if fruit_color else []
+    # A plant that carries fruit or flowers is not dormant.
+    leaf = [m for m in MONTHS if m in leaf or m in bloom or m in fruit]
     host = get("host")
     return {
         "bloom": bloom,
         "leaf": leaf,
+        "fruit": fruit,
+        "fruit_color": fruit_color,
+        "fruit_what": get("fruit_what") if fruit else None,
+        # Who eats the fruit, such as ["birds"]. This counts even when the
+        # fruit is not colorful, because it is food.
+        "fruit_for": list(get("fruit_for") or []),
+        "seed_for": list(get("seed_for") or []),
         "evergreen": evergreen,
         "nectar": get("nectar"),
         "host": list(host) if isinstance(host, list) else ([host] if host else []),
@@ -1063,6 +1078,10 @@ def current_for(scheme, plant_id, yard):
         "tall_ft": plant.get("height_ft"),
         "grows_ft": round(float(plant.get("mature_spread_ft") or plant["spread_ft"]), 2),
         "bloom": plant.get("bloom") or [],
+        "fruit": plant.get("fruit") or [],
+        "fruit_what": plant.get("fruit_what") or "",
+        "fruit_for": plant.get("fruit_for") or [],
+        "seed_for": plant.get("seed_for") or [],
         "nectar": plant.get("nectar") is True,
         "host": plant.get("host") or [],
         "color": plant.get("color") or color_for(plant.get("flower"), plant.get("evergreen"),
@@ -1130,6 +1149,10 @@ def options_for(slug, scheme, plant_id, yard=None):
             "grows_ft": round(float(cand["mature_spread_ft"]), 2),
             "tall_ft": cand.get("mature_height_ft"),
             "bloom": t["bloom"],
+            "fruit": t["fruit"],
+            "fruit_what": t["fruit_what"] or "",
+            "fruit_for": t["fruit_for"],
+            "seed_for": t["seed_for"],
             "nectar": t["nectar"] is True,
             "host": t["host"],
             "note": (cand.get("note") or "").split(". ")[0],
@@ -1427,6 +1450,7 @@ def _svg(bed, code_of, font, tap):
             f"data-leaf='{' '.join(plant.get('leaf') or [])}' "
             f"data-ever='{'1' if plant.get('evergreen') else '0'}' "
             f"data-nectar='{'1' if plant.get('nectar') is True else '0'}' "
+            f"data-fruit='{' '.join(plant.get('fruit') or [])}' "
             f"data-flower='{_esc(color_for(plant.get('flower'), plant.get('evergreen'), plant.get('feature')))}'>")
         parts.append(
             f"<circle class=hit cx='{cx:.1f}' cy='{cy:.1f}' r='{max(r, tap / 2):.1f}'></circle>")
@@ -1449,6 +1473,19 @@ def _svg(bed, code_of, font, tap):
         if plant.get("nectar") is True:
             parts.append(
                 f"<circle class=nectar cx='{cx + r * 0.62:.1f}' cy='{cy - r * 0.62:.1f}' r='3.5'></circle>")
+        if plant.get("fruit") and plant.get("fruit_color") in FRUIT_HEX:
+            fx, fy = cx + r * 0.5, cy + r * 0.5
+            hexed = FRUIT_HEX[plant["fruit_color"]]
+            berries = ((-4.2, 0), (4.2, 0), (0, -6))
+            # A white halo under a dark edge, so the fruit shows on a flower
+            # of the same color.
+            parts.append(
+                "<g class=fruit>"
+                + "".join(f"<circle class=halo cx='{fx + dx:.1f}' cy='{fy + dy:.1f}' r='5.6'></circle>"
+                          for dx, dy in berries)
+                + "".join(f"<circle cx='{fx + dx:.1f}' cy='{fy + dy:.1f}' r='4' fill='{hexed}'></circle>"
+                          for dx, dy in berries)
+                + "</g>")
         if plant.get("host"):
             lx, ly = cx - r * 0.62, cy - r * 0.62
             parts.append(
@@ -1515,7 +1552,18 @@ def _months_text(months):
         return "not on record"
     if len(months) == 12:
         return "all year"
-    return f"{months[0]}-{months[-1]}" if len(months) > 2 else ", ".join(months)
+    # Runs of months, read round the year, so Dec to Mar is one run.
+    have = [m in months for m in MONTHS]
+    start = next(i for i in range(12) if have[i] and not have[i - 1])
+    runs = []
+    for step in range(12):
+        j = (start + step) % 12
+        if have[j] and (not runs or not have[j - 1]):
+            runs.append([MONTHS[j]])
+        elif have[j]:
+            runs[-1].append(MONTHS[j])
+    return ", ".join(r[0] if len(r) == 1 else (f"{r[0]}, {r[1]}" if len(r) == 2 else f"{r[0]}-{r[-1]}")
+                     for r in runs)
 
 
 def _schedule(bed, code_of):
@@ -1534,7 +1582,7 @@ def _schedule(bed, code_of):
     lines = ["<table class=schedule>",
              "<tr><th>Code</th><th>Count</th><th>Plant</th><th>Botanical name</th>"
              "<th>Size at planting</th><th>Spacing</th><th>Height</th><th>Width</th>"
-             "<th>Flowers</th><th>Wildlife</th></tr>"]
+             "<th>Flowers</th><th>Fruit</th><th>Wildlife</th></tr>"]
     for row in rows:
         plant = row["plant"]
         wild = []
@@ -1542,6 +1590,10 @@ def _schedule(bed, code_of):
             wild.append("nectar")
         if plant.get("host"):
             wild.append("host: " + ", ".join(plant["host"]))
+        if plant.get("fruit_for"):
+            wild.append("fruit for " + ", ".join(plant["fruit_for"]))
+        if plant.get("seed_for"):
+            wild.append("seed for " + ", ".join(plant["seed_for"]))
         count = str(row["count"])
         if row["existing"] == row["count"]:
             count += " existing"
@@ -1550,7 +1602,7 @@ def _schedule(bed, code_of):
         height = plant.get("height_ft")
         lines.append(
             "<tr data-for='{}' tabindex=0><td>{}</td><td>{}</td><td>{}</td><td><i>{}</i></td>"
-            "<td>{}</td><td>{} ft o.c.</td><td>{}</td><td>{} ft</td><td>{}</td><td>{}</td></tr>".format(
+            "<td>{}</td><td>{} ft o.c.</td><td>{}</td><td>{} ft</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
                 _esc(row["first"]),
                 _esc(code_of[plant["name"]]), _esc(count), _esc(plant["name"]),
                 _esc(plant.get("botanical") or "-"),
@@ -1559,6 +1611,8 @@ def _schedule(bed, code_of):
                 f"{float(height):.1f} ft" if isinstance(height, (int, float)) else "-",
                 f"{float(plant.get('mature_spread_ft') or plant.get('spread_ft') or 0):.1f}",
                 _esc(_months_text(plant.get("bloom") or [])),
+                _esc(f"{plant.get('fruit_what') or 'fruit'}, {_months_text(plant['fruit'])}"
+                     if plant.get("fruit") else "-"),
                 _esc(", ".join(wild) or "-")))
     lines.append("</table>")
     return "".join(lines)
@@ -1662,6 +1716,10 @@ paint-order:stroke;stroke:#fbfaf6;stroke-width:3px}
 .nectar{fill:#1c1c17;stroke:#fff;stroke-width:1;pointer-events:none}
 .leaf{fill:#2f5d1e;stroke:#fff;stroke-width:1;pointer-events:none}
 .plant.m-leaf .nectar,.plant.m-ever .nectar{display:none}
+.fruit{display:none;pointer-events:none}
+.fruit circle{stroke:#1c1c17;stroke-width:1.2}
+.fruit circle.halo{fill:#fff;stroke:none}
+.plant.m-fruit .fruit{display:inline}
 .plant.m-dormant{opacity:.7}
 .plant.m-dormant circle.solid{fill-opacity:.55;stroke-dasharray:4 3}
 .plant.m-dormant .nectar,.plant.m-dormant .tuft{display:none}
@@ -1711,6 +1769,7 @@ __STAMP__
 <div class=legend>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='#e27aa6' stroke='#2e261b' stroke-width=2.4></circle><circle cx=19 cy=7 r=3.5 fill='#1c1c17' stroke='#fff'></circle></svg> in flower, dot gives nectar</span>
 <span><svg width=26 height=26><defs><pattern id=white-bloom-key width=12 height=12 patternUnits=userSpaceOnUse>__WHITE_TILE__</pattern></defs><circle cx=13 cy=13 r=10 fill='url(#white-bloom-key)' stroke='#2e261b' stroke-width=1.6></circle></svg> white flowers</span>
+<span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='__LEAF__' stroke='#2e261b' stroke-width=1.6></circle><circle cx=14.5 cy=19 r=4.6 fill='#fff'></circle><circle cx=21.5 cy=19 r=4.6 fill='#fff'></circle><circle cx=18 cy=13.5 r=4.6 fill='#fff'></circle><circle cx=14.5 cy=19 r=3.4 fill='#D55E00' stroke='#1c1c17' stroke-width=1></circle><circle cx=21.5 cy=19 r=3.4 fill='#D55E00' stroke='#1c1c17' stroke-width=1></circle><circle cx=18 cy=13.5 r=3.4 fill='#D55E00' stroke='#1c1c17' stroke-width=1></circle></svg> colorful fruit, in its color</span>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='__LEAF__' stroke='#2e261b' stroke-width=1.6></circle></svg> green, not in flower</span>
 <span><svg width=26 height=26><circle cx=13 cy=13 r=10 fill='__EVER__' stroke='#2e261b' stroke-width=1.6></circle><circle cx=13 cy=13 r=6 fill=none stroke='#fff' stroke-width=1.4></circle></svg> evergreen structure</span>
 <span><svg width=26 height=26 opacity=.7><circle cx=13 cy=13 r=10 fill='__DORMANT__' fill-opacity=.55 stroke='#2e261b' stroke-width=1.6 stroke-dasharray='4 3'></circle></svg> dormant, died back</span>
@@ -1746,6 +1805,7 @@ function look(group, m) {
   const has = key => (group.dataset[key] || '').split(' ').includes(m);
   const circle = group.querySelector('circle.solid');
   group.classList.remove('m-bloom', 'm-leaf', 'm-ever', 'm-dormant');
+  group.classList.toggle('m-fruit', has('fruit'));
   if (has('bloom')) {
     group.classList.add('m-bloom');
     const white = group.dataset.flower.toUpperCase() === '#FFFFFF';
@@ -1772,7 +1832,7 @@ function setMonth(m) {
   month = m;
   document.querySelectorAll('.month').forEach(b => b.classList.toggle('on', b.dataset.month === m));
   document.querySelectorAll('.cell').forEach(c => c.classList.toggle('on', c.dataset.month === m));
-  let flower = 0, nectar = 0;
+  let flower = 0, nectar = 0, fruit = 0;
   const hosts = new Set();
   document.querySelectorAll('.plant').forEach(g => {
     const state = look(g, m);
@@ -1781,12 +1841,14 @@ function setMonth(m) {
       flower += 1;
       if (g.dataset.nectar === '1') nectar += 1;
     }
+    if (g.classList.contains('m-fruit')) fruit += 1;
     if (g.classList.contains('host')) hosts.add(g.dataset.name);
   });
   const names = {Jan:'January',Feb:'February',Mar:'March',Apr:'April',May:'May',Jun:'June',
     Jul:'July',Aug:'August',Sep:'September',Oct:'October',Nov:'November',Dec:'December'};
   let text = names[m] + ' in ' + bed + '. ' + flower + ' plants in flower, ' + nectar +
-    ' give nectar, ' + hosts.size + ' host plant' + (hosts.size === 1 ? '' : 's') + '.';
+    ' give nectar, ' + (fruit ? fruit + ' in fruit, ' : '') +
+    hosts.size + ' host plant' + (hosts.size === 1 ? '' : 's') + '.';
   if (PEAK.includes(m)) text += ' The monarch migration peaks this month.';
   summary.textContent = text;
   save();
@@ -1858,8 +1920,11 @@ function card(opt, tag, prefix) {
   const wild = [];
   if (opt.host && opt.host.length) wild.push('host for ' + opt.host.join(', '));
   if (opt.nectar) wild.push('nectar');
+  if (opt.fruit_for && opt.fruit_for.length) wild.push('fruit for ' + opt.fruit_for.join(', '));
+  if (opt.seed_for && opt.seed_for.length) wild.push('seed for ' + opt.seed_for.join(', '));
   meta.textContent = opt.botanical + ' · ' + (opt.tall_ft ? opt.tall_ft + ' ft tall, ' : '') +
     opt.grows_ft + ' ft wide' + (opt.bloom.length ? ' · flowers ' + opt.bloom.join(' ') : '') +
+    (opt.fruit && opt.fruit.length ? ' · ' + (opt.fruit_what || 'fruit') + ' ' + opt.fruit.join(' ') : '') +
     (wild.length ? ' · ' + wild.join(', ') : '');
   const note = document.createElement('small');
   note.textContent = opt.note || opt.attribution || '';
