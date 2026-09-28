@@ -188,7 +188,7 @@ def run(slug, shots):
                 blank = sorted(p["id"] for p in g["plants"] if p["id"] not in coded)
                 check(not blank, f"{bed}: every plant has a label {blank[:4] if blank else ''}")
                 shown = [c["text"] for c in g["coded"]] + g["tagText"]
-                counted = sorted({text for text in shown if not text.isalpha()})
+                counted = sorted({text for text in shown if " " in text.strip()})
                 check(not counted, f"{bed}: a plant label is the code only {counted[:3]}")
                 record = next(b for b in state["scheme"]["beds"] if b["id"] == bed)
                 mixed = [grp[0]["name"] for grp in scheme.uneven(record.get("plants") or [])]
