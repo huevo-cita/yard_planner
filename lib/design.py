@@ -2002,16 +2002,18 @@ def check_grouping(design):
     return out
 
 
-def check_wildlife(design, vision):
-    """Nectar through the growing season, and a larval host, per bed.
+def check_wildlife(design, vision, region=None):
+    """Nectar through the nectar months, and a larval host, per bed.
 
     The check runs only when the vision asks for wildlife. A color theme
     does not replace a nectar plant or a host. Structure and December
-    makeup do not count as the nectar spine.
+    makeup do not count as the nectar spine. The months are
+    `wildlife.nectar_months` for the region, else the growing season.
     """
     out = []
     if not _asks_wildlife(vision):
         return out
+    months = practice.regional("wildlife.nectar_months", region) or DEFAULT_LIGHT_MONTHS
     for zone, plants in _beds(design).items():
         gaps = []
         hosts = []
@@ -2022,14 +2024,14 @@ def check_wildlife(design, vision):
             if (_field(plant, "nectar") is None and _field(plant, "host") is None
                     and not _is_structure(plant) and not _is_makeup(plant)):
                 missing.append(plant.get("name") or "a plant")
-        for month in DEFAULT_LIGHT_MONTHS:
+        for month in months:
             fed = False
             for plant in plants:
                 if _is_structure(plant) or _is_makeup(plant):
                     continue
                 if _field(plant, "nectar") is not True:
                     continue
-                if month in (plant.get("bloom") or []):
+                if month in (_field(plant, "bloom") or []):
                     fed = True
                     break
             if not fed:
@@ -2612,7 +2614,8 @@ def check(slug, force=False):
     out += check_space(design, site, sun)
     out += check_coverage(design, site, cond, sun)
     out += check_vision(design, vis)
-    out += check_wildlife(design, vis)
+    from . import fits
+    out += check_wildlife(design, vis, fits.region_for(slug, site))
     out += check_limits(design, vis)
     out += check_season(design, vis, site)
     out += check_layers(design)

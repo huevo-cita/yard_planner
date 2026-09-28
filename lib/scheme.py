@@ -764,13 +764,8 @@ def _groups(plants):
 
 
 def _band(height):
-    bands = practice.rule("design.height_bands_ft")
-    if height is None:
-        return None
-    for i, top in enumerate(bands):
-        if float(height) <= float(top):
-            return i
-    return len(bands)
+    from . import design as design_mod
+    return design_mod._band(height)
 
 
 def review(slug, scheme=None):
