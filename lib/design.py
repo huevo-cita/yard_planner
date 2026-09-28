@@ -1791,6 +1791,15 @@ def _field(plant, key):
     return None
 
 
+def _height(plant):
+    """The mature height on the plant, else on the catalog record."""
+    value = plant.get("mature_height_ft")
+    if value is None:
+        record = _match_record(plant)
+        value = record.get("mature_height_ft") if record else None
+    return value
+
+
 def _is_structure(plant):
     role = (plant.get("role") or "").lower()
     return ("structure" in role or plant.get("layer") == "vine"
@@ -1978,7 +1987,7 @@ def check_grouping(design):
     short = []
     small_below = float(practice.rule("design.mass_small_below_ft"))
     for plant in design.get("plants") or []:
-        height = plant.get("mature_height_ft")
+        height = _height(plant)
         if plant.get("count") != 1 or _layer_exempt(plant):
             continue
         if height is None or float(height) >= small_below:
@@ -2066,11 +2075,11 @@ def check_layers(design):
                   if plant.get("layer") in ("back", "middle")]
         told = set()
         for low in front:
-            low_band = _band(low.get("mature_height_ft"))
+            low_band = _band(_height(low))
             if low_band is None:
                 continue
             for high in behind:
-                high_band = _band(high.get("mature_height_ft"))
+                high_band = _band(_height(high))
                 if high_band is None or low_band <= high_band:
                     continue
                 key = (low.get("name"), high.get("name"))
@@ -2084,9 +2093,9 @@ def check_layers(design):
                     "move the tall plant toward the wall"))
         heights = []
         for plant in placed:
-            band = _band(plant.get("mature_height_ft"))
-            if band is not None:
-                heights.append(float(plant["mature_height_ft"]))
+            height = _height(plant)
+            if _band(height) is not None:
+                heights.append(float(height))
         skyline = practice.rule("design.skyline_min_range_ft")
         if skyline is not None and len(heights) >= 3 and max(heights) - min(heights) < skyline:
             out.append(_obj(

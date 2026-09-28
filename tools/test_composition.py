@@ -46,6 +46,16 @@ def main():
         says(design.check_layers(jumped), "height", "taller layer"),
         "a tall front row fails")
 
+    tall = plant(name="Turk's cap", botanical="Malvaviscus arboreus var. drummondii",
+                 layer="front")
+    del tall["mature_height_ft"]
+    catalog_only = {"plants": [
+        tall, plant(name="Short back", layer="back", mature_height_ft=1.0),
+    ]}
+    failed += check(
+        says(design.check_layers(catalog_only), "height", "taller layer"),
+        "a tall front row fails on the catalog height")
+
     bare = {"plants": [
         plant(name="Gulf muhly", botanical="Muhlenbergia capillaris",
               role="back-row structure", mature_height_ft=2.8,
