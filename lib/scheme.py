@@ -1375,13 +1375,27 @@ def _norm(text):
     return " ".join(str(text or "").lower().split())
 
 
+def _botanical_of(plant):
+    from . import design as design_mod
+    own = _norm(plant.get("botanical"))
+    if len(own.split()) >= 2:
+        return own
+    found = _norm((design_mod._match_record({"name": plant.get("name")}) or {}).get("botanical"))
+    return found if len(found.split()) >= 2 else ""
+
+
 def _same_plant(record, circle):
-    """True when a design record and a map circle name the same plant."""
-    ours, theirs = _norm(record.get("botanical")), _norm(circle.get("botanical"))
+    """True when a design record and a map circle name the same plant.
+
+    A variety matches its species, so "capsicum annuum" matches
+    "capsicum annuum var. glabriusculum". A genus alone matches nothing,
+    and a part of a name never matches.
+    """
+    ours, theirs = _botanical_of(record), _botanical_of(circle)
     if ours and theirs:
-        return ours == theirs or ours in theirs or theirs in ours
-    name = _norm(circle.get("name"))
-    return bool(name) and name in _norm(record.get("name"))
+        short, long_ = sorted((ours, theirs), key=len)
+        return short == long_ or long_.startswith(short + " ")
+    return _norm(_short_name(record.get("name") or "")) == _norm(circle.get("name"))
 
 
 def _rows(niche_record, bed):

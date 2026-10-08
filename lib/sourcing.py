@@ -582,6 +582,20 @@ def moves(slug, today=None):
     pos = {a["id"]: i for i, a in enumerate(ladder)}
     by_id = {a["id"]: a for a in ladder}
 
+    # A supplier can carry `min_trip_usd`: the owner drives there only when the
+    # order is larger than that. The ranking cannot see the drive, so without
+    # the floor it sends a $70 bag of soil to the best-reviewed yard in town.
+    records = {s.get("id"): s for s in load(slug).get("suppliers", [])}
+    totals = trip_totals(tasks)
+
+    def floor_of(sid):
+        f = (records.get(sid) or {}).get("min_trip_usd")
+        return None if f is None else float(f)
+
+    def clears(sid, extra=0.0):
+        f = floor_of(sid)
+        return f is None or totals.get(sid, 0.0) + extra > f
+
     # Which dated tasks each shopping entry is holding up.
     needs = {}
     for t in tasks.get("tasks", []):
@@ -623,7 +637,8 @@ def moves(slug, today=None):
         want = entry.get("category") or old["categories"]
         need = {want} if isinstance(want, str) else set(want)
         better = [a for a in ladder if pos[a["id"]] < pos[sid]
-                  and need <= set(a["categories"])]
+                  and need <= set(a["categories"])
+                  and clears(a["id"], _mid_cost(entry))]
         if not better:
             continue
         new = better[0]
@@ -657,7 +672,42 @@ def moves(slug, today=None):
         })
 
     out.sort(key=lambda m: (-m["risk"], -len(m["tasks"]), m["shopping"] or ""))
-    return {"yard": slug, "moves": out, "unranked": unranked, "held": held}
+
+    # Lines already at a shop whose whole order does not reach its floor. These
+    # are reported rather than moved: where they go instead is a choice about
+    # what else is on the list, not something a rating can answer.
+    short = []
+    for sid in sorted({e.get("supplier") for e in tasks.get("shopping", [])
+                       if e.get("supplier")}):
+        if clears(sid):
+            continue
+        lines = [e.get("id") for e in tasks.get("shopping", [])
+                 if e.get("supplier") == sid]
+        short.append({"supplier": sid,
+                      "supplier_name": (records.get(sid) or {}).get("name", sid),
+                      "total_usd": round(totals.get(sid, 0.0), 2),
+                      "floor_usd": floor_of(sid), "lines": lines})
+    return {"yard": slug, "moves": out, "unranked": unranked, "held": held,
+            "short": short}
+
+
+def _mid_cost(entry):
+    """The middle of a shopping line's `cost_usd`, or 0 where it has none."""
+    c = entry.get("cost_usd")
+    if isinstance(c, (list, tuple)):
+        vals = [float(v) for v in c if isinstance(v, (int, float))]
+        return (vals[0] + vals[-1]) / 2.0 if vals else 0.0
+    return float(c) if isinstance(c, (int, float)) else 0.0
+
+
+def trip_totals(tasks):
+    """The whole order at each supplier, at the middle of every line's range."""
+    out = {}
+    for e in tasks.get("shopping", []):
+        sid = e.get("supplier")
+        if sid:
+            out[sid] = out.get(sid, 0.0) + _mid_cost(e)
+    return out
 
 
 def _dist(a):
@@ -1230,10 +1280,16 @@ def moves_report(found):
     be found among thirty otherwise routine changelog entries."""
     ms, un = found["moves"], found["unranked"]
     pinned = found.get("held") or []
-    if not ms and not un and not pinned:
+    short = found.get("short") or []
+    if not ms and not un and not pinned and not short:
         print(f"{found['yard']}: the ranking agrees with every supplier already "
               f"chosen")
         return
+    for s in short:
+        print(f"!!  {s['supplier_name']}: ${s['total_usd']:,.0f} of shopping "
+              f"against a ${s['floor_usd']:,.0f} floor for the trip")
+        print(f"        {', '.join(s['lines'])} — buy these somewhere nearer, or "
+              f"add to the order until it clears the floor\n")
     if ms:
         risky = sum(1 for m in ms if m["risk"])
         print(f"{found['yard']} — {len(ms)} reassignment"
