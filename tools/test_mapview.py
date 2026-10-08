@@ -209,6 +209,26 @@ def swap_rules(slug, state):
         snapshot.pop("history", None)
         check(restored == snapshot, f"{pid}: undo puts back every plant that the swap resized")
 
+        state["scheme"] = copy.deepcopy(snapshot)
+        scheme.swap(slug, pid, name)
+        bed = next(b for b in state["scheme"]["beds"] if b["id"] == record["id"])
+        second = None
+        for other in bed.get("plants") or []:
+            if other["id"] == pid or other.get("locked") or other["name"] == name:
+                continue
+            opts, _ = scheme.options_for(slug, state["scheme"], other["id"])
+            if any(o["name"] == name for o in opts or []):
+                second = other["id"]
+                break
+        if second:
+            scheme.swap(slug, second, name)
+            scheme.undo(slug, pid)
+            bed = next(b for b in state["scheme"]["beds"] if b["id"] == record["id"])
+            check(not scheme.uneven(bed.get("plants") or []),
+                  f"{pid}: undo of an older swap, after {second} also became {name}, "
+                  f"leaves one size for each group")
+        state["scheme"] = snapshot
+
     forced = None
     for record in state["scheme"]["beds"]:
         for plant in record.get("plants") or []:

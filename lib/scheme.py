@@ -1344,13 +1344,15 @@ def undo(slug, plant_id=None):
     if index is None:
         return None, "There is no change to undo."
     entry = history[index]
-    _, plant = find_plant(scheme, entry["id"])
+    bed, plant = find_plant(scheme, entry["id"])
     if not plant:
         return None, "That plant is not on the map."
     history.pop(index)
     plant.clear()
     plant.update(entry["before"])
     _unresize(scheme, entry)
+    # A later swap can change the sizes that _unresize expects, so even the bed again.
+    _even_bed(bed)
     yards.save(slug, FILE, scheme)
     return plant, None
 
