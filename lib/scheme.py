@@ -1463,10 +1463,11 @@ def row_answers(slug, scheme=None, yard=None):
     return out
 
 
-def _layer_for(rows, circles):
+def _layer_for(rows_by_niche, circles):
+    """The row that holds most of these circles, each read in its own niche."""
     seen = {}
     for circle in circles:
-        slot = _row_of(rows, circle)
+        slot = _row_of(rows_by_niche.get(circle.get("niche")) or [], circle)
         if slot:
             seen[slot["layer"]] = seen.get(slot["layer"], 0) + 1
     return max(seen, key=seen.get) if seen else "front"
@@ -1575,7 +1576,7 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
                     match["december"] = ("In flower in December." if "Dec" in bloom
                                          else "Not in flower in December.")
                 else:
-                    layer = _layer_for(rows.get(first.get("niche")) or [], group)
+                    layer = _layer_for(rows, group)
                     match = _new_record(zone, first, len(group), layer)
                 added.append(match)
             elif int(match.get("count") or 0) != len(group):
@@ -1583,7 +1584,7 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
             match["count"] = len(group)
             planted = [c for c in group if not c.get("locked")]
             if planted and match.get("layer") in (None, "front", "middle", "back"):
-                match["layer"] = _layer_for(rows.get(first.get("niche")) or [], planted)
+                match["layer"] = _layer_for(rows, planted)
             theirs = first.get("botanical") or ""
             if len(theirs) > len(match.get("botanical") or ""):
                 match["botanical"] = theirs
