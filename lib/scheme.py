@@ -1583,7 +1583,8 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
             elif int(match.get("count") or 0) != len(group):
                 recounted.append((match["name"], match.get("count"), len(group)))
             match["count"] = len(group)
-            planted = [c for c in group if not c.get("locked")]
+            # A circle that the design placed keeps the design's row. A swap does not.
+            planted = [c for c in group if not c.get("locked") and not c.get("kept")]
             if planted and match.get("layer") in (None, "front", "middle", "back"):
                 match["layer"] = _layer_for(rows, planted)
             theirs = first.get("botanical") or ""
