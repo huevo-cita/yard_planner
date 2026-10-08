@@ -21,6 +21,9 @@ yard's scheme.json. It fails on:
   two sizes, or an undo that does not put back the sizes
 - an override that is accepted without a reason, or that the audit reports
   as an error, or that the review does not note
+- an adoption that runs while a row card is open, a record count that does not
+  match the circles, a kept record that loses its price, or a drawing that
+  does not have one mark for each circle
 - a month that does not change the circles, or a bloom strip cell that
   disagrees with the plants in that bed
 - a fruit mark outside the fruit months, or on a dormant plant
@@ -264,6 +267,47 @@ def swap_rules(slug, state):
               f"{pid}: undo puts back {before['name']} exactly")
 
 
+def adopt_rules(slug, state):
+    """The adoption writes one record for each plant and one mark for each circle."""
+    print("\nadoption")
+    design = yards.load(slug, "design.json")
+    if not design:
+        check(False, f"{slug} has a design.json to adopt into")
+        return
+    real = scheme._open_choices
+    try:
+        scheme._open_choices = lambda s: ["d99"]
+        out, err = scheme.adopt(slug, scheme=state["scheme"], design=copy.deepcopy(design))
+        check(out is None and "d99" in (err or ""), "the adoption refuses while a row card is open")
+        scheme._open_choices = lambda s: []
+        out, report = scheme.adopt(slug, scheme=copy.deepcopy(state["scheme"]),
+                                   design=copy.deepcopy(design))
+    finally:
+        scheme._open_choices = real
+    check(out is not None, f"the adoption runs when the row cards are closed ({report if out is None else ''})")
+    if out is None:
+        return
+    prices = {(p["zone"], p["name"]): p.get("unit_price") for p in design.get("plants") or []}
+    brief = scheme.load_brief(slug)
+    for bed in state["scheme"]["beds"]:
+        zone = bed.get("zone") or "bed_" + bed["id"]
+        circles = [p for p in bed.get("plants") or [] if not p.get("feature")]
+        records = [p for p in out["plants"] if p.get("zone") == zone]
+        check(sum(int(p["count"]) for p in records) == len(circles),
+              f"{zone}: the records count {sum(int(p['count']) for p in records)} plants "
+              f"for {len(circles)} circles")
+        for record in records:
+            was = prices.get((zone, record["name"]))
+            if was is not None and record.get("unit_price") != was:
+                check(False, f"{zone}: {record['name']} keeps its price {was}")
+        spec = scheme._layout_for(out, brief, bed["id"])
+        if spec is not None:
+            check(len(spec.get("plants") or []) == len(bed.get("plants") or []),
+                  f"{zone}: the drawing has one mark for each circle")
+    for card, row in scheme.row_answers(slug, state["scheme"]).items():
+        check(row["answer"].startswith("Decided on the map"), f"{card}: the row answer names the map")
+
+
 def run(slug, shots):
     try:
         from playwright.sync_api import sync_playwright
@@ -423,6 +467,7 @@ def run(slug, shots):
         browser.close()
     srv.shutdown()
     swap_rules(slug, state)
+    adopt_rules(slug, state)
     print(f"\n  pictures in {shots}")
     print(f"\n{len(FAILS)} failure{'' if len(FAILS) == 1 else 's'}")
     return 1 if FAILS else 0

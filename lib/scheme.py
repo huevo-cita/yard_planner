@@ -6,8 +6,11 @@
     python3 -m lib.scheme <slug> --review   check the map against practice/
     python3 -m lib.scheme <slug> --serve    open the map on a phone
 
-The map is the choosing. It does not write design.json, and it does not run
-the design or the bed drawings. Those stay gated until the choice cards close.
+    python3 -m lib.scheme <slug> --answers  the row card answers that the map gives
+    python3 -m lib.scheme <slug> --adopt    write the map into design.json
+
+The map is the choosing. It does not run the design or the bed drawings.
+`--adopt` writes the map into design.json only after the row choice cards close.
 
 Ornamental beds only. Each circle is one plant. Tap it, then tap a replacement.
 The replacement has to fit the light, the soil, the depth, the gap, and any
@@ -21,6 +24,7 @@ import argparse
 import datetime
 import json
 import math
+import os
 import sys
 
 from . import niches, practice, yards
@@ -1357,6 +1361,259 @@ def undo(slug, plant_id=None):
     return plant, None
 
 
+# ------------------------------------------------------------ the adoption
+
+ADOPT_SOURCE = "scheme.json, the map that Casey chose"
+# These fields describe one bed. A record copied from another bed drops them.
+_BED_FIELDS = ("measured_hours", "note", "december", "light_source", "months",
+               "months_source", "phase", "winter_active", "winter_active_why",
+               "from_slot", "substitute", "chosen_by", "existing", "role",
+               "light_alternatives_considered")
+
+
+def _norm(text):
+    return " ".join(str(text or "").lower().split())
+
+
+def _same_plant(record, circle):
+    """True when a design record and a map circle name the same plant."""
+    ours, theirs = _norm(record.get("botanical")), _norm(circle.get("botanical"))
+    if ours and theirs:
+        return ours == theirs or ours in theirs or theirs in ours
+    name = _norm(circle.get("name"))
+    return bool(name) and name in _norm(record.get("name"))
+
+
+def _rows(niche_record, bed):
+    """The rows of one niche, front first, each with the y where it ends."""
+    slots = [s for s in niches._slots(niche_record or {})
+             if (s.get("count") or [0, 0])[-1] > 0]
+    order = {lay: i for i, (lay, _) in enumerate(niches.LAYERS)}
+    share = dict(niches.LAYERS)
+    slots.sort(key=lambda s: -order.get(s.get("layer"), 0))
+    strips = [float(s["y_below"]) for s in bed.get("keep_out") or []
+              if s.get("y_below") is not None]
+    front = max(strips) if strips else 0.0
+    depth = float(bed["depth_ft"])
+    total = sum(share.get(s.get("layer"), 0.0) for s in slots) or 1.0
+    out, edge = [], front
+    for slot in slots:
+        edge += (depth - front) * share.get(slot.get("layer"), 0.0) / total
+        out.append((slot, edge))
+    return out
+
+
+def _row_of(rows, circle):
+    for slot, edge in rows:
+        if float(circle["y"]) <= edge + 1e-6:
+            return slot
+    return rows[-1][0] if rows else None
+
+
+def _chosen(bed):
+    """The circles that the plan plants. Features and fixed plants stay out."""
+    return [p for p in bed.get("plants") or []
+            if not p.get("feature") and not p.get("locked")]
+
+
+def row_answers(slug, scheme=None, yard=None):
+    """One answer for each row card: the plants that the map holds in that row."""
+    scheme = scheme if scheme is not None else load(slug)
+    yard = yard or Yard(slug)
+    out = {}
+    for bed in (scheme or {}).get("beds") or []:
+        for niche_id in bed.get("niches") or []:
+            rows = _rows(yard.niches.get(niche_id), bed)
+            held = {}
+            for circle in _chosen(bed):
+                if circle.get("niche") != niche_id:
+                    continue
+                slot = _row_of(rows, circle)
+                if slot is not None:
+                    held.setdefault(slot["id"], []).append(circle["name"])
+            for slot, _ in rows:
+                if not slot.get("card"):
+                    continue
+                names = held.get(slot["id"]) or []
+                counts = {}
+                for name in names:
+                    counts[name] = counts.get(name, 0) + 1
+                listed = ", ".join(f"{n} {name}" for name, n in
+                                   sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+                out[slot["card"]] = {
+                    "slot": slot["id"],
+                    "counts": counts,
+                    "answer": (f"Decided on the map ({FILE}): {listed}." if listed else
+                               f"Decided on the map ({FILE}): this row has no new plant."),
+                }
+    return out
+
+
+def _layer_for(rows, circles):
+    seen = {}
+    for circle in circles:
+        slot = _row_of(rows, circle)
+        if slot:
+            seen[slot["layer"]] = seen.get(slot["layer"], 0) + 1
+    return max(seen, key=seen.get) if seen else "front"
+
+
+def _new_record(zone, circle, count, layer):
+    from . import design as design_mod
+    rec = design_mod._match_record({"name": circle["name"],
+                                    "botanical": circle.get("botanical")}) or {}
+    bloom = list(rec.get("bloom") or circle.get("bloom") or [])
+    out = {
+        "name": circle["name"],
+        "zone": zone,
+        "count": count,
+        "botanical": circle.get("botanical") or rec.get("botanical") or "",
+        "light": rec.get("light"),
+        "water": rec.get("water"),
+        "ph_range": rec.get("ph_range"),
+        "mature_spread_ft": rec.get("mature_spread_ft") or circle.get("mature_spread_ft"),
+        "mature_height_ft": rec.get("mature_height_ft") or circle.get("height_ft"),
+        "bloom": bloom,
+        "evergreen": bool(rec.get("evergreen")),
+        "layer": layer,
+        "tier": "min",
+        "unit_price": None,
+        "annual": rec.get("habit") == "annual" or rec.get("season") == "annual",
+        "source": ADOPT_SOURCE + (f"; catalog: {rec['source']}" if rec.get("source") else ""),
+        "december": ("In flower in December." if "Dec" in bloom
+                     else "Not in flower in December."),
+        "note": "Chosen on the map.",
+    }
+    for key in ("rooting_depth_in", "rooting_depth_source", "native"):
+        if rec.get(key) is not None:
+            out[key] = rec[key]
+    return out
+
+
+def _mark(circle, plant_name, code):
+    r = round(float(circle.get("drawn_ft") or circle["spread_ft"]) / 2, 3)
+    return {"x": circle["x"], "y": circle["y"], "r": r, "label": code,
+            "color": circle.get("color") or "#9db3ad",
+            "fontsize": round(max(5.0, min(9.0, r * 16)), 1),
+            "zorder": 3, "plant": plant_name}
+
+
+def _layout_for(design, brief, bed_id):
+    names = {b["id"]: b.get("layout") for b in brief.get("beds") or []}
+    want = names.get(bed_id)
+    for spec in (design.get("layout") or {}).get("beds") or []:
+        name = spec.get("name") or ""
+        if (want and name == want) or (not want and name.split("-")[0] == bed_id):
+            return spec
+    return None
+
+
+def _open_choices(slug):
+    cards = (yards.load(slug, "doubts.json") or {}).get("cards") or []
+    return [c["id"] for c in cards if c.get("kind") == "choice"
+            and c.get("status") == "open" and "design" in (c.get("blocks") or [])]
+
+
+def adopt(slug, scheme=None, design=None, yard=None, brief=None):
+    """Write the map into design.json: the plant records and the drawn circles.
+
+    Refuses while a choice card that blocks the design is open, because the
+    map is the answer to those cards. Returns (design, report) or (None, error).
+    """
+    open_cards = _open_choices(slug)
+    if open_cards:
+        return None, (f"{len(open_cards)} choice card{'s' if len(open_cards) > 1 else ''} "
+                      f"for the design {'are' if len(open_cards) > 1 else 'is'} open: "
+                      f"{', '.join(open_cards)}. Settle them from --answers first.")
+    scheme = scheme if scheme is not None else load(slug)
+    if not scheme:
+        return None, f"{slug} has no {FILE}."
+    design = design if design is not None else yards.load(slug, "design.json")
+    if not design:
+        return None, f"{slug} has no design.json."
+    yard = yard or Yard(slug)
+    brief = brief if brief is not None else load_brief(slug)
+    code_of = codes(scheme)
+    records = design.setdefault("plants", [])
+    report = []
+    for bed in scheme.get("beds") or []:
+        zone = bed.get("zone") or "bed_" + bed["id"]
+        groups = []
+        for circle in [p for p in bed.get("plants") or [] if not p.get("feature")]:
+            for group in groups:
+                if _same_plant(group[0], circle):
+                    group.append(circle)
+                    break
+            else:
+                groups.append([circle])
+        ours = [r for r in records if r.get("zone") == zone]
+        rows = {}
+        for niche_id in bed.get("niches") or []:
+            rows[niche_id] = _rows(yard.niches.get(niche_id), bed)
+        kept, added, recounted, name_of = [], [], [], {}
+        for group in groups:
+            first = group[0]
+            match = next((r for r in ours if _same_plant(r, first) and r not in kept), None)
+            if match is None:
+                other = next((r for r in records if r.get("zone") != zone
+                              and _same_plant(r, first)), None)
+                if other is not None:
+                    match = {k: v for k, v in other.items() if k not in _BED_FIELDS}
+                    match.update(zone=zone, note="Chosen on the map.",
+                                 source=ADOPT_SOURCE + f"; record from {other['zone']}")
+                    bloom = match.get("bloom") or []
+                    match["december"] = ("In flower in December." if "Dec" in bloom
+                                         else "Not in flower in December.")
+                else:
+                    layer = _layer_for(rows.get(first.get("niche")) or [], group)
+                    match = _new_record(zone, first, len(group), layer)
+                added.append(match)
+            elif int(match.get("count") or 0) != len(group):
+                recounted.append((match["name"], match.get("count"), len(group)))
+            match["count"] = len(group)
+            theirs = first.get("botanical") or ""
+            if len(theirs) > len(match.get("botanical") or ""):
+                match["botanical"] = theirs
+            chosen = [c["override"] for c in group if c.get("override")]
+            if chosen and "Chosen past a limit" not in (match.get("note") or ""):
+                o = chosen[0]
+                match["note"] = (f"{match.get('note') or ''} Chosen past a limit: "
+                                 f"{o['limit']}. {o['by']}, {o['on']}: {o['reason']}").strip()
+            kept.append(match)
+            for circle in group:
+                name_of[circle["id"]] = match["name"]
+        removed = [r for r in ours if r not in kept]
+        position = next((i for i, r in enumerate(records) if r.get("zone") == zone), len(records))
+        rest = [r for r in records if r.get("zone") != zone]
+        records[:] = rest[:position] + kept + rest[position:]
+
+        spec = _layout_for(design, brief, bed["id"])
+        if spec is not None:
+            old = spec.get("plants") or []
+            marks = []
+            for circle in bed.get("plants") or []:
+                if circle.get("locked") or circle.get("feature"):
+                    keep = next((m for m in old if abs(m["x"] - circle["x"]) < 0.01
+                                 and abs(m["y"] - circle["y"]) < 0.01), None)
+                    if keep is not None:
+                        marks.append(keep)
+                        continue
+                marks.append(_mark(circle, name_of.get(circle["id"], circle["name"]),
+                                   code_of.get(circle["name"], "")))
+            spec["plants"] = marks
+            coded = sorted({(code_of.get(c["name"], ""), c["name"]) for c in _chosen(bed)})
+            notes = [n for n in spec.get("notes") or [] if not str(n).startswith("Key:")]
+            for i in range(0, len(coded), 5):
+                part = ", ".join(f"{code} {name}" for code, name in coded[i:i + 5])
+                notes.append(f"Key: {part}")
+            spec["notes"] = notes
+        report.append({"zone": zone, "added": [r["name"] for r in added],
+                       "removed": [r["name"] for r in removed],
+                       "recounted": recounted})
+    design.setdefault("adopted", {})["scheme"] = datetime.date.today().isoformat()
+    return design, report
+
+
 # ---------------------------------------------------------------- the page
 
 TITLE = "The beds"
@@ -2241,7 +2498,42 @@ def main():
                     help="replace one circle, as a tap on the map does")
     ap.add_argument("--override", metavar="REASON",
                     help="with --swap: plant a name the slate does not offer here")
+    ap.add_argument("--answers", action="store_true",
+                    help="print the answer that the map gives to each row card")
+    ap.add_argument("--adopt", action="store_true",
+                    help="write the map into design.json, after the row cards close")
     args = ap.parse_args()
+
+    if args.answers:
+        status = {c["id"]: c.get("status") for c in
+                  (yards.load(args.slug, "doubts.json") or {}).get("cards") or []}
+        for card, row in sorted(row_answers(args.slug).items(),
+                                key=lambda kv: int(kv[0].lstrip("d") or 0)):
+            print(f"  {card}  {status.get(card) or '?':8} {row['slot']:18} {row['answer']}")
+        return
+
+    if args.adopt:
+        before = yards.load(args.slug, "design.json")
+        design, report = adopt(args.slug)
+        if design is None:
+            raise SystemExit(f"  {report}")
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = os.path.join(yards.GARDEN_ROOT, ".cache", "design-backup",
+                              f"design-{stamp}.json")
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        with open(backup, "w") as fh:
+            json.dump(before, fh, indent=2)
+        yards.save(args.slug, "design.json", design)
+        for zone in report:
+            print(f"  {zone['zone']}")
+            for name in zone["added"]:
+                print(f"      added      {name}")
+            for name in zone["removed"]:
+                print(f"      removed    {name}")
+            for name, was, now in zone["recounted"]:
+                print(f"      recounted  {name}: {was} -> {now}")
+        print(f"  wrote design.json. The old file is at {backup}")
+        return
 
     if args.override is not None and not args.swap:
         raise SystemExit("--override needs --swap.")
