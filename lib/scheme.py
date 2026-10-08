@@ -895,7 +895,7 @@ def _taller_than_behind(bed, plant, height):
             continue
         if other["y"] <= plant["y"] + 0.3 or other.get("height_ft") is None:
             continue
-        if _is_structure(other):
+        if other.get("feature") or _is_structure(other):
             continue
         if abs(other["x"] - plant["x"]) > _radius(other) + _radius(plant):
             continue
@@ -1169,9 +1169,9 @@ def options_for(slug, scheme, plant_id, yard=None):
         t = traits(cand["name"], cand.get("botanical"))
         photo = (cand.get("photos") or [None])[0] or {}
         sample = dict(t, name=cand["name"])
-        # The height that a swap plants, so the flag matches the result.
+        # The flag reads the height that a swap plants, so it matches the result.
+        shorter = _taller_than_behind(bed, plant, t["height_ft"])
         tall_ft = t["height_ft"] if t["height_ft"] is not None else cand.get("mature_height_ft")
-        shorter = _taller_than_behind(bed, plant, tall_ft)
         out.append({
             "name": cand["name"],
             "botanical": cand.get("botanical") or "",
