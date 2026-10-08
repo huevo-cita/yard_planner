@@ -1581,6 +1581,9 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
             elif int(match.get("count") or 0) != len(group):
                 recounted.append((match["name"], match.get("count"), len(group)))
             match["count"] = len(group)
+            planted = [c for c in group if not c.get("locked")]
+            if planted and match.get("layer") in (None, "front", "middle", "back"):
+                match["layer"] = _layer_for(rows.get(first.get("niche")) or [], planted)
             theirs = first.get("botanical") or ""
             if len(theirs) > len(match.get("botanical") or ""):
                 match["botanical"] = theirs
