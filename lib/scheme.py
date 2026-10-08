@@ -1604,7 +1604,7 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
         spec = _layout_for(design, brief, bed["id"])
         if spec is not None:
             old = spec.get("plants") or []
-            marks = []
+            marks, coded = [], set()
             for circle in bed.get("plants") or []:
                 if circle.get("locked") or circle.get("feature"):
                     keep = next((m for m in old if abs(m["x"] - circle["x"]) < 0.01
@@ -1612,10 +1612,14 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
                     if keep is not None:
                         marks.append(keep)
                         continue
-                marks.append(_mark(circle, name_of.get(circle["id"], circle["name"]),
-                                   code_of.get(circle["name"], "")))
+                code = code_of.get(circle["name"], "")
+                mark = _mark(circle, name_of.get(circle["id"], circle["name"]), code)
+                if circle.get("feature"):
+                    mark["plant"] = None
+                marks.append(mark)
+                coded.add((code, circle["name"]))
             spec["plants"] = marks
-            coded = sorted({(code_of.get(c["name"], ""), c["name"]) for c in _chosen(bed)})
+            coded = sorted(coded)
             notes = [n for n in spec.get("notes") or [] if not str(n).startswith("Key:")]
             for i in range(0, len(coded), 5):
                 part = ", ".join(f"{code} {name}" for code, name in coded[i:i + 5])
