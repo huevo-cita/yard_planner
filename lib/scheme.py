@@ -1525,7 +1525,8 @@ def _layout_for(design, brief, bed_id):
 
 def _open_choices(slug):
     cards = (yards.load(slug, "doubts.json") or {}).get("cards") or []
-    return [c["id"] for c in cards if c.get("kind") == "choice"
+    # Only a row card is an answer that the map gives. The gate holds the rest.
+    return [c["id"] for c in cards if c.get("kind") == "choice" and c.get("about_slot")
             and c.get("status") == "open" and "design" in (c.get("blocks") or [])]
 
 
