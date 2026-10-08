@@ -172,6 +172,9 @@ def swap_rules(slug, state):
         opts, _ = scheme.options_for(slug, work, spot["id"])
         check(not opts, f"{spot['id']}: a circle over the {band.get('kind') or 'keep-out'} "
                         f"strip offers no new plant ({len(opts or [])} offered)")
+        _, err = scheme.swap(slug, spot["id"], "Turk's cap",
+                             override="a test that the ground still rules")
+        check(err is not None, f"{spot['id']}: an override cannot put a plant over the strip")
         spot.clear()
         spot.update(saved)
 

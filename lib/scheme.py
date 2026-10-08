@@ -1243,10 +1243,18 @@ def _forced(slug, scheme, bed, plant, name, override):
         return None, f"{name} has no catalog record, so the map cannot draw it."
     yard = Yard(slug)
     cand = dict(record, name=name)
-    limit = yard.rejection(plant["niche"], cand) or (
-        f"{name} is not on the slate for {plant.get('niche')}")
     hole = float(plant["spread_ft"])
     spread = round(min(spacing_for(cand), hole), 3)
+    # An override covers the plant list and the site rules, not the ground.
+    if not fits_gap(bed, plant, spread, bed.get("plants") or []):
+        return None, (f"{name} does not fit this circle: it would leave the soil "
+                      f"or overlap a neighbour. An override does not change that.")
+    niche = yard.niches.get(plant.get("niche"))
+    on_slate = bool(niche) and name in _candidates(niche)
+    limit = yard.rejection(plant["niche"], cand)
+    if not limit and on_slate:
+        return None, f"{name} is already a choice here. Swap it without an override."
+    limit = limit or f"{name} is not on the slate for {plant.get('niche')}"
     fresh = _plant(bed["id"], plant["niche"], name, record["botanical"],
                    spread, plant["x"], plant["y"])
     fresh["mature_spread_ft"] = record.get("mature_spread_ft") or fresh.get("mature_spread_ft")
