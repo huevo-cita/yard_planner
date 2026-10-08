@@ -200,12 +200,16 @@ def requirements(slug, mulch_depth_in=3.0, compost_depth_in=2.0):
         # inches of bought soil and mulch it is not what any bed wants: it costed
         # 33.1 cu ft of mulch for ground that needed a scatter, and then added
         # the nine bags he had said he would buy on top of it.
+        topoff = z.get("mulch_topoff_in")
         for item, depth, verb in (("mulch",
-                                   z.get("mulch_topoff_in") or mulch_depth_in,
-                                   "topped off at" if z.get("mulch_topoff_in")
-                                   else "at"),
+                                   mulch_depth_in if topoff is None else topoff,
+                                   "at" if topoff is None else "topped off at"),
                                   ("compost", compost_depth_in,
                                    "topdressed at")):
+            # A declared top-off of 0 in is a decision that the bed needs no mulch.
+            if item == "mulch" and topoff is not None and float(topoff) <= 0:
+                excluded["mulch"].append(f"{zone} — the top-off on record is 0 in")
+                continue
             # A bed that is here only because it asked for mulch gets mulch and
             # nothing else. Composting an undesigned bed is a different decision
             # from topping its mulch off, and quietly making it would have grown
