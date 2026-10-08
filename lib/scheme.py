@@ -1510,7 +1510,8 @@ def _mark(circle, plant_name, code):
     return {"x": circle["x"], "y": circle["y"], "r": r, "label": code,
             "color": circle.get("color") or "#9db3ad",
             "fontsize": round(max(5.0, min(9.0, r * 16)), 1),
-            "zorder": 3, "plant": plant_name}
+            "zorder": 3, "plant": plant_name,
+            "botanical": circle.get("botanical") or ""}
 
 
 def _layout_for(design, brief, bed_id):
