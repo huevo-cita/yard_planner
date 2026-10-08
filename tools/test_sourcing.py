@@ -755,6 +755,53 @@ def check_moves(sourcing, root):
     with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
         json.dump(TASKS, f, indent=2)
 
+    # The owner drives to the top shop only for a big order. The ranking cannot
+    # see the drive, so without a floor every small line lands there.
+    floored = json.loads(json.dumps(SUPPLIERS))
+    for s in floored["suppliers"]:
+        if s["id"] == "near_good":
+            s["min_trip_usd"] = 400
+    small = json.loads(json.dumps(TASKS))
+    for e in small["shopping"]:
+        e["cost_usd"] = [60, 80]
+    with open(os.path.join(root, SLUG, "sourcing.json"), "w") as f:
+        json.dump(floored, f, indent=2)
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(small, f, indent=2)
+    got = sourcing.moves(SLUG, today=TODAY)
+    ok(all(m["to"] != "near_good" for m in got["moves"]),
+       "a shop with a trip floor gets no small order moved to it",
+       [(m["shopping"], m["to"]) for m in got["moves"]])
+
+    for e in small["shopping"]:
+        if e["id"] == "b03":
+            e["cost_usd"] = [450, 550]
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(small, f, indent=2)
+    got = sourcing.moves(SLUG, today=TODAY)
+    ok(any(m["shopping"] == "b03" and m["to"] == "near_good"
+           for m in got["moves"]),
+       "but an order that clears the floor on its own still moves there",
+       [(m["shopping"], m["to"]) for m in got["moves"]])
+
+    for e in small["shopping"]:
+        e["cost_usd"] = [60, 80]
+        if e["id"] == "b01":
+            e["supplier"] = "near_good"
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(small, f, indent=2)
+    got = sourcing.moves(SLUG, today=TODAY)
+    short = {s["supplier"]: s for s in got["short"]}
+    ok("near_good" in short and short["near_good"]["lines"] == ["b01"]
+       and short["near_good"]["total_usd"] == 70.0,
+       "and a line already there under the floor is reported by name",
+       got["short"])
+
+    with open(os.path.join(root, SLUG, "sourcing.json"), "w") as f:
+        json.dump(SUPPLIERS, f, indent=2)
+    with open(os.path.join(root, SLUG, "tasks.json"), "w") as f:
+        json.dump(TASKS, f, indent=2)
+
 
 def check_sizes(sourcing, bom):
     """A design and a price list rarely spell a pot size the same way."""

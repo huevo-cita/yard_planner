@@ -146,6 +146,8 @@ def _schedule(ax, plants, y):
         label = plant.get('label') or ''
         if not label:
             continue
+        # A label can be a two-letter code or wrap over two lines; one table row needs one line.
+        label = " ".join((plant.get('plant') or label).split())
         row = rows.setdefault(label, {
             "count": 0,
             "botanical": plant.get('botanical') or '',
