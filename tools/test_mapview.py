@@ -17,6 +17,10 @@ yard's scheme.json. It fails on:
 - a swap option taller than the plant behind it that is not last or not labelled
 - a choice list with no card for the plant that is there now
 - a Ctrl+Z that does not put back the plant from before the swap
+- a new plant offered over a keep-out strip, a swap that leaves one plant at
+  two sizes, or an undo that does not put back the sizes
+- an override that is accepted without a reason, or that the audit reports
+  as an error, or that the review does not note
 - a month that does not change the circles, or a bloom strip cell that
   disagrees with the plants in that bed
 - a fruit mark outside the fruit months, or on a dormant plant
@@ -143,6 +147,100 @@ def _cross(p, q):
     return d1 * d2 < 0 and d3 * d4 < 0
 
 
+def swap_rules(slug, state):
+    """A swap keeps a new plant out of a keep-out strip and keeps one size per group."""
+    print("\nswap rules")
+    work = copy.deepcopy(state["scheme"])
+    for record in work["beds"]:
+        scheme._even_sizes(record.get("plants") or [])
+    state["scheme"] = work
+
+    strip = None
+    for record in work["beds"]:
+        band = next(iter(record.get("keep_out") or []), None)
+        spot = next((p for p in record.get("plants") or [] if not p.get("locked")), None)
+        if band and spot:
+            strip = (record, spot, band)
+            break
+    check(strip is not None, "some bed has a keep-out strip and a plant that can change")
+    if strip:
+        record, spot, band = strip
+        saved = dict(spot)
+        x_from = float(band.get("x_from") or 0)
+        x_to = float(band["x_to"]) if band.get("x_to") is not None else float(record["length_ft"])
+        spot.update(kept=True, y=float(band["y_below"]), x=(x_from + x_to) / 2)
+        opts, _ = scheme.options_for(slug, work, spot["id"])
+        check(not opts, f"{spot['id']}: a circle over the {band.get('kind') or 'keep-out'} "
+                        f"strip offers no new plant ({len(opts or [])} offered)")
+        spot.clear()
+        spot.update(saved)
+
+    target = None
+    for record in work["beds"]:
+        plants = record.get("plants") or []
+        for plant in plants:
+            if plant.get("locked"):
+                continue
+            opts, _ = scheme.options_for(slug, work, plant["id"])
+            for o in opts or []:
+                group = [p for p in plants if p is not plant and p["name"] == o["name"]
+                         and p.get("niche") == plant.get("niche") and not p.get("locked")]
+                if group and abs(group[0]["spread_ft"] - o["spread_ft"]) > 0.001:
+                    target = (record, plant["id"], o["name"])
+                    break
+            if target:
+                break
+        if target:
+            break
+    check(target is not None, "some swap would draw a plant at a size that differs from its group")
+    if target:
+        record, pid, name = target
+        snapshot = copy.deepcopy(work)
+        _, err = scheme.swap(slug, pid, name)
+        record = next(b for b in state["scheme"]["beds"] if b["id"] == record["id"])
+        check(err is None and not scheme.uneven(record.get("plants") or []),
+              f"{pid}: a swap to {name} leaves one size for each group in {record['id']}")
+        scheme.undo(slug, pid)
+        restored = state["scheme"]
+        restored.pop("history", None)
+        snapshot.pop("history", None)
+        check(restored == snapshot, f"{pid}: undo puts back every plant that the swap resized")
+
+    forced = None
+    for record in state["scheme"]["beds"]:
+        for plant in record.get("plants") or []:
+            if plant.get("locked"):
+                continue
+            offered = {o["name"] for o in scheme.options_for(slug, state["scheme"], plant["id"])[0] or []}
+            if "Turk's cap" not in offered and plant["name"] != "Turk's cap":
+                forced = (record["id"], plant["id"])
+                break
+        if forced:
+            break
+    check(forced is not None, "some circle does not offer Turk's cap")
+    if forced:
+        bed_id, pid = forced
+        before = copy.deepcopy(scheme.find_plant(state["scheme"], pid)[1])
+        _, err = scheme.swap(slug, pid, "Turk's cap")
+        check(err is not None, f"{pid}: a swap to a plant that is not offered is refused")
+        _, err = scheme.swap(slug, pid, "Turk's cap", override="too short")
+        check(err is not None, f"{pid}: an override with a short reason is refused")
+        plant, err = scheme.swap(slug, pid, "Turk's cap",
+                                 override="a test of a choice past the limit")
+        chosen = (plant or {}).get("override") or {}
+        check(err is None and chosen.get("reason") and chosen.get("limit"),
+              f"{pid}: an override keeps the reason and the limit on the plant")
+        bad = [line for line in scheme.audit(slug, state["scheme"]) if line.startswith(pid + " ")]
+        check(not any("slate" in line for line in bad),
+              f"{pid}: the audit reports no slate error for the override {bad[:2]}")
+        notes = [f for f in scheme.review(slug, state["scheme"])
+                 if f["rule"] == "override" and pid in f["text"]]
+        check(len(notes) == 1 and notes[0].get("info"), f"{pid}: the review notes the override")
+        scheme.undo(slug, pid)
+        check(scheme.find_plant(state["scheme"], pid)[1] == before,
+              f"{pid}: undo puts back {before['name']} exactly")
+
+
 def run(slug, shots):
     try:
         from playwright.sync_api import sync_playwright
@@ -244,6 +342,7 @@ def run(slug, shots):
             page.wait_for_selector("#list .opt")
             check(page.locator("#panel").is_visible(), "a tap opens the choice list")
             before = copy.deepcopy(scheme.find_plant(state["scheme"], pid)[1])
+            kept_history = len(state["scheme"].get("history") or [])
             now = page.locator("#list .opt.now")
             check(now.count() == 1 and before["name"] in now.inner_text(),
                   f"the list shows the plant that is there now ({before['name']})")
@@ -260,7 +359,8 @@ def run(slug, shots):
             after = scheme.find_plant(state["scheme"], pid)[1]
             check(drawn == before["name"] and after == before,
                   f"Ctrl+Z puts back {before['name']} exactly ({drawn})")
-            check(not state["scheme"].get("history"), "the undo empties the history")
+            check(len(state["scheme"].get("history") or []) == kept_history,
+                  "the undo removes only its own history entry")
 
         # A g01 viola offered Gayfeather is the case that started this check.
         # Any other flagged option stands in if the yard changes.
@@ -299,6 +399,7 @@ def run(slug, shots):
                   f"{pid}: {name} carries the taller-than line ({row and row['warn']})")
         browser.close()
     srv.shutdown()
+    swap_rules(slug, state)
     print(f"\n  pictures in {shots}")
     print(f"\n{len(FAILS)} failure{'' if len(FAILS) == 1 else 's'}")
     return 1 if FAILS else 0

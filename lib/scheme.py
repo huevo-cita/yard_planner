@@ -819,7 +819,7 @@ def audit(slug, scheme=None):
                 bad.append(f"{plant['id']} {plant['name']} sits outside {bed['id']}")
             if not plant.get("botanical") and not plant.get("feature"):
                 bad.append(f"{plant['id']} {plant['name']} has no botanical name")
-            if plant.get("locked") or plant.get("kept"):
+            if plant.get("locked") or plant.get("kept") or plant.get("override"):
                 continue
             niche = yard.niches.get(plant.get("niche"))
             cand = _candidates(niche).get(plant["name"]) if niche else None
@@ -1038,6 +1038,15 @@ def review(slug, scheme=None):
                                 f"{widest['name']} {widest.get('mature_spread_ft')} ft, "
                                 f"limit {limit.get('max_height_ft')} ft.",
                         "cite": "vision.json limits", "info": True})
+    for bed in scheme.get("beds") or []:
+        for plant in bed.get("plants") or []:
+            chosen = plant.get("override")
+            if chosen:
+                out.append({"bed": bed["id"], "rule": "override",
+                            "text": f"{plant['name']} at {plant['id']} was chosen past "
+                                    f"this limit: {chosen['limit']}.",
+                            "cite": f"{chosen['by']}, {chosen['on']}: {chosen['reason']}",
+                            "info": True})
     repeat = int(practice.rule("design.repeat_min_beds"))
     if not any(len(where) >= repeat for where in seen.values()):
         say("yard", "design.repeat_min_beds", "no plant repeats from bed to bed.")
@@ -1122,16 +1131,19 @@ def current_for(scheme, plant_id, yard):
 def fits_gap(bed, plant, spread, neighbors):
     """True when a plant of this spread can stand where `plant` stands.
 
-    A plant no wider than the circle already here takes no new ground.
+    A plant no wider than the circle already here takes no new ground from
+    its neighbours. It is a new plant, so it must still sit in plantable
+    soil: a plant in the ground may lean over a keep-out strip, and a new
+    plant may not.
     """
-    if float(spread) <= float(plant["spread_ft"]) + 0.001:
-        return True
     trial = dict(plant)
     trial["spread_ft"] = float(spread)
     trial["locked"] = False
     trial["kept"] = False
     if not in_bed(bed, trial):
         return False
+    if float(spread) <= float(plant["spread_ft"]) + 0.001:
+        return True
     for other in neighbors:
         if other["id"] == plant["id"]:
             continue
@@ -1216,8 +1228,40 @@ def _site_limit(reasons):
     return "No other plant on this list fits this spot."
 
 
-def swap(slug, plant_id, name):
-    """Replace one circle and write the file. The other circles stay."""
+OVERRIDE_MIN = 12
+
+
+def _forced(slug, scheme, bed, plant, name, override):
+    """A plant that the slate does not offer here, with the reason on record."""
+    from . import design as design_mod
+    reason = (override or "").strip()
+    if len(reason) < OVERRIDE_MIN:
+        return None, (f"An override needs a reason of {OVERRIDE_MIN} characters "
+                      f"or more, so that somebody can disagree with it.")
+    record = design_mod._match_record({"name": name})
+    if not record or not record.get("botanical"):
+        return None, f"{name} has no catalog record, so the map cannot draw it."
+    yard = Yard(slug)
+    cand = dict(record, name=name)
+    limit = yard.rejection(plant["niche"], cand) or (
+        f"{name} is not on the slate for {plant.get('niche')}")
+    hole = float(plant["spread_ft"])
+    spread = round(min(spacing_for(cand), hole), 3)
+    fresh = _plant(bed["id"], plant["niche"], name, record["botanical"],
+                   spread, plant["x"], plant["y"])
+    fresh["mature_spread_ft"] = record.get("mature_spread_ft") or fresh.get("mature_spread_ft")
+    fresh["override"] = {"reason": reason, "limit": limit, "by": "Casey",
+                         "on": datetime.date.today().isoformat()}
+    return fresh, None
+
+
+def swap(slug, plant_id, name, override=None):
+    """Replace one circle and write the file. The other circles stay.
+
+    A plant that the slate does not offer here needs `override`, the reason
+    for planting it anyway. The reason and the limit it breaks go on the
+    plant, so the audit and the review report a choice and not an error.
+    """
     scheme = load(slug)
     if not scheme:
         raise SystemExit(f"{slug} has no {FILE}. Run --init first.")
@@ -1227,25 +1271,48 @@ def swap(slug, plant_id, name):
     if plant.get("locked"):
         return None, "This plant stays. It is already in the ground."
     choices, err = options_for(slug, scheme, plant_id)
-    if err:
-        return None, err
-    picked = next((c for c in choices if c["name"] == name), None)
-    if not picked:
-        return None, f"{name} does not fit this gap."
-    fresh = _plant(bed["id"], plant["niche"], picked["name"], picked["botanical"],
-                   picked["spread_ft"], plant["x"], plant["y"])
+    picked = next((c for c in choices or [] if c["name"] == name), None)
+    if picked:
+        fresh = _plant(bed["id"], plant["niche"], picked["name"], picked["botanical"],
+                       picked["spread_ft"], plant["x"], plant["y"])
+        fresh["mature_spread_ft"] = picked["grows_ft"]
+    elif override is not None:
+        fresh, err = _forced(slug, scheme, bed, plant, name, override)
+        if err:
+            return None, err
+    else:
+        return None, err or f"{name} does not fit this gap."
     fresh["id"] = plant["id"]
-    fresh["mature_spread_ft"] = picked["grows_ft"]
     # The whole old plant, because the old name can fail the fit check. A
     # kept plant from the design is not always a choice on the slate.
-    scheme.setdefault("history", []).append({
-        "id": plant["id"], "before": json.loads(json.dumps(plant)),
-        "after": fresh["name"],
-        "at": datetime.datetime.now().isoformat(timespec="seconds")})
+    before = json.loads(json.dumps(plant))
     plant.clear()
     plant.update(fresh)
+    scheme.setdefault("history", []).append({
+        "id": plant["id"], "before": before, "after": fresh["name"],
+        "resized": _even_bed(bed),
+        "at": datetime.datetime.now().isoformat(timespec="seconds")})
     yards.save(slug, FILE, scheme)
     return plant, None
+
+
+def _even_bed(bed):
+    """Even the circle sizes in one bed. Return each change, so undo can reverse it."""
+    plants = bed.get("plants") or []
+    old = {p["id"]: p["spread_ft"] for p in plants}
+    _even_sizes(plants)
+    return [{"id": p["id"], "from": old[p["id"]], "to": p["spread_ft"]}
+            for p in plants if abs(p["spread_ft"] - old[p["id"]]) > 0.0005]
+
+
+def _unresize(scheme, entry):
+    """Put back the sizes that a swap evened, where nothing changed them since."""
+    for change in entry.get("resized") or []:
+        if change["id"] == entry["id"]:
+            continue
+        _, other = find_plant(scheme, change["id"])
+        if other and abs(other["spread_ft"] - change["to"]) < 0.0005:
+            other["spread_ft"] = change["from"]
 
 
 def _undo_count(scheme, plant_id=None):
@@ -1271,6 +1338,7 @@ def undo(slug, plant_id=None):
     history.pop(index)
     plant.clear()
     plant.update(entry["before"])
+    _unresize(scheme, entry)
     yards.save(slug, FILE, scheme)
     return plant, None
 
@@ -2155,7 +2223,23 @@ def main():
                     help="write the page to a file, for a browser test")
     ap.add_argument("--serve", action="store_true")
     ap.add_argument("--port", type=int, default=8740)
+    ap.add_argument("--swap", nargs=2, metavar=("PLANT_ID", "NAME"),
+                    help="replace one circle, as a tap on the map does")
+    ap.add_argument("--override", metavar="REASON",
+                    help="with --swap: plant a name the slate does not offer here")
     args = ap.parse_args()
+
+    if args.override is not None and not args.swap:
+        raise SystemExit("--override needs --swap.")
+    if args.swap:
+        pid, name = args.swap
+        plant, err = swap(args.slug, pid, name, override=args.override)
+        if err:
+            raise SystemExit(f"  {err}")
+        chosen = plant.get("override")
+        print(f"  {pid} is now {plant['name']}"
+              + (f", past this limit: {chosen['limit']}" if chosen else ""))
+        return
 
     if args.init:
         existing = load(args.slug)
