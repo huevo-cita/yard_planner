@@ -1170,7 +1170,7 @@ def options_for(slug, scheme, plant_id, yard=None):
         photo = (cand.get("photos") or [None])[0] or {}
         sample = dict(t, name=cand["name"])
         # The flag reads the height that a swap plants, so it matches the result.
-        shorter = _taller_than_behind(bed, plant, t["height_ft"])
+        shorter = _taller_than_behind(bed, dict(plant, spread_ft=spread), t["height_ft"])
         tall_ft = t["height_ft"] if t["height_ft"] is not None else cand.get("mature_height_ft")
         out.append({
             "name": cand["name"],
