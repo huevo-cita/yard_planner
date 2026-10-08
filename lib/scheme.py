@@ -879,6 +879,33 @@ def _band(height):
     return design_mod._band(height)
 
 
+def _taller_than_behind(bed, plant, height):
+    """The shortest plant behind this spot in a lower height band, or None.
+
+    The tests are the same as the layer check in the review, with one
+    difference. Seasonal color counts here, because a tall plant in
+    front hides it all the same.
+    """
+    band = _band(height)
+    if band is None:
+        return None
+    behind = []
+    for other in bed.get("plants") or []:
+        if other is plant or other.get("id") == plant.get("id"):
+            continue
+        if other["y"] <= plant["y"] + 0.3 or other.get("height_ft") is None:
+            continue
+        if other.get("feature") or _is_structure(other):
+            continue
+        if abs(other["x"] - plant["x"]) > _radius(other) + _radius(plant):
+            continue
+        if _band(other["height_ft"]) < band:
+            behind.append(other)
+    if not behind:
+        return None
+    return min(behind, key=lambda other: float(other["height_ft"]))
+
+
 def review(slug, scheme=None):
     """The map against practice/. One finding per line, with its rule."""
     from . import design as design_mod
@@ -1142,12 +1169,15 @@ def options_for(slug, scheme, plant_id, yard=None):
         t = traits(cand["name"], cand.get("botanical"))
         photo = (cand.get("photos") or [None])[0] or {}
         sample = dict(t, name=cand["name"])
+        # The flag reads the height that a swap plants, so it matches the result.
+        shorter = _taller_than_behind(bed, dict(plant, spread_ft=spread), t["height_ft"])
+        tall_ft = t["height_ft"] if t["height_ft"] is not None else cand.get("mature_height_ft")
         out.append({
             "name": cand["name"],
             "botanical": cand.get("botanical") or "",
             "spread_ft": spread,
             "grows_ft": round(float(cand["mature_spread_ft"]), 2),
-            "tall_ft": cand.get("mature_height_ft"),
+            "tall_ft": tall_ft,
             "bloom": t["bloom"],
             "fruit": t["fruit"],
             "fruit_what": t["fruit_what"] or "",
@@ -1160,8 +1190,13 @@ def options_for(slug, scheme, plant_id, yard=None):
             "photo": photo.get("url") or "",
             "attribution": (photo.get("attribution") or "")[:80],
             "rank": _rank(sample),
+            # A taller plant in front of a shorter one breaks
+            # design.no_layer_jump. The option stays, at the bottom.
+            "taller_than": ({"name": shorter["name"],
+                             "tall_ft": shorter["height_ft"]} if shorter else None),
         })
-    out.sort(key=lambda row: (row["rank"], row["name"].lower()))
+    out.sort(key=lambda row: (row["taller_than"] is not None, row["rank"],
+                              row["name"].lower()))
     if not out:
         return [], _site_limit(refused)
     return out, None
@@ -1304,8 +1339,8 @@ def _svg(bed, code_of, font, tap):
         return (pad + float(plant["x"]) * scale,
                 pad + (above + depth - float(plant["y"])) * scale)
 
-    # Every circle carries its code. One member of a drift carries the count
-    # too. A label that does not fit inside its circle goes to a row of tags
+    # Every circle is one plant and carries only its code. The schedule gives
+    # the count. A label that does not fit inside its circle goes to a row of tags
     # under the front edge, in x order, so the leaders do not cross.
     inside, outside = [], []
     group_of = {}
@@ -1329,25 +1364,7 @@ def _svg(bed, code_of, font, tap):
 
     for group in groups:
         code = code_of[group[0]["name"]]
-        pts = [xy(p) for p in group]
-        cx = sum(p[0] for p in pts) / len(pts)
-        cy = sum(p[1] for p in pts) / len(pts)
-        holder = None
-        if len(group) > 1:
-            count = f"{len(group)} {code}"
-            # The count sits on the member nearest the centroid of the drift
-            # that holds it without reaching onto another plant.
-            for member in sorted(group, key=lambda p: math.hypot(xy(p)[0] - cx, xy(p)[1] - cy)):
-                if fits_in(member, count):
-                    holder = member
-                    inside.append((*xy(member), count, group, member))
-                    break
-            if holder is None:
-                front = max(pts, key=lambda p: p[1])
-                outside.append((front[0], front[1], count, group))
         for member in group:
-            if member is holder:
-                continue
             if fits_in(member, code):
                 inside.append((*xy(member), code, group, member))
             else:
@@ -1754,6 +1771,8 @@ padding:.35rem;margin:.35rem 0;cursor:pointer}
 .opt.now{cursor:default;border:2px solid #2f5d1e;background:#eef3e6}
 .opt b{display:block}
 .opt i,.opt small{display:block;color:#4f4f45;font-size:.8rem}
+.opt.tall{background:#f6f3ec;border-style:dashed}
+.opt .taller{display:block;color:#7a3e00;font-size:.8rem;font-weight:600}
 #close,#undo{min-height:44px;min-width:44px;float:right;font:inherit;border:1px solid #ddd;background:#fff;border-radius:8px}
 #undo{margin-right:.4rem;padding:0 .8rem}
 .saved{background:#e6efdc;padding:.4rem .6rem;border-radius:6px}
@@ -1780,7 +1799,7 @@ __STAMP__
 </div>
 <div class=tabs>__TABS__</div>
 __SHEETS__
-<p class=key>A circle is drawn at its planting distance, so the circles touch. Every circle carries its code. One outline marks each new drift, and one circle in the drift also carries the count. Press Ctrl+Z or Cmd+Z to undo the last change. The code is in the schedule. Tap a schedule row to reach a plant that is too small to tap.</p>
+<p class=key>A circle is drawn at its planting distance, so the circles touch. Every circle is one plant and carries its code. One outline marks each new drift. The schedule gives the count of each plant. Press Ctrl+Z or Cmd+Z to undo the last change. The code is in the schedule. Tap a schedule row to reach a plant that is too small to tap.</p>
 <div class=panel id=panel hidden>
 <button type=button id=close aria-label=Close>X</button>
 <button type=button id=undo hidden title='Undo the last change to this plant (Ctrl+Z or Cmd+Z)'>Undo</button>
@@ -1928,7 +1947,16 @@ function card(opt, tag, prefix) {
     (wild.length ? ' · ' + wild.join(', ') : '');
   const note = document.createElement('small');
   note.textContent = opt.note || opt.attribution || '';
-  span.append(title, meta, note);
+  span.append(title, meta);
+  if (opt.taller_than) {
+    el.classList.add('tall');
+    const warn = document.createElement('span');
+    warn.className = 'taller';
+    warn.textContent = 'Taller than ' + opt.taller_than.name + ' behind it: ' +
+      opt.tall_ft + ' ft against ' + opt.taller_than.tall_ft + ' ft.';
+    span.appendChild(warn);
+  }
+  span.appendChild(note);
   el.appendChild(span);
   return el;
 }
