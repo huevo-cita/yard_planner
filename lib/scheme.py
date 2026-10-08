@@ -1169,13 +1169,15 @@ def options_for(slug, scheme, plant_id, yard=None):
         t = traits(cand["name"], cand.get("botanical"))
         photo = (cand.get("photos") or [None])[0] or {}
         sample = dict(t, name=cand["name"])
-        shorter = _taller_than_behind(bed, plant, cand.get("mature_height_ft"))
+        # The height that a swap plants, so the flag matches the result.
+        tall_ft = t["height_ft"] if t["height_ft"] is not None else cand.get("mature_height_ft")
+        shorter = _taller_than_behind(bed, plant, tall_ft)
         out.append({
             "name": cand["name"],
             "botanical": cand.get("botanical") or "",
             "spread_ft": spread,
             "grows_ft": round(float(cand["mature_spread_ft"]), 2),
-            "tall_ft": cand.get("mature_height_ft"),
+            "tall_ft": tall_ft,
             "bloom": t["bloom"],
             "fruit": t["fruit"],
             "fruit_what": t["fruit_what"] or "",
