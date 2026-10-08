@@ -1552,14 +1552,10 @@ def adopt(slug, scheme=None, design=None, yard=None, brief=None):
     report = []
     for bed in scheme.get("beds") or []:
         zone = bed.get("zone") or "bed_" + bed["id"]
-        groups = []
+        by_name = {}
         for circle in [p for p in bed.get("plants") or [] if not p.get("feature")]:
-            for group in groups:
-                if _same_plant(group[0], circle):
-                    group.append(circle)
-                    break
-            else:
-                groups.append([circle])
+            by_name.setdefault(circle["name"], []).append(circle)
+        groups = list(by_name.values())
         ours = [r for r in records if r.get("zone") == zone]
         rows = {}
         for niche_id in bed.get("niches") or []:
