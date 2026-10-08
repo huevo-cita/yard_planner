@@ -14,6 +14,7 @@ yard's scheme.json. It fails on:
 - a tap target smaller than the practice minimum
 - a schedule count that does not match the circles
 - a tap that does not open the choice list, or a swap that does not redraw
+- a swap option taller than the plant behind it that is not last or not labelled
 - a choice list with no card for the plant that is there now
 - a Ctrl+Z that does not put back the plant from before the swap
 - a month that does not change the circles, or a bloom strip cell that
@@ -256,6 +257,42 @@ def run(slug, shots):
             check(drawn == before["name"] and after == before,
                   f"Ctrl+Z puts back {before['name']} exactly ({drawn})")
             check(not state["scheme"].get("history"), "the undo empties the history")
+
+        # A g01 viola offered Gayfeather is the case that started this check.
+        # Any other flagged option stands in if the yard changes.
+        flagged = []
+        misordered = []
+        for record in state["scheme"]["beds"]:
+            for plant in record.get("plants") or []:
+                if plant.get("locked"):
+                    continue
+                opts, _ = scheme.options_for(slug, state["scheme"], plant["id"])
+                marks = [bool(o["taller_than"]) for o in opts or []]
+                if marks != sorted(marks):
+                    misordered.append(plant["id"])
+                for o in opts or []:
+                    if o["taller_than"]:
+                        best = (record["id"], plant["name"], o["name"]) == ("g01", "Viola", "Gayfeather")
+                        flagged.append((not best, record["id"], plant["id"], o["name"]))
+        check(not misordered,
+              f"a taller option sorts below every option that fits the row {misordered[:3]}")
+        check(bool(flagged), "some option stands taller than the plant behind it")
+        if flagged:
+            _, bed, pid, name = min(flagged)
+            if page.locator("#panel").is_visible():
+                page.click("#close")
+            page.click(f".tab[data-bed='{bed}']")
+            page.locator(f".plant[data-id='{pid}'] circle.hit").dispatch_event("click")
+            page.wait_for_selector("#list button.opt")
+            rows = page.evaluate(
+                "() => [...document.querySelectorAll('#list button.opt')].map(b => "
+                "({name: b.querySelector('b').textContent, tall: b.classList.contains('tall'), "
+                "warn: (b.querySelector('.taller') || {}).textContent || ''}))")
+            marks = [r["tall"] for r in rows]
+            row = next((r for r in rows if r["name"] == name), None)
+            check(marks == sorted(marks), f"{pid}: the list shows taller options last")
+            check(row is not None and row["tall"] and row["warn"].startswith("Taller than "),
+                  f"{pid}: {name} carries the taller-than line ({row and row['warn']})")
         browser.close()
     srv.shutdown()
     print(f"\n  pictures in {shots}")

@@ -879,6 +879,33 @@ def _band(height):
     return design_mod._band(height)
 
 
+def _taller_than_behind(bed, plant, height):
+    """The shortest plant behind this spot in a lower height band, or None.
+
+    The tests are the same as the layer check in the review, with one
+    difference. Seasonal color counts here, because a tall plant in
+    front hides it all the same.
+    """
+    band = _band(height)
+    if band is None:
+        return None
+    behind = []
+    for other in bed.get("plants") or []:
+        if other is plant or other.get("id") == plant.get("id"):
+            continue
+        if other["y"] <= plant["y"] + 0.3 or other.get("height_ft") is None:
+            continue
+        if _is_structure(other):
+            continue
+        if abs(other["x"] - plant["x"]) > _radius(other) + _radius(plant):
+            continue
+        if _band(other["height_ft"]) < band:
+            behind.append(other)
+    if not behind:
+        return None
+    return min(behind, key=lambda other: float(other["height_ft"]))
+
+
 def review(slug, scheme=None):
     """The map against practice/. One finding per line, with its rule."""
     from . import design as design_mod
@@ -1142,6 +1169,7 @@ def options_for(slug, scheme, plant_id, yard=None):
         t = traits(cand["name"], cand.get("botanical"))
         photo = (cand.get("photos") or [None])[0] or {}
         sample = dict(t, name=cand["name"])
+        shorter = _taller_than_behind(bed, plant, cand.get("mature_height_ft"))
         out.append({
             "name": cand["name"],
             "botanical": cand.get("botanical") or "",
@@ -1160,8 +1188,13 @@ def options_for(slug, scheme, plant_id, yard=None):
             "photo": photo.get("url") or "",
             "attribution": (photo.get("attribution") or "")[:80],
             "rank": _rank(sample),
+            # A taller plant in front of a shorter one breaks
+            # design.no_layer_jump. The option stays, at the bottom.
+            "taller_than": ({"name": shorter["name"],
+                             "tall_ft": shorter["height_ft"]} if shorter else None),
         })
-    out.sort(key=lambda row: (row["rank"], row["name"].lower()))
+    out.sort(key=lambda row: (row["taller_than"] is not None, row["rank"],
+                              row["name"].lower()))
     if not out:
         return [], _site_limit(refused)
     return out, None
@@ -1754,6 +1787,8 @@ padding:.35rem;margin:.35rem 0;cursor:pointer}
 .opt.now{cursor:default;border:2px solid #2f5d1e;background:#eef3e6}
 .opt b{display:block}
 .opt i,.opt small{display:block;color:#4f4f45;font-size:.8rem}
+.opt.tall{background:#f6f3ec;border-style:dashed}
+.opt .taller{display:block;color:#7a3e00;font-size:.8rem;font-weight:600}
 #close,#undo{min-height:44px;min-width:44px;float:right;font:inherit;border:1px solid #ddd;background:#fff;border-radius:8px}
 #undo{margin-right:.4rem;padding:0 .8rem}
 .saved{background:#e6efdc;padding:.4rem .6rem;border-radius:6px}
@@ -1928,7 +1963,16 @@ function card(opt, tag, prefix) {
     (wild.length ? ' · ' + wild.join(', ') : '');
   const note = document.createElement('small');
   note.textContent = opt.note || opt.attribution || '';
-  span.append(title, meta, note);
+  span.append(title, meta);
+  if (opt.taller_than) {
+    el.classList.add('tall');
+    const warn = document.createElement('span');
+    warn.className = 'taller';
+    warn.textContent = 'Taller than ' + opt.taller_than.name + ' behind it: ' +
+      opt.tall_ft + ' ft against ' + opt.taller_than.tall_ft + ' ft.';
+    span.appendChild(warn);
+  }
+  span.appendChild(note);
   el.appendChild(span);
   return el;
 }
