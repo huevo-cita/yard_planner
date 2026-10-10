@@ -153,11 +153,113 @@ KINDS = {
     "missing": "reference{s} that point{p} at no such section",
     "uncited": "section{s} cited by a task but not under a digest",
     "date": "task date{s} the plan documents no longer state",
+    "map": "planting position{s} the bed map no longer hold{p}",
 }
+
+#: How far a foot-mark in a task can sit from its circle on the map. A task
+#: writes the mark to one decimal place, so 0.05 ft is rounding. Past 0.1 ft
+#: the mark names a different spot.
+MAP_TOLERANCE_FT = 0.1
+
+_FOOT_MARKS = re.compile(r"\bft\s+(\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)")
+_COUNT = re.compile(r"\bx\s*(\d+)\b", re.I)
+
+
+def _marks(at):
+    """Every foot-mark in an `at` string, such as "ft 2.5 - middle; ft 6.8"."""
+    out = []
+    for m in _FOOT_MARKS.finditer(at or ""):
+        out += [float(x) for x in re.split(r"\s*,\s*", m.group(1))]
+    return out
+
+
+def map_check(slug, data=None):
+    """Every planting position that the bed map does not hold.
+
+    The map in `scheme.json` is the record of where each plant goes. A task
+    copies its foot-marks off the map, so a swap or a move on the map leaves
+    the task pointing at the old spot. Two findings, for two failures:
+
+      a mark with no circle     a mark where the map has no circle of that
+                                plant, within MAP_TOLERANCE_FT
+      a count that disagrees    the tasks place a different number of a plant
+                                in a bed than the map holds. A plant added to
+                                the map and to no task fails only this one
+
+    A line that names more than one plant is checked mark by mark and not
+    counted, because nothing says which mark is which plant. A line with no
+    foot-mark ("around the stubs") holds nothing to compare.
+    """
+    from . import plants, scheme
+
+    plan_map = scheme.load(slug)
+    if not plan_map:
+        return []
+    data = data if data is not None else load(slug)
+    idx = plants.index(yards.load(slug, "design.json") or {})
+    if not idx:
+        return []
+
+    def same_plant(circle, rec):
+        """A map circle often carries the plain name: "Parsley" for
+        "Curly parsley (transplants)". Either form counts as the record."""
+        name = (circle or "").split(" - ")[0].strip().lower()
+        return bool(name) and (
+            name in plants.names_for(rec)
+            or re.search(r"\b" + re.escape(name) + r"\b", rec["name"].lower()))
+
+    circles = {b["id"]: [(c.get("name"), c["x"]) for c in b.get("plants") or []]
+               for b in plan_map.get("beds") or []}
+
+    out, placed, names = [], {}, {}
+    for t in (data or {}).get("tasks", []):
+        for p in ((t.get("where") or {}).get("placements") or []):
+            bed, marks = p.get("bed"), _marks(p.get("at"))
+            if not marks or bed not in circles:
+                continue
+            recs = []
+            for _, ps in plants.match(p.get("plant", ""), idx):
+                if all(r is not ps[0] for r in recs):
+                    recs.append(ps[0])
+            if not recs:
+                continue
+            spots = sorted(x for name, x in circles[bed]
+                           if any(same_plant(name, r) for r in recs))
+            label = " or ".join(r["name"] for r in recs)
+            for m in marks:
+                if not any(abs(x - m) <= MAP_TOLERANCE_FT + 1e-9 for x in spots):
+                    held = ", ".join(f"{x:.1f}" for x in spots) or "nowhere"
+                    out.append({"kind": "map", "subject": t["id"],
+                                "message": f"{t['id']} \"{t['title']}\" puts "
+                                           f"{label} at {bed} ft {m:g}, and "
+                                           f"the map has it at ft {held}"})
+            if len(recs) == 1:
+                if t.get("kind") == "plant":
+                    key = (bed, recs[0]["name"])
+                    placed.setdefault(key, []).append((t["id"], len(marks)))
+                    names[key] = recs[0]
+                said = _COUNT.search(p.get("plant", ""))
+                if said and int(said.group(1)) != len(marks):
+                    out.append({"kind": "map", "subject": t["id"],
+                                "message": f"{t['id']} says {recs[0]['name']} "
+                                           f"x{said.group(1)} in {bed} and "
+                                           f"gives {len(marks)} foot-mark"
+                                           f"{'s' if len(marks) != 1 else ''}"})
+    for key, rows in sorted(placed.items(), key=lambda kv: kv[0][0]):
+        n = sum(k for _, k in rows)
+        held = sum(1 for name, _ in circles[key[0]]
+                   if same_plant(name, names[key]))
+        if n != held:
+            who = ", ".join(sorted({tid for tid, _ in rows}))
+            out.append({"kind": "map", "subject": rows[0][0],
+                        "message": f"the tasks ({who}) place {n} "
+                                   f"{key[1]} in {key[0]}, and the map "
+                                   f"holds {held}"})
+    return out
 
 
 def check(slug):
-    """Everything that says tasks.json and the plan documents disagree.
+    """Everything that says tasks.json disagrees with the plan documents or the map.
 
     Findings are dicts rather than sentences so that the same result can be a
     paragraph for a person, a one-line stamp on a forced render, and a count in
@@ -215,6 +317,7 @@ def check(slug):
                     f"Either the date moved in the plan, or the task needs "
                     f"`date_inferred` and a note saying where its date came from")
                 break
+    out += map_check(slug, data)
     return out
 
 

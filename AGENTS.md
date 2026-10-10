@@ -511,7 +511,7 @@ not hold, which is how a stale "Texas sedge" was found sitting in a task the
 design had already moved off [c308]. A raised-bed line addressed by `squares`
 is exempt: "Cut the mesclun" is a job, not a purchase.
 
-## Two checks, because they catch different things
+## Three checks, because they catch different things
 
 `tasks.json` records a digest of every section it was extracted from. Edit one
 and it goes stale, naming which. This is the same mechanism as the all-clear in
@@ -521,13 +521,19 @@ which no amount of comparing dates can.
 Separately, every task's own date has to still appear somewhere in a section it
 cites. That catches the specific case of a date that moved.
 
+The third check compares every planting position with the bed map in
+`scheme.json`, which is the record of where each plant goes. A foot-mark with
+no circle of that plant near it is a finding. A count of a plant in a bed that
+differs from the map is also a finding. This catches a swap or a move on the
+map that nobody copied into a task.
+
 The direction of the second check is deliberate. Scanning the prose for dates and
 asking which are missing from `tasks.json` sounds equivalent and is not: the
 target date appears dozens of times in those documents, and a check that fires on
 every mention is the linter crying wolf, which is how a check gets switched off
 inside a week.
 
-`--calendar` refuses while either fails, `--force` renders and stamps the page
+`--calendar` refuses while any of them fails, `--force` renders and stamps the page
 with what it came past, and `.cursor/hooks/plan-prose.sh` runs `--check` the
 moment a plan document is written, so the disagreement surfaces while the reason
 for it is still to hand.
@@ -536,9 +542,14 @@ for it is still to hand.
 
 `python3 -m lib.site <slug>` builds the whole set — every markdown document,
 then `bundle.json`, then `WEEK.html`, `TASKS.html`, `CALENDAR.html`,
-`CALL-CARD.html` and `INDEX.html`. Each page carries the same bar, so any of
+`CALL-CARD.html`, `BEDS.html` and `INDEX.html`. Each page carries the same bar, so any of
 them reaches all of them, and each renders from the bundle rather than from
 the raw files, so two of them cannot disagree about a date. Send `INDEX.html`.
+
+`BEDS.html` is the bed map. Every build writes it again from `scheme.json`. The
+published copy is read-only. Change a plant on the map server
+(`yard scheme <slug> --serve`), then build the set again. Do not keep a copy
+saved from the map server, because it goes stale with the first swap.
 
 `WEEK.html` holds every week of the plan and shows the one the device clock
 asks for. It is therefore right on any day it is opened, offline, with no
