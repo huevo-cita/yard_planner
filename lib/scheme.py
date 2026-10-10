@@ -1995,7 +1995,12 @@ def _schedule(bed, code_of):
     return "".join(lines)
 
 
-def page(scheme, token, stamp=None, yard=None):
+def page(scheme, token, stamp=None, yard=None, nav="", nav_css=""):
+    """The map as one HTML page.
+
+    A token of None makes the published copy. Nothing on disk can answer a
+    tap, so the copy says where the map is edited instead of asking.
+    """
     yard = yard or Yard(scheme.get("slug") or "")
     beds = scheme.get("beds") or []
     code_of = codes(scheme)
@@ -2026,6 +2031,9 @@ def page(scheme, token, stamp=None, yard=None):
         for m in MONTHS)
     body = (_PAGE
             .replace("__TITLE__", TITLE)
+            .replace("__NAVCSS__", nav_css)
+            .replace("__NAV__", nav)
+            .replace("__SLUG__", _esc(yard.slug or scheme.get("yard") or "SLUG"))
             .replace("__STAMP__", stamp_html)
             .replace("__MONTHS__", months)
             .replace("__TABS__", "".join(buttons))
@@ -2137,7 +2145,9 @@ padding:.35rem;margin:.35rem 0;cursor:pointer}
 #undo{margin-right:.4rem;padding:0 .8rem}
 .saved{background:#e6efdc;padding:.4rem .6rem;border-radius:6px}
 [hidden]{display:none !important}
+__NAVCSS__
 </style></head><body>
+__NAV__
 __STAMP__
 <h1>__TITLE__</h1>
 <p class=lede>Pick a month to see what is in flower. Tap a plant to see what else fits that spot.</p>
@@ -2335,6 +2345,10 @@ async function openPlant(group, done) {
   else if (done) status.textContent = done;
   else status.textContent = 'Choices for ' + label + '.';
   if (done) status.className = 'saved';
+  if (!token) {
+    if (!locked) status.textContent = label + '. This copy is read-only. To change a plant, run: yard scheme __SLUG__ --serve';
+    return;
+  }
   const res = await fetch('/' + token + '/options/' + current);
   const data = await res.json();
   if (current !== group.dataset.id) return;

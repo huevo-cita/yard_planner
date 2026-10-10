@@ -26,6 +26,10 @@ import os
 from . import bundle, chrome, yards
 
 INDEX = "INDEX.html"
+BEDS = "BEDS.html"
+
+#: The map pins its own month bar to the top, so the site bar scrolls away.
+BEDS_NAV_CSS = "nav.screens{position:static;margin:-1rem -1rem 1rem}"
 
 INDEX_CSS = """
 .hero { background:var(--band); border:1px solid var(--rule);
@@ -241,6 +245,11 @@ def render_index(slug, data=None, today=None):
         act.append(_card("CALL-CARD.html", "The nursery calls",
                          "What to ask for by binomial, with a photograph of "
                          "every name trap."))
+    if exists(BEDS):
+        act.append(_card(BEDS, "The bed map",
+                         "Every plant in every bed, month by month. The "
+                         "planting positions come from this map.",
+                         "built from scheme.json"))
 
     read, record = [], []
     for d in data["documents"]:
@@ -331,14 +340,16 @@ def build_all(slug, link_images=False, today=None):
     Markdown first, because the nav only offers a screen whose file is already
     on disk, and the index counts sections out of the published pages.
     """
-    from . import buildhtml, callcard, week
+    from . import buildhtml, callcard, scheme, week
 
     root = yards.yard_dir(slug)
     made = []
+    plan_map = scheme.load(slug)
 
     # Say up front what this build will produce, so the first page written
     # carries a bar that reaches the last one.
     chrome.planned({INDEX, "WEEK.html", "TASKS.html", "CALENDAR.html"}
+                   | ({BEDS} if plan_map else set())
                    | ({"CALL-CARD.html"}
                       if any(t.get("kind") == "call" and not t.get("done")
                              for t in (yards.load(slug, "tasks.json")
@@ -365,6 +376,15 @@ def build_all(slug, link_images=False, today=None):
 
     card = callcard.build_all(slug, data=data)
     made += [os.path.basename(p) for p in card]
+
+    # The map is the record of where each plant goes, so every build writes
+    # it again. A copy saved by hand goes stale with the first swap.
+    if plan_map:
+        yards.write_text(slug, BEDS, scheme.page(
+            plan_map, None, yards.sandbox_stamp(slug), scheme.Yard(slug),
+            nav=chrome.nav(root, BEDS, data["yard"]["name"]),
+            nav_css=chrome.NAV_CSS + BEDS_NAV_CSS))
+        made.append(BEDS)
 
     # Last, because it reports on what exists and links only to what does.
     # Rebuilt from a fresh bundle so the section counts it quotes come from
