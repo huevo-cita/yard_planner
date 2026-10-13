@@ -687,13 +687,25 @@ S_DOUBTS = {"yard": SCREENS, "cards": [
 ]}
 
 
+# The bed map that t102 copies its foot-marks from. Gulf muhly and cedar sedge
+# share the ft 1 line, and the rosemary sits alone at ft 9, so the fixture holds
+# one line of each kind that the map check reads.
+S_SCHEME = {"yard": SCREENS, "beds": [
+    {"id": "a", "length_ft": 10, "depth_ft": 3, "why": "the test bed",
+     "plants": [
+         {"id": "a-01", "name": "Gulf muhly", "x": 1.0, "y": 1.0, "spread_ft": 1.0},
+         {"id": "a-02", "name": "Cedar sedge", "x": 1.05, "y": 2.0, "spread_ft": 1.0},
+         {"id": "a-03", "name": "Rosemary", "x": 9.0, "y": 1.5, "spread_ft": 1.0}]}]}
+
+
 def make_screens(root):
     d = os.path.join(root, SCREENS)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "PLAN.md"), "w") as f:
         f.write(S_PLAN)
     for name, obj in (("design.json", S_DESIGN), ("sourcing.json", S_SOURCING),
-                      ("tasks.json", S_TASKS), ("doubts.json", S_DOUBTS)):
+                      ("tasks.json", S_TASKS), ("doubts.json", S_DOUBTS),
+                      ("scheme.json", S_SCHEME), ("site.json", {})):
         with open(os.path.join(d, name), "w") as f:
             json.dump(obj, f, indent=2)
     return d
@@ -815,6 +827,62 @@ def check_link_report(yard):
        "and harvesting prose in the raised bed is not, so the check stays usable")
 
 
+def check_map_positions(yard):
+    """A planting position that the bed map does not hold is a disagreement.
+
+    The map is the record of where each plant goes, and a task copies its
+    foot-marks from it. Each failure is made on a copy of the tasks in memory,
+    so the fixture stays clean for the checks that follow.
+    """
+    import copy
+    from lib import week as W
+
+    ok(not W.map_check(SCREENS),
+       "a task that matches the map produces no finding",
+       [f["message"] for f in W.map_check(SCREENS)])
+
+    def broken(change):
+        data = copy.deepcopy(S_TASKS)
+        line = next(p for t in data["tasks"] if t["id"] == "t102"
+                    for p in t["where"]["placements"] if p["plant"] == "Rosemary")
+        change(line)
+        return [f["message"] for f in W.map_check(SCREENS, data)]
+
+    moved = broken(lambda p: p.update(at="ft 8"))
+    ok(any("ft 8" in m and "ft 9.0" in m for m in moved),
+       "a mark moved off its circle names the mark and where the map has it",
+       moved)
+    ok(not broken(lambda p: p.update(at="ft 9.1")),
+       "a mark inside the rounding of one decimal place is not a finding")
+    extra = broken(lambda p: p.update(at="ft 3, 9", plant="Rosemary x2"))
+    ok(any("place 2 Rosemary" in m and "holds 1" in m for m in extra),
+       "a task that places more of a plant than the map holds is a finding",
+       extra)
+    said = broken(lambda p: p.update(plant="Rosemary x2"))
+    ok(any("x2" in m and "1 foot-mark" in m for m in said),
+       "a count in the words that the foot-marks do not match is a finding",
+       said)
+
+    path = os.path.join(yard, "tasks.json")
+    with open(path) as fh:
+        saved = fh.read()
+    data = json.loads(saved)
+    next(p for t in data["tasks"] if t["id"] == "t102"
+         for p in t["where"]["placements"] if p["plant"] == "Rosemary")["at"] = "ft 8"
+    try:
+        with open(path, "w") as fh:
+            json.dump(data, fh)
+        found = W.check(SCREENS)
+    finally:
+        with open(path, "w") as fh:
+            fh.write(saved)
+    ok(subjects(found, "map") == ["t102"],
+       "--check carries the map finding, so the calendar refuses over it",
+       [f["message"] for f in found])
+    ok("planting position the bed map no longer holds" in W.stamp(found),
+       "and a forced render names it", W.stamp(found))
+
+
 def check_callcard(yard):
     """Traps found in the record, one per genus, never one half of a pair."""
     from lib import bundle, callcard
@@ -860,7 +928,7 @@ def check_pages(yard):
 
     made, _ = site.build_all(SCREENS, link_images=True)
     ok({"INDEX.html", "TASKS.html", "CALENDAR.html", "WEEK.html",
-        "PLAN.html", "CALL-CARD.html"} <= set(made),
+        "PLAN.html", "CALL-CARD.html", "BEDS.html"} <= set(made),
        "one command builds every screen", sorted(made))
 
     def page(name):
@@ -883,6 +951,16 @@ def check_pages(yard):
        "the index reaches the set, and carries the same bar as every page")
     ok('nav class="screens"' in page("PLAN.html"),
        "and so does a published markdown document")
+
+    beds = page("BEDS.html")
+    ok('nav class="screens"' in beds and 'href="BEDS.html"' in index,
+       "the bed map is one of the set: it carries the bar, and the index "
+       "reaches it")
+    ok('href="BEDS.html"' in page("PLAN.html"),
+       "and every other page reaches the map from its bar")
+    ok("const token = null;" in beds and f"yard scheme {SCREENS} --serve" in beds,
+       "the published map answers a tap with where to edit it, not a request "
+       "to a server that is not there")
 
     # This fixture has nothing dated to the current week, which is the point:
     # an empty week still has to belong to the set rather than dead-end.
@@ -1379,6 +1457,8 @@ def main():
         check_bundle(screens)
         print("\n what --links reports")
         check_link_report(screens)
+        print("\n the bed map")
+        check_map_positions(screens)
         print("\n the traps the record states")
         check_callcard(screens)
         print("\n the set of screens")

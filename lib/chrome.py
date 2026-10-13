@@ -25,6 +25,7 @@ SCREENS = [
     ("CALENDAR.html", "Calendar", "Every week, start to finish"),
     ("TASKS.html", "Tasks", "Every job, in full"),
     ("CALL-CARD.html", "Calls", "What to ask a nursery, with pictures"),
+    ("BEDS.html", "Map", "Every bed, plant by plant"),
     ("PLAN.md", "Plan", "The beds, the water, the budget"),
     ("SOWING-CALENDAR.md", "Bed", "The raised bed, square by square"),
     ("SOURCING.md", "Buying", "Prices, shops and confidence"),

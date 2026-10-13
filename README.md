@@ -456,7 +456,8 @@ door, `WEEK.html` is the seven days in front of you and every other week of
 the plan behind them, `TASKS.html` holds every job at its own address,
 `CALENDAR.html` is the year one line per week, and
 `CALL-CARD.html` is the nursery call. All five come out of `bundle.json`,
-which is itself derived — delete it and rebuild. `CALENDAR.md` is no longer a
+which is itself derived — delete it and rebuild. `BEDS.html` is the bed map.
+It comes out of `scheme.json`, which is the record of where each plant goes. `CALENDAR.md` is no longer a
 document anybody reads; it stays as the intermediate that `--publish` turns
 into the Google Doc.
 
