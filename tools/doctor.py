@@ -256,6 +256,43 @@ def check_links():
     return True
 
 
+def check_watering():
+    """Per yard: does every water task carry its amount and its time of day.
+
+    A warning, as for the links. A water task with no `dose` stops the
+    calendar sync, so the sync says it first. This sweep says it for every yard
+    at once, together with a plant that nothing waters in the next window.
+    """
+    from lib import watercal, week, yards
+
+    slugs = [s for s in yards.list_yards()
+             if os.path.exists(os.path.join(yards.yard_dir(s), "tasks.json"))]
+    if not slugs:
+        print("  ok    no yard keeps its watering in a tasks.json yet")
+        return True
+
+    for slug in slugs:
+        data = week.load(slug) or {}
+        found = watercal.lint(data)
+        nodose = [f for f in found if f["kind"] == "dose"]
+        nowhen = [f for f in found if f["kind"] == "when"]
+        gaps = watercal.coverage_lines(watercal.coverage(slug, data=data))
+        if not found and not gaps:
+            print(f"  ok    {slug}: every water task has a `when` and a "
+                  f"`dose`, and every plant has a regime")
+            continue
+        bits = []
+        if nodose:
+            bits.append(f"{len(nodose)} water task(s) with no `dose`")
+        if nowhen:
+            bits.append(f"{len(nowhen)} with no `when`")
+        if gaps:
+            bits.append(f"{len(gaps)} coverage finding(s)")
+        print(f"  warn  {slug}: {', '.join(bits)}. "
+              f"`yard watercal {slug} --lint` and `--coverage`")
+    return True
+
+
 def check_reconcile():
     """Per yard: do `lib.schedule` and `tasks.json` still tell the same story.
 
@@ -367,6 +404,8 @@ def main():
     g = check_calendar()
     print("\n references and plant names")
     check_links()
+    print("\n watering")
+    check_watering()
     print("\n schedule against tasks.json")
     check_reconcile()
     print("\n sourcing")

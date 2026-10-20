@@ -17,6 +17,9 @@
 #   yard reconcile <slug>         where lib.schedule and tasks.json disagree
 #   yard week <slug> --calendar   the whole run, as CALENDAR.md
 #   yard week <slug> --links      references that point nowhere
+#   yard water <slug>             the watering events for the next 7 days
+#   yard water <slug> --coverage  every plant in the ground that nothing waters
+#   yard water <slug> --plan      the Google Calendar sync, as operations to run
 #   yard doubts <slug>            what is still in question, and what it blocks
 #   yard changelog <slug>         what changed, and why the plan reads as it does
 #   yard vault lock <slug>        encrypt a yard so it can travel in the repo
@@ -45,7 +48,7 @@ cd "$REPO"
 MODULES="yards solar siteschema sunmodel drawsite drawbeds parcel frame lidar
 photomeasure soil climate conditions gaps doubts inputs changelog vision niches
 design fits sourcing bom schedule reconcile week builddoc buildhtml vault
-links plants plantphotos bundle callcard site scheme"
+links plants plantphotos bundle callcard site scheme watercal"
 
 case "${1:-}" in
   ""|list)
@@ -78,6 +81,10 @@ esac
 
 MOD="$1"
 shift
+
+if [ "$MOD" = "water" ]; then
+  MOD="watercal"
+fi
 
 if ! echo "$MODULES" | tr -s ' \n' '\n' | grep -qx "$MOD"; then
   echo "yard: no module '$MOD'." >&2

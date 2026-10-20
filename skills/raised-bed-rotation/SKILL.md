@@ -151,6 +151,13 @@ in `source`; `tasks.json` digests those sections, so a date later changed in the
 prose and not here is caught rather than silently disagreeing. The schema is in
 [AGENTS.md](../../AGENTS.md), under "A date goes in tasks.json".
 
+A sowing needs water every day until it is up. Give each seed placement a
+`germinate_days` where the packet gives a figure, and give the daily water task
+`where.squares`, a `dose` per square and a `when`. Then run
+`python3 -m lib.watercal <slug> --coverage`. It reports a square that dries out
+before the seed is up. The `yard-water-calendar` skill puts the jobs on a
+Google Calendar.
+
 Write a task's `technique` as `SOWING-CALENDAR.md#8`, never as prose, because
 every page turns it into a link to that heading — and never copy the technique
 into the task. The method stays in the one document that holds it.

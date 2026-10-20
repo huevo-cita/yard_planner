@@ -597,3 +597,44 @@ day. The bed rules, the plant palette, the pest tables, the budget tiers and the
 technique notes stay where they are and get linked from the task that needs them
 — a calendar carrying all of that is a plan document again, and there is already
 one of those.
+
+## Watering: an amount and a time of day are fields
+
+The watering calendar is the same rule applied once more. `lib.watercal`
+writes a Google Calendar event for each morning and evening that has work. The
+event reads fields only. An amount written only in `how` prose does not reach
+the event.
+
+So a water task carries two fields:
+
+```json
+"when": "morning",
+"dose": {"amount": 1, "unit": "quart", "per": "square",
+         "text": "skip a square that is damp at 1/2 in"}
+```
+
+- `when` is `morning`, `evening` or `morning+evening`.
+- `per` is `square`, `plant`, `pot`, `strip` or `bed`. The event multiplies the
+  amount by the squares or the plants that the job reaches on that day.
+- A dose that is not a measure, such as "until it runs from the drain hole",
+  goes in `text` with no `amount`.
+
+Name what the job waters with the most specific field that is true:
+`where.squares`, `where.planted_by` (the plant tasks whose plants it waters),
+`where.containers` (ids from `design.json` `containers`), or a placement.
+
+A change of cadence is a new task, not a sentence in `repeat.note`. "Every 2
+days for 14 days, then weekly" is two tasks. The calendar shows the repeat
+fields, and `--coverage` reports a note that hides a taper.
+
+Before a sync, run the coverage check. Every plant in the ground needs a drip
+zone, a hand job or a `water_exempt` record with a reason:
+
+```bash
+python3 -m lib.watercal <slug> --coverage
+python3 -m lib.watercal <slug> --plan      # refuses while there is a finding
+```
+
+The `yard-water-calendar` skill has the sync steps. A finding that needs a
+decision, such as how a bed with no drip gets water, is a `choice` card on the
+doubt board. It is not a guess in a new task.

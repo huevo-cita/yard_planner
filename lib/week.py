@@ -154,6 +154,7 @@ KINDS = {
     "uncited": "section{s} cited by a task but not under a digest",
     "date": "task date{s} the plan documents no longer state",
     "map": "planting position{s} the bed map no longer hold{p}",
+    "drip": "timer task{s} that disagree{p} with the drip schedule",
 }
 
 #: How far a foot-mark in a task can sit from its circle on the map. A task
@@ -318,6 +319,8 @@ def check(slug):
                     f"`date_inferred` and a note saying where its date came from")
                 break
     out += map_check(slug, data)
+    from . import watercal
+    out += watercal.drip_check(slug, data)
     return out
 
 
