@@ -238,6 +238,30 @@ transcribed, which comparing dates cannot; the second catches a date that moved.
 `--calendar` refuses while either fails, `--force` stamps the page with what it
 came past, and the hook on the plan documents says so at the moment of the edit.
 
+**Puts the watering on a real calendar, and proves that every plant gets
+water.** A planted yard has many watering jobs at the same time, and each job
+has its own cadence, amount and last day. `yard water <slug>` reads every
+watering job in `tasks.json` and writes one event for each morning and each
+evening that has work. An event names the plants, the total amount, the skip
+rules, the first day and the last day of each job, and the job that comes
+next. It also says what the drip does that day. A task gives its amount in
+`dose` and its time of day in `when`. The `how` steps stay as the instruction.
+
+`--coverage` takes every plant in the ground, from the bed map, the raised-bed
+grid, the design records and the containers. For each day, it finds the drip
+zone or the hand job that waters the plant. It also checks two stricter rules:
+
+- A new planting gets hand water at the establishment intervals.
+- A sown square gets water every day until the seed is up.
+
+A plant with no regime is a finding. A note that hides a change of cadence is a
+finding too, because the calendar can show only the repeat fields. `--plan`
+refuses while there is a finding. When the plan is clean, it writes the create,
+update and delete operations for a rolling window. The agent runs them through
+the Google Calendar MCP server, and `--record` keeps the event ids. A second
+plan with no change gives no operations, and a past event is never changed.
+`--ics` writes the same events as a file for any other calendar.
+
 ## Install
 
 ```bash
@@ -316,6 +340,11 @@ yard week     <slug> --calendar   # every week to the target date -> CALENDAR.md
 yard week     <slug> --shop 3     # the next three weeks of buying, by supplier
 yard week     <slug> --check      # has the plan drifted from the dated actions
 yard week     <slug> --links      # references that point nowhere, plants nobody knows
+yard water    <slug>              # the watering events for the next 7 days
+yard water    <slug> --coverage   # every plant in the ground that nothing waters
+yard water    <slug> --plan       # the calendar sync, as operations to run
+yard water    <slug> --record r.json   # keep the event ids that the sync got back
+yard water    <slug> --ics        # the same events -> WATER.ics
 yard site     <slug>              # every page, built as one linked set -> INDEX.html
 yard callcard <slug>              # what to ask a nursery, with pictures -> CALL-CARD.html
 yard plantphotos <slug>           # verified Wikimedia photographs, and small copies
@@ -339,6 +368,7 @@ yard --help                       # every module
 | `yard-design` | Joins taste to measured fact, offers the fitting plants to a person to choose between, and rejects what the site cannot support |
 | `yard-schedule` | Bill of materials, local sourcing, weekend plan, budget and cut list |
 | `raised-bed-rotation` | The seasonal edible turnover, with a planting log driving crop rotation |
+| `yard-water-calendar` | Puts every watering job on a Google Calendar, one event for each morning and evening, after a check that every plant gets water |
 
 ### Subagents
 
@@ -442,8 +472,11 @@ it, every candidate considered, and who chose), `design.json`, `sun-hours.json`,
 was assumed and run on anyway, and why), `changelog.json` (what changed and why
 it reads as it does), `tasks.json` (every action with a day on it, and a digest
 of the section it came from), `sourcing.json` (every supplier with its dated
-reputation, distance and access evidence), a prose `profile.md`, and `maps/`,
-`photos/` and `design/`.
+reputation, distance and access evidence), `irrigation.json` (the drip zones,
+the beds that each zone reaches, and the timer settings for each period),
+`water-calendar.json` (the calendar account, the slot times, the window and the
+ledger of pushed events), a prose `profile.md`, and `maps/`, `photos/` and
+`design/`.
 
 The documents people actually read — `PLAN.md`, `SOWING-CALENDAR.md`,
 `SOURCING.md`, `SITE-WALK.md` — are held to one rule: they state what is true

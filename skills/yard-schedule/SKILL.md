@@ -190,6 +190,12 @@ someone is travelling in the first month, write a separate one-page note for
 whoever is covering — scoped to keeping things alive: check moisture, hand-water
 anything wilted, change nothing else.
 
+Write each stage as its own task, with `planted_by`, `dose` and `when`. One task
+with the taper in its note shows only its first cadence on the calendar. Then
+run `python3 -m lib.watercal <slug> --coverage`: it reports a new planting with
+no stage tasks, and any plant that no drip zone and no hand job reaches. The
+`yard-water-calendar` skill puts the result on a Google Calendar.
+
 ## Step 6 — The budget, and the cut list
 
 The cut list comes out with the total, not after someone flinches at it. It is
